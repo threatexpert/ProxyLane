@@ -1,0 +1,14 @@
+bin/
+build/
+dist/
+.vs/
+src/.vs/
+.vscode/
+.claude/
+*.user
+*.aps
+*.obj
+*.pdb
+*.ilk
+*.tlog
+*.lastbuildstate

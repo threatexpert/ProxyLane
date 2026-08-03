@@ -1,0 +1,326 @@
+// Microsoft Visual C++ generated resource script.
+//
+#include "resource.h"
+
+#define APSTUDIO_READONLY_SYMBOLS
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 2 resource.
+//
+#include "afxres.h"
+
+/////////////////////////////////////////////////////////////////////////////
+#undef APSTUDIO_READONLY_SYMBOLS
+
+/////////////////////////////////////////////////////////////////////////////
+// 中文(简体，中国) resources
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_CHS)
+LANGUAGE LANG_CHINESE, SUBLANG_CHINESE_SIMPLIFIED
+#pragma code_page(936)
+
+#ifdef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// TEXTINCLUDE
+//
+
+1 TEXTINCLUDE 
+BEGIN
+    "resource.h\0"
+END
+
+2 TEXTINCLUDE 
+BEGIN
+    "#include ""afxres.h""\r\n"
+    "\0"
+END
+
+3 TEXTINCLUDE 
+BEGIN
+    "#define _AFX_NO_SPLITTER_RESOURCES\r\n"
+    "#define _AFX_NO_OLE_RESOURCES\r\n"
+    "#define _AFX_NO_TRACKER_RESOURCES\r\n"
+    "#define _AFX_NO_PROPERTY_RESOURCES\r\n"
+    "\r\n"
+    "#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_CHS)\r\n"
+    "LANGUAGE 4, 2\r\n"
+    "#pragma code_page(936)\r\n"
+    "#include ""res\\ProxyLane.rc2""  // ·? Microsoft Visual C++ ±à?-μ?×ê?′\r\n"
+    "#include ""afxres.rc""     // ±ê×?×é?t\r\n"
+    "#endif\r\n"
+    "\0"
+END
+
+#endif    // APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Icon
+//
+
+// Icon with lowest ID value placed first to ensure application icon
+// remains consistent on all systems.
+IDR_MAINFRAME           ICON                    "res\\ProxyLane.ico"
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Dialog
+//
+
+IDD_PROXYLANE_DIALOG DIALOGEX 0, 0, 490, 263
+STYLE DS_SETFONT | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME
+EXSTYLE WS_EX_APPWINDOW
+CAPTION "ProxyLane"
+FONT 9, "Segoe UI", 0, 0, 0x1
+BEGIN
+END
+
+IDD_Page1 DIALOGEX 0, 0, 290, 230
+STYLE DS_SETFONT | WS_CHILD
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "代理设置",IDC_STATIC_PAGE_TITLE,8,3,180,16
+    LTEXT           "管理代理配置、连接方式与过滤规则",IDC_STATIC_PAGE_SUBTITLE,8,20,260,10
+    GROUPBOX        "代理服务器",IDC_STATIC,8,32,274,94
+    LTEXT           "配置",IDC_STATIC,18,45,30,10
+    COMBOBOX        IDC_COMBO_CFGS,54,41,160,80,CBS_DROPDOWN | CBS_SORT | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "管理",IDC_BUTTON_CfgOpt,220,41,52,16
+    LTEXT           "类型",IDC_STATIC,18,66,30,10
+    COMBOBOX        IDC_CB_PROXYTYPE,54,62,62,80,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "IP / 域名",IDC_STATIC,126,66,40,10
+    EDITTEXT        IDC_EDIT_ADDR,168,62,58,16,ES_AUTOHSCROLL
+    LTEXT           "端口",IDC_STATIC,228,66,22,10
+    EDITTEXT        IDC_EDIT_PORT,252,62,27,16,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "用户名",IDC_STATIC,18,87,35,10
+    EDITTEXT        IDC_EDIT_USER,54,83,62,16,ES_AUTOHSCROLL
+    LTEXT           "密码",IDC_STATIC,126,87,30,10
+    EDITTEXT        IDC_EDIT_PASS,168,83,111,16,ES_PASSWORD | ES_AUTOHSCROLL
+    CONTROL         "代理未启动",IDC_STATIC_TestProxy,"Static",SS_OWNERDRAW,18,104,76,18
+    PUSHBUTTON      "测试连接",IDC_TestProxy,121,103,46,19
+    DEFPUSHBUTTON   "启动代理",IDOK,172,103,50,19
+    PUSHBUTTON      "停止代理",IDCANCEL,227,103,52,19
+    CONTROL         "基本选项",IDC_RADIO_TAB_BASIC,"Button",BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,18,130,72,13
+    CONTROL         "子进程规则",IDC_RADIO_TAB_CHILD,"Button",BS_AUTORADIOBUTTON | WS_TABSTOP,96,130,78,13
+    CONTROL         "目标规则",IDC_RADIO_TAB_TARGET,"Button",BS_AUTORADIOBUTTON | WS_TABSTOP,180,130,72,13
+    GROUPBOX        "网络与代理选项",IDC_STATIC_GROUP_OTHER,8,146,274,66
+    CONTROL         "代理 TCP",IDC_CHECK_HOOKTCP,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,18,160,62,12
+    CONTROL         "代理 UDP（仅 SOCKS5）",IDC_CHECK_HOOK_UDP,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,88,160,112,12
+    CONTROL         "代理子进程",IDC_CHECK_HOOKCHILDPROCESS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,205,160,72,12
+    LTEXT           "DNS 解析",IDC_STATIC_DNS_LABEL,18,179,46,10
+    CONTROL         "本地解析",IDC_RADIO_DNSLOCAL,"Button",BS_AUTORADIOBUTTON | WS_GROUP,70,177,55,12
+    CONTROL         "服务器解析",IDC_RADIO_DNSREMOTE,"Button",BS_AUTORADIOBUTTON,132,177,64,12
+    CONTROL         "禁止 UDP（优先于代理 UDP）",IDC_CHECK_BLOCKUDP,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,18,196,170,12
+    GROUPBOX        "子进程注入规则",IDC_STATIC_CHILDFILTER_GROUP,8,146,274,81
+    CONTROL         "排除匹配进程",IDC_RADIO_CHILDFILTER_EXCLUDE,"Button",BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,18,159,100,12
+    CONTROL         "仅注入匹配进程",IDC_RADIO_CHILDFILTER_INCLUDE,"Button",BS_AUTORADIOBUTTON | WS_TABSTOP,130,159,112,12
+    EDITTEXT        IDC_EDIT_CHILDFILTER,18,176,254,29,ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "每行一条，支持 * 和 ?。示例：*chrome.exe    C:\\Windows\\System32\\*",IDC_STATIC_CHILDFILTER_HINT,18,210,254,12
+    GROUPBOX        "目标地址规则",IDC_STATIC_TARGETFILTER_GROUP,8,146,274,81
+    CONTROL         "匹配地址直连",IDC_RADIO_TARGETFILTER_BYPASS,"Button",BS_AUTORADIOBUTTON | WS_GROUP | WS_TABSTOP,18,159,100,12
+    CONTROL         "仅代理匹配地址",IDC_RADIO_TARGETFILTER_PROXY,"Button",BS_AUTORADIOBUTTON | WS_TABSTOP,130,159,112,12
+    EDITTEXT        IDC_EDIT_TARGETFILTER,18,176,254,29,ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "每行一条。示例：*.discord.gg:443    *:443    192.168.*:*",IDC_STATIC_TARGETFILTER_HINT,18,210,254,12
+END
+
+IDD_Page2 DIALOGEX 0, 0, 290, 230
+STYLE DS_SETFONT | WS_CHILD
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "运行日志",IDC_STATIC_PAGE_TITLE,8,6,180,18
+    LTEXT           "查看代理、注入和连接过程中的运行信息",IDC_STATIC_PAGE_SUBTITLE,8,25,280,12
+    PUSHBUTTON      "复制全部",IDC_BTN_COPY_LOG,252,18,52,20
+    PUSHBUTTON      "清空",IDC_BTN_CLEAR_LOG,310,18,52,20
+    EDITTEXT        IDC_EDIT1,8,48,354,314,ES_MULTILINE | ES_AUTOHSCROLL | ES_READONLY | WS_VSCROLL | WS_HSCROLL
+END
+
+IDD_Page3 DIALOGEX 0, 0, 290, 230
+STYLE DS_SETFONT | WS_CHILD
+EXSTYLE WS_EX_ACCEPTFILES
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "应用与进程",IDC_STATIC_PAGE_TITLE,8,6,180,18
+    LTEXT           "选择运行中的进程，或将程序/快捷方式拖入列表以启动并代理",IDC_STATIC_PAGE_SUBTITLE,8,25,330,12
+    PUSHBUTTON      "刷新",IDC_REFRESH,238,18,52,20
+    PUSHBUTTON      "代理所选",IDC_INJECTDLL,296,18,66,20
+    CONTROL         "",IDC_PSLIST,"SysListView32",LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_ALIGNLEFT | WS_BORDER | WS_TABSTOP,8,48,354,282,WS_EX_ACCEPTFILES
+END
+
+IDD_Page4 DIALOGEX 0, 0, 290, 230
+STYLE DS_SETFONT | WS_CHILD
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "数据监视",IDC_STATIC_PAGE_TITLE,8,6,180,18
+    LTEXT           "查看经过代理的连接与数据内容；开启监视会增加额外开销",IDC_STATIC_PAGE_SUBTITLE,8,25,330,12
+    CONTROL         "开始监视",IDC_CHECK1,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,8,50,72,13
+    CONTROL         "HEX 显示",IDC_CHECK_HEX,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,93,50,62,13
+    PUSHBUTTON      "清空",IDC_BTN_CLEAR,310,45,52,20
+    LTEXT           "TCP 连接: 0    UDP 连接: 0",IDC_STATIC_TASKCOUNT,8,70,300,12
+    EDITTEXT        IDC_EDIT1,8,88,354,274,ES_MULTILINE | ES_AUTOHSCROLL | ES_READONLY | WS_VSCROLL | WS_HSCROLL
+END
+
+
+IDD_Page5 DIALOGEX 0, 0, 290, 230
+STYLE DS_SETFONT | WS_CHILD
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "关于",IDC_STATIC_PAGE_TITLE,8,6,180,18
+    LTEXT           "ProxyLane 项目信息与开源项目地址",IDC_STATIC_PAGE_SUBTITLE,8,25,280,12
+    ICON            IDR_MAINFRAME,IDC_STATIC,18,58,32,32
+    LTEXT           "ProxyLane",IDC_STATIC,60,57,180,18,SS_NOPREFIX
+    LTEXT           "版本",IDC_STATIC_ABOUT_VERSION,60,78,180,12
+    LTEXT           "Windows 应用级代理工具",IDC_STATIC,18,105,220,12
+    GROUPBOX        "开源信息",IDC_STATIC,8,126,274,68
+    LTEXT           "开源项目",IDC_STATIC,18,141,54,12
+    CONTROL         "<a href=""https://github.com/threatexpert/ProxyLane"">threatexpert/ProxyLane</a>",IDC_LINK_PROJECT,"SysLink",WS_TABSTOP,76,139,190,16
+    LTEXT           "Copyright (C) 2026 ProxyLane contributors",IDC_STATIC,18,168,244,12
+END
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Version
+//
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x4L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "FileDescription", "ProxyLane"
+            VALUE "FileVersion", "1.0.0.0"
+            VALUE "InternalName", "ProxyLane"
+            VALUE "LegalCopyright", "Copyright (C) 2026 ProxyLane contributors"
+            VALUE "ProductName", "ProxyLane"
+            VALUE "ProductVersion", "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// DESIGNINFO
+//
+
+#ifdef APSTUDIO_INVOKED
+GUIDELINES DESIGNINFO
+BEGIN
+    IDD_PROXYLANE_DIALOG, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 274
+        TOPMARGIN, 7
+        BOTTOMMARGIN, 298
+    END
+
+    IDD_Page1, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 247
+        TOPMARGIN, 7
+        BOTTOMMARGIN, 260
+    END
+
+    IDD_Page2, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 262
+        TOPMARGIN, 7
+        BOTTOMMARGIN, 158
+    END
+
+    IDD_Page3, DIALOG
+    BEGIN
+        LEFTMARGIN, 7
+        RIGHTMARGIN, 265
+        TOPMARGIN, 7
+        BOTTOMMARGIN, 164
+    END
+
+    IDD_Page4, DIALOG
+    BEGIN
+    END
+END
+#endif    // APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Menu
+//
+
+IDR_MENU_CFGS MENU
+BEGIN
+    POPUP "CfgOpt"
+    BEGIN
+        MENUITEM "加载",                          ID_CFGOPT_Load
+        MENUITEM "保存",                          ID_CFGOPT_Save
+        MENUITEM "删除",                          ID_CFGOPT_Delete
+    END
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// AFX_DIALOG_LAYOUT
+//
+
+IDD_Page1 AFX_DIALOG_LAYOUT
+BEGIN
+    0
+END
+
+IDD_PROXYLANE_DIALOG AFX_DIALOG_LAYOUT
+BEGIN
+    0
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// String Table
+//
+
+#endif    // 中文(简体，中国) resources
+/////////////////////////////////////////////////////////////////////////////
+
+
+
+#ifndef APSTUDIO_INVOKED
+/////////////////////////////////////////////////////////////////////////////
+//
+// Generated from the TEXTINCLUDE 3 resource.
+//
+#define _AFX_NO_SPLITTER_RESOURCES
+#define _AFX_NO_OLE_RESOURCES
+#define _AFX_NO_TRACKER_RESOURCES
+#define _AFX_NO_PROPERTY_RESOURCES
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_CHS)
+LANGUAGE 4, 2
+#pragma code_page(936)
+#include "res\ProxyLane.rc2"  // ·? Microsoft Visual C++ ±à?-μ?×ê?′
+#include "afxres.rc"     // ±ê×?×é?t
+#endif
+
+/////////////////////////////////////////////////////////////////////////////
+#endif    // not APSTUDIO_INVOKED
+

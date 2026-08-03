@@ -1,0 +1,437 @@
+﻿// ProxyLaneDlg.cpp : 实现文件
+//
+
+#include "stdafx.h"
+#include "ProxyLane.h"
+#include "ProxyLaneDlg.h"
+#include "AppVersion.h"
+
+#ifdef _DEBUG
+#define new DEBUG_NEW
+#endif
+
+#define _MUTEX _T("{BAD09968-F0A9-4818-AD34-B39DFDA840FE}")
+
+#define WM_SHELLICON_NOTIFY				(WM_APP+100)
+#define WM_AUTOMATION_START				(WM_APP+101)
+UINT s_uTaskbarRestart = -1;
+
+//////////////////////////////////////////////////////////////////////////
+// ShellNotifyIcon
+BOOL
+ShellNotifyIcon_Add(
+	HWND hWnd,
+	UINT nID,
+	UINT nCallbackMessage,
+	HICON hIcon,
+	PCTSTR szTip,
+	UINT nFlags /*= NIF_MESSAGE|NIF_ICON|NIF_TIP*/)
+{
+	NOTIFYICONDATA tnid = { sizeof(tnid), 0 };
+	tnid.hWnd = hWnd;
+	tnid.uID = nID;
+	tnid.uCallbackMessage = nCallbackMessage;
+	tnid.uFlags = nFlags;
+	tnid.hIcon = hIcon;
+	if(szTip)
+	{
+		_tcsncpy(
+			tnid.szTip,
+			szTip,
+			_countof(tnid.szTip)-1);
+		tnid.szTip[_countof(tnid.szTip)-1] = _T('\0');
+	}
+	return Shell_NotifyIcon(
+		NIM_ADD,
+		&tnid);
+}
+
+BOOL
+ShellNotifyIcon_Delete(
+	HWND hWnd,
+	UINT nID)
+{
+	NOTIFYICONDATA tnid = { sizeof(tnid), 0 };
+	tnid.hWnd = hWnd;
+	tnid.uID = nID;
+	return Shell_NotifyIcon(
+		NIM_DELETE,
+		&tnid);
+}
+
+BOOL
+ShellNotifyIcon_Modify(
+	HWND hWnd,
+	UINT nID,
+	UINT nCallbackMessage,
+	HICON hIcon,
+	PCTSTR szTip,
+	UINT nFlags)
+{
+	NOTIFYICONDATA tnid = { sizeof(tnid), 0 };
+	tnid.hWnd = hWnd;
+	tnid.uID = nID;
+	tnid.uCallbackMessage = nCallbackMessage;
+	tnid.uFlags = nFlags;
+	tnid.hIcon = hIcon;
+	if(szTip)
+	{
+		_tcsncpy(
+			tnid.szTip,
+			szTip,
+			_countof(tnid.szTip)-1);
+		tnid.szTip[_countof(tnid.szTip)-1] = _T('\0');
+	}
+	return Shell_NotifyIcon(
+		NIM_MODIFY,
+		&tnid);
+}
+
+BOOL
+ShellNotifyIcon_AddInfo(
+						HWND hWnd, 
+						UINT nID, 
+						UINT nCallbackMessage, 
+						HICON hIcon, 
+						PCTSTR szInfo, 
+						UINT nFlags)
+{
+	NOTIFYICONDATA tnid = { sizeof(tnid), 0 };
+	tnid.hWnd = hWnd;
+	tnid.uID = nID;
+	tnid.uCallbackMessage = nCallbackMessage;
+	tnid.uFlags = nFlags;
+	tnid.hIcon = hIcon;
+	if(szInfo)
+	{
+		_tcsncpy(
+			tnid.szInfo,
+			szInfo,
+			_countof(tnid.szInfo)-1);
+		tnid.szInfo[_countof(tnid.szInfo)-1] = _T('\0');
+	}
+	return Shell_NotifyIcon(
+		NIM_ADD,
+		&tnid);
+}
+
+
+// CProxyLaneDlg 对话框
+
+
+
+
+CProxyLaneDlg::CProxyLaneDlg(CWnd* pParent /*=NULL*/)
+	: CModernDialog(CProxyLaneDlg::IDD, pParent)
+{
+	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
+}
+
+void CProxyLaneDlg::DoDataExchange(CDataExchange* pDX)
+{
+	CDialog::DoDataExchange(pDX);
+}
+
+BEGIN_MESSAGE_MAP(CProxyLaneDlg, CModernDialog)
+	ON_WM_SYSCOMMAND()
+	ON_WM_PAINT()
+	ON_WM_QUERYDRAGICON()
+	ON_MESSAGE(WM_SHELLICON_NOTIFY, OnShellIconNotify)
+	ON_REGISTERED_MESSAGE(s_uTaskbarRestart, OnTaskbarRestartNotify)
+	ON_MESSAGE(WM_AUTOMATION_START, OnAutomationStart)
+	ON_MESSAGE(WM_PROXY_STATUS_CHANGED, OnProxyStatusChanged)
+	//}}AFX_MSG_MAP
+	ON_WM_DESTROY()
+	ON_WM_SIZE()
+	ON_WM_GETMINMAXINFO()
+	ON_WM_DROPFILES()
+END_MESSAGE_MAP()
+
+
+// CProxyLaneDlg 消息处理程序
+
+BOOL CProxyLaneDlg::OnInitDialog()
+{
+	CModernDialog::OnInitDialog();
+
+	SetIcon(m_hIcon, TRUE);			// 设置大图标
+	SetIcon(m_hIcon, FALSE);		// 设置小图标
+
+	// TODO: 在此添加额外的初始化代码
+
+	//HANDLE hMutex = CreateMutex(0, 0, _MUTEX);
+	//if(hMutex && GetLastError() == ERROR_ALREADY_EXISTS)
+	//{
+	//	MessageBox(_T("已经在运行中……"));
+	//	OnOK();
+	//	return FALSE;
+	//}
+
+	m_MainTab.CreateTabCtrl(this);
+	DragAcceptFiles(TRUE);
+
+	SetWindowText(AppVersion::DisplayTitle());
+
+	s_uTaskbarRestart = RegisterWindowMessage(TEXT("TaskbarCreated"));
+
+	AddTaskbarIcons();
+
+	if (theApp.GetAutomationOptions().enabled)
+	{
+		ShowWindow(SW_HIDE);
+		PostMessage(WM_AUTOMATION_START);
+	}
+
+	return TRUE;  // 除非将焦点设置到控件，否则返回 TRUE
+}
+
+void CProxyLaneDlg::FailAutomation(int exitCode)
+{
+	theApp.SetAutomationExitCode(exitCode);
+	CPage1 *page1 = m_MainTab.GetPage1();
+	if (page1)
+		page1->StopProxy();
+	EndDialog(IDCANCEL);
+}
+
+LRESULT CProxyLaneDlg::OnAutomationStart(WPARAM wParam, LPARAM lParam)
+{
+	const AutomationOptions& options = theApp.GetAutomationOptions();
+	if (!options.enabled)
+		return 0;
+
+	CPage1 *page1 = m_MainTab.GetPage1();
+	CPage3 *page3 = m_MainTab.GetPage3();
+	if (!page1 || !page3)
+	{
+		FailAutomation(AUTOMATION_EXIT_PROXY_START_FAILED);
+		return 0;
+	}
+
+	if (!page1->LoadProfileByName(options.profileName))
+	{
+		FailAutomation(AUTOMATION_EXIT_PROFILE_INVALID);
+		return 0;
+	}
+
+	if (!page1->StartProxy(FALSE))
+	{
+		FailAutomation(AUTOMATION_EXIT_PROXY_START_FAILED);
+		return 0;
+	}
+
+	AppLaunchResult launchResult = page3->LaunchAndProxyApp(
+		options.targetPath,
+		options.targetArguments,
+		TRUE);
+	if (launchResult != APP_LAUNCH_SUCCESS)
+	{
+		int exitCode = AUTOMATION_EXIT_TARGET_INVALID;
+		if (launchResult == APP_LAUNCH_CREATE_PROCESS_FAILED)
+			exitCode = AUTOMATION_EXIT_CREATE_PROCESS_FAILED;
+		else if (launchResult == APP_LAUNCH_INJECTION_FAILED)
+			exitCode = AUTOMATION_EXIT_INJECTION_FAILED;
+		FailAutomation(exitCode);
+		return 0;
+	}
+
+	theApp.SignalAutomationReady();
+	return 0;
+}
+
+BOOL CProxyLaneDlg::AddTaskbarIcons()
+{
+	const CString tooltip = BuildTaskbarTooltip();
+	return ShellNotifyIcon_Add(
+		m_hWnd,
+		IDD,
+		WM_SHELLICON_NOTIFY,
+		GetIcon(FALSE),
+		tooltip);
+}
+
+CString CProxyLaneDlg::BuildTaskbarTooltip() const
+{
+	CString tooltip = AppVersion::DisplayTitle();
+	if (m_MainTab.IsProxyRunning())
+	{
+		tooltip += _T(" - 运行中：");
+		tooltip += m_MainTab.GetRunningProfileName();
+	}
+	return tooltip;
+}
+
+void CProxyLaneDlg::UpdateTaskbarTooltip()
+{
+	const CString tooltip = BuildTaskbarTooltip();
+	ShellNotifyIcon_Modify(
+		m_hWnd,
+		IDD,
+		WM_SHELLICON_NOTIFY,
+		GetIcon(FALSE),
+		tooltip,
+		NIF_TIP);
+}
+
+LRESULT CProxyLaneDlg::OnProxyStatusChanged(WPARAM, LPARAM)
+{
+	UpdateTaskbarTooltip();
+	return 0;
+}
+
+void CProxyLaneDlg::OnSysCommand(UINT nID, LPARAM lParam)
+{
+	switch (nID)
+	{
+	case SC_MINIMIZE:
+		ShowWindow(SW_HIDE);
+		break;
+	default:
+		CModernDialog::OnSysCommand(nID, lParam);
+		break;
+	}
+}
+void CProxyLaneDlg::OnPaint()
+{
+	if (IsIconic())
+	{
+		CPaintDC dc(this); // 用于绘制的设备上下文
+
+		SendMessage(WM_ICONERASEBKGND, reinterpret_cast<WPARAM>(dc.GetSafeHdc()), 0);
+
+		// 使图标在工作矩形中居中
+		int cxIcon = GetSystemMetrics(SM_CXICON);
+		int cyIcon = GetSystemMetrics(SM_CYICON);
+		CRect rect;
+		GetClientRect(&rect);
+		int x = (rect.Width() - cxIcon + 1) / 2;
+		int y = (rect.Height() - cyIcon + 1) / 2;
+
+		// 绘制图标
+		dc.DrawIcon(x, y, m_hIcon);
+	}
+	else
+	{
+		CDialog::OnPaint();
+	}
+}
+
+//当用户拖动最小化窗口时系统调用此函数取得光标显示。
+//
+HCURSOR CProxyLaneDlg::OnQueryDragIcon()
+{
+	return static_cast<HCURSOR>(m_hIcon);
+}
+
+
+void CProxyLaneDlg::OnDestroy()
+{
+	CDialog::OnDestroy();
+
+	// TODO: 在此处添加消息处理程序代码
+	ShellNotifyIcon_Delete(
+		m_hWnd,
+		IDD_PROXYLANE_DIALOG);
+}
+
+
+LRESULT
+CProxyLaneDlg::OnTaskbarRestartNotify(
+							   WPARAM wParam,
+							   LPARAM lParam
+							   )
+{
+	AddTaskbarIcons();
+	return 0;
+}
+
+LRESULT
+CProxyLaneDlg::OnShellIconNotify(
+							WPARAM wParam,
+							LPARAM lParam
+							)
+{
+	if(wParam == IDD)
+	{
+		switch(lParam)
+		{
+		case WM_LBUTTONDBLCLK:
+			ShowWindow(IsWindowVisible()?SW_HIDE:SW_SHOWNORMAL);
+			break;
+		default:
+			break;
+		}
+	}
+
+	return 1;
+}
+void CProxyLaneDlg::OnSize(UINT nType, int cx, int cy)
+{
+	CModernDialog::OnSize(nType, cx, cy);
+
+	if (m_MainTab.m_hWnd)
+	{
+		CRect rc;
+		GetClientRect(rc);
+		m_MainTab.MoveWindow(rc);
+	}
+}
+
+void CProxyLaneDlg::OnGetMinMaxInfo(MINMAXINFO* minMaxInfo)
+{
+	CModernDialog::OnGetMinMaxInfo(minMaxInfo);
+	minMaxInfo->ptMinTrackSize.x = UiTheme::ScaleForWindow(m_hWnd, 640);
+	minMaxInfo->ptMinTrackSize.y = UiTheme::ScaleForWindow(m_hWnd, 440);
+}
+
+void CProxyLaneDlg::OnDropFiles(HDROP dropInfo)
+{
+	CPage1* page1 = m_MainTab.GetPage1();
+	CPage3* page3 = m_MainTab.GetPage3();
+	if (!page1 || !page3 || !page1->IsProxyRunning())
+	{
+		DragFinish(dropInfo);
+		m_MainTab.ShowTransientStatus(
+			_T("代理未启动，未启动拖入的程序"),
+			CStatusLabel::TONE_INFO);
+		return;
+	}
+
+	const UINT fileCount = DragQueryFile(dropInfo, 0xFFFFFFFF, NULL, 0);
+	std::vector<CString> noExtraArguments;
+	for (UINT index = 0; index < fileCount; ++index)
+	{
+		const UINT pathLength = DragQueryFile(dropInfo, index, NULL, 0);
+		if (pathLength == 0)
+			continue;
+
+		std::vector<TCHAR> pathBuffer(pathLength + 1, _T('\0'));
+		if (!DragQueryFile(dropInfo, index, &pathBuffer[0], pathLength + 1))
+			continue;
+
+		CString path(&pathBuffer[0]);
+		const AppLaunchResult result = page3->LaunchAndProxyApp(
+			path, noExtraArguments, TRUE);
+		if (result == APP_LAUNCH_SUCCESS)
+		{
+			int slash = max(path.ReverseFind(_T('\\')), path.ReverseFind(_T('/')));
+			CString displayName = slash >= 0 ? path.Mid(slash + 1) : path;
+			CString status;
+			status.Format(_T("已启动并代理：%s"), displayName);
+			m_MainTab.ShowTransientStatus(status, CStatusLabel::TONE_SUCCESS);
+			continue;
+		}
+
+		CString message;
+		if (result == APP_LAUNCH_INVALID_TARGET)
+			message = _T("无法识别拖入的目标，或目标文件已经不存在。");
+		else if (result == APP_LAUNCH_INJECTION_FAILED)
+			message = _T("代理注入失败，目标程序已取消启动，未在无代理状态下继续运行。");
+		else
+			message = _T("无法启动拖入的程序，请检查文件状态和运行权限。");
+
+		MessageBox(message, _T("无法启动并代理"), MB_OK | MB_ICONERROR);
+	}
+
+	DragFinish(dropInfo);
+}

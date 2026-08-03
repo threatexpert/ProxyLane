@@ -1,0 +1,7 @@
+EXPORTS
+	GetGlobalProxyInstance
+	ReleaseGlobalProxyInstance
+	gp_HookWinsock
+	gp_UnhookWinsock
+	AttachTo
+	AttachToI

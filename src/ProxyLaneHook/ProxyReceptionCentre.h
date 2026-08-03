@@ -1,0 +1,89 @@
+#pragma once
+
+#include "ProxyModule.h"
+#include "PRCPipeServer.h"
+#include "PRCTcpServer.h"
+#include "PRCUdpServer.h"
+#include "TimerQueue.h"
+
+class CGlobalProxy;
+class CProxyDataHandle;
+
+class CProxyReceptionCentre
+	: public IProxyReceptionCentre
+	, public CWndTimer
+{
+public:
+	CProxyReceptionCentre(CGlobalProxy *pGlobalProxy);
+	~CProxyReceptionCentre(void);
+
+	//жиди
+	BOOL GetPRCPipeName(LPSTR lpBuf, int bufsize);
+	IProxyTaskMgr* GetPTMInstance(int type);
+	IProxyDataHandle* GetPDHInstance();
+	//
+	BOOL CreatePRC();
+	BOOL DestroyPRC();
+
+
+	VOID OnTimer(UINT_PTR nIDEvent);
+
+	BOOL GetStartupInfo(LPPRCINFO lpStartupInfo);
+
+	BOOL IsFiltered(LPPRCClient lpClient);
+	BOOL IsFiltered(LPPRCClientInfo lpClientInfo);
+
+	BOOL RegisterClient(LPPRCClient lpClientInfo);
+	BOOL RegisterTCPClient(LPPRCClient lpClientInfo);
+	BOOL RegisterUDPClient(LPPRCClient lpClientInfo);
+	BOOL GetUDPClientPortState(UDPLocalProxyAddrInfo *pLPAI);
+	BOOL UnregisterClient(LPPRCClient lpClientInfo);
+	BOOL GetProxySettingsInfo(LPProxySettingsInfo lpPSI);
+	BOOL GetProxyInfo(LPPRCClient lpClientInfo, LPProxyInfo lpPI);
+
+	BOOL GetClientInfo(SOCKET accepted, LPPRCClient lpClientInfo, BOOL bpop=FALSE);
+
+
+protected:
+
+	typedef enum
+	{
+		threadstatus_inactive,
+		threadstatus_error,
+		threadstatus_running,
+		threadstatus_end,
+	}threadstatus;
+
+	threadstatus m_ThreadStatus;
+
+	HANDLE m_hTestEvent;
+	HWND m_PRCWnd;
+	void SetThreadStatus(threadstatus status);
+
+	static LRESULT CALLBACK PRCWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+	//BOOL InitPRCWnd();
+	//BOOL ClosePRCWnd();
+
+	static DWORD WINAPI _PRCThreadProc(LPVOID lParam);
+	DWORD WINAPI InternalPRCThreadProc();
+
+	BOOL StartupPRCServer();
+	BOOL ShutdownPRCServer();
+
+private:
+	CString m_szLastError;
+
+	HANDLE m_hPRCThread;
+	DWORD m_dwPRCThreadId;
+	CPRCTcpServer *m_pTcpServer;
+	CPRCUdpServer *m_pUdpServer;
+	CPRCPipeServer *m_pPipeServer;
+	CProxyDataHandle *m_pProxyDataHandle;
+
+	CTSList<PRCClient> m_RegisteredClient;
+
+public:
+
+	CGlobalProxy *m_pGlobalProxy;
+
+};
