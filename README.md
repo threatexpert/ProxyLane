@@ -17,6 +17,22 @@ ProxyLane 是一款面向 Windows 的应用级代理工具。它通过进程注�
 - 提供 Win32 与 x64 版本
 - 兼容 Windows XP 及更高版本
 
+## 使用场景
+
+### 代理命令行工作区
+
+首先启动代理（代理设置需已勾选“代理子进程”），然后打开一个在命令提示符，在 ProxyLane 的应用与进程中，选中新增的 `cmd.exe` 并点击“代理所选”按钮。此后从该命令行窗口启动的 `curl`、Git、Python、`pip`、包管理器及其他程序，都会自动继承当前代理设置，无需逐个添加程序，也不需要修改系统全局代理。
+
+例如：
+
+```bat
+curl https://example.com
+git clone https://github.com/example/project.git
+pip install requests
+python script.py
+```
+
+
 ## 构建环境
 
 - Visual Studio 2019
