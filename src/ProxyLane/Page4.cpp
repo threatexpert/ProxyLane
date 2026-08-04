@@ -4,6 +4,7 @@
 #include "stdafx.h"
 #include "ProxyLane.h"
 #include "Page4.h"
+#include "Localization.h"
 
 
 #define TMID_TASKCOUNT 1
@@ -357,7 +358,7 @@ void CPage4::OnTimer(UINT_PTR nIDEvent)
 						pTaskMgr->GetTaskCount(&dwUdpCount);
 					}
 
-					strText.Format(_T("TCP 连接: %d    UDP 连接: %d"), dwTcpCount, dwUdpCount);
+					strText = Localization::Format(_T("page4.connections"), dwTcpCount, dwUdpCount);
 
 					SetDlgItemText(IDC_STATIC_TASKCOUNT, strText);
 				}

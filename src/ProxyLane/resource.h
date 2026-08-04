@@ -9,7 +9,8 @@
 #define IDD_Page3                       131
 #define IDD_Page4                       132
 #define IDD_Page5                       133
-#define IDR_MENU_CFGS                   132
+#define IDR_LANG_ZH_CN                  200
+#define IDR_LANG_EN_US                  201
 #define IDC_EDIT1                       1000
 #define IDC_CB_PROXYTYPE                1001
 #define IDC_EDIT_PORT                   1002
@@ -37,7 +38,7 @@
 #define IDC_STATIC_TASKCOUNT            1020
 #define IDC_BTN_CLEAR                   1021
 #define IDC_COMBO_CFGS                  1022
-#define IDC_BUTTON_CfgOpt               1023
+#define IDC_BUTTON_DELETE_PROFILE       1023
 #define IDC_EDIT_CHILDFILTER            1024
 #define IDC_RADIO_CHILDFILTER_EXCLUDE   1025
 #define IDC_RADIO_CHILDFILTER_INCLUDE   1026
@@ -67,20 +68,26 @@
 #define IDC_LINK_PROJECT                1050
 #define IDC_WINDOW_FINDER               1051
 #define IDC_BUTTON_SAVE_PROFILE         1052
-#define ID_CFGOPT_32771                 32771
-#define ID_CFGOPT_32772                 32772
-#define ID_CFGOPT_32773                 32773
-#define ID_CFGOPT_Load                  32774
-#define ID_CFGOPT_Save                  32775
-#define ID_CFGOPT_Delete                32776
+#define IDC_STATIC_PROXY_GROUP          1053
+#define IDC_STATIC_CONFIG_LABEL         1054
+#define IDC_STATIC_TYPE_LABEL           1055
+#define IDC_STATIC_HOST_LABEL           1056
+#define IDC_STATIC_PORT_LABEL           1057
+#define IDC_STATIC_USER_LABEL           1058
+#define IDC_STATIC_PASSWORD_LABEL       1059
+#define IDC_STATIC_ABOUT_TAGLINE        1060
+#define IDC_STATIC_OPEN_SOURCE_GROUP    1061
+#define IDC_STATIC_PROJECT_LABEL        1062
+#define IDC_STATIC_LANGUAGE_LABEL       1063
+#define IDC_COMBO_LANGUAGE              1064
 
 // Next default values for new objects
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        134
-#define _APS_NEXT_COMMAND_VALUE         32777
-#define _APS_NEXT_CONTROL_VALUE         1053
+#define _APS_NEXT_RESOURCE_VALUE        202
+#define _APS_NEXT_COMMAND_VALUE         32771
+#define _APS_NEXT_CONTROL_VALUE         1065
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

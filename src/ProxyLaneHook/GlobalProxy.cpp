@@ -65,20 +65,20 @@ BOOL CGlobalProxy::EnableProxy()
 
 	if(m_pProxyRC != NULL)
 	{
-		m_szLastError = _T("代理已经处于启用状态..");
+		m_szLastError = _T("The proxy is already enabled.");
 		return FALSE;
 	}
 
 	m_pProxyRC = new CProxyReceptionCentre(this);
 	if(m_pProxyRC == NULL)
 	{
-		m_szLastError = _T("创建 PRC 对象失败.");
+		m_szLastError = _T("Failed to create the PRC object.");
 		return FALSE;
 	}
 
 	if(!m_pProxyRC->CreatePRC())
 	{
-		m_szLastError = _T("初始化 PRC 对象失败.");
+		m_szLastError = _T("Failed to initialize the PRC object.");
 		delete m_pProxyRC;
 		m_pProxyRC = NULL;
 		return FALSE;
@@ -146,4 +146,3 @@ IProxyTester* CGlobalProxy::CreateTester()
 
 	return m_pProxyTesterMgr->CreateTester();
 }
-

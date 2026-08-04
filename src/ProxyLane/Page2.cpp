@@ -4,6 +4,7 @@
 #include "stdafx.h"
 #include "ProxyLane.h"
 #include "Page2.h"
+#include "Localization.h"
 
 
 
@@ -89,7 +90,16 @@ void CPage2::OnSize(UINT nType, int cx, int cy)
 	int gap = UiTheme::ScaleForWindow(m_hWnd, 6);
 	int buttonWidth = UiTheme::ScaleForWindow(m_hWnd, 78);
 	int buttonHeight = UiTheme::ScaleForWindow(m_hWnd, 30);
-	int buttonTop = UiTheme::ScaleForWindow(m_hWnd, 12);
+	int buttonTop = UiTheme::ScaleForWindow(m_hWnd, 8);
+	const int toolbarLeft = rcClient.right - margin - buttonWidth * 2 - gap;
+	if (CWnd* title = GetDlgItem(IDC_STATIC_PAGE_TITLE))
+	{
+		CRect titleRect;
+		title->GetWindowRect(&titleRect);
+		ScreenToClient(&titleRect);
+		title->MoveWindow(titleRect.left, titleRect.top,
+			max(0, toolbarLeft - gap - titleRect.left), titleRect.Height());
+	}
 	if (m_btnClear.GetSafeHwnd())
 		m_btnClear.MoveWindow(rcClient.right - margin - buttonWidth, buttonTop, buttonWidth, buttonHeight);
 	if (m_btnCopy.GetSafeHwnd())
@@ -129,8 +139,7 @@ LRESULT CPage2::OnPrintLogText(WPARAM wParam, LPARAM lParam)
 	if (batch.dropped > 0)
 	{
 		CString warning;
-		warning.Format(_T("[日志过快，已丢弃 %Iu 条较旧日志]\r\n"),
-			batch.dropped);
+		warning = Localization::Format(_T("page2.dropped_logs"), batch.dropped);
 		text += warning;
 	}
 

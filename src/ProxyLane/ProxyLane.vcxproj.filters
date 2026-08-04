@@ -30,6 +30,9 @@
     <ClCompile Include="IniFile.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="Localization.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="..\ProxyLaneHook\inline_hook.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -92,6 +95,9 @@
     <ClInclude Include="IniFile.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="Localization.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ListCtrlEx.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -150,6 +156,12 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="res\ProxyLane.rc2">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="locales\zh-CN.json">
+      <Filter>资源文件</Filter>
+    </None>
+    <None Include="locales\en-US.json">
       <Filter>资源文件</Filter>
     </None>
   </ItemGroup>

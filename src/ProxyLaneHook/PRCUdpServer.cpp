@@ -103,13 +103,13 @@ BOOL CPRCUdpServer::OnLocalThreadRegister(LPPRCClient lpPRCClient)
 	IProxySettings *pProxySettings = m_pGlobalProxy->GetSettingsInstance();
 	if(!pProxySettings->GetProxyInfo(lpPRCClient, &pisetting))
 	{
-		PrintText(_T("获取代理信息失败\r\n"));
+		PrintText(_T("Failed to get proxy information.\r\n"));
 		return FALSE;
 	}
 
 	if(!m_ProxyTaskMgr.OnNewTask(lpPRCClient, &pisetting))
 	{
-		PrintText(_T("添加一个UDP代理任务失败.\r\n"));
+		PrintText(_T("Failed to add UDP proxy task.\r\n"));
 		return FALSE;
 	}
 

@@ -241,6 +241,7 @@
     <ClCompile Include="AutomationOptions.cpp" />
     <ClCompile Include="Base64.cpp" />
     <ClCompile Include="IniFile.cpp" />
+    <ClCompile Include="Localization.cpp" />
     <ClCompile Include="ListCtrlEx.cpp" />
     <ClCompile Include="MainTab.cpp" />
 	<ClCompile Include="ModernUI.cpp" />
@@ -267,6 +268,7 @@
     <ClInclude Include="Base64.h" />
     <ClInclude Include="BoundedLogQueue.h" />
     <ClInclude Include="IniFile.h" />
+    <ClInclude Include="Localization.h" />
     <ClInclude Include="ListCtrlEx.h" />
     <ClInclude Include="MainTab.h" />
 	<ClInclude Include="ModernUI.h" />
@@ -290,6 +292,8 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="res\ProxyLane.rc2" />
+    <None Include="locales\zh-CN.json" />
+    <None Include="locales\en-US.json" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ProxyLaneHook\ProxyLaneHook.vcxproj">

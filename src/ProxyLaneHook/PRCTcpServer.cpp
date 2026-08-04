@@ -28,7 +28,7 @@ static BOOL ResolveProcPath(
 	szOut[0] = L'\0';
 	ppszName = NULL;
 
-	// 已 Hook 进程会在初始化时主动上报一次路径，连接热路径优先命中缓存。
+	// Hooked processes report their path during initialization, so connections use the cached identity first.
 	if (!receptionCentre->GetProcessIdentity(dwPid, szOut, cchOut))
 	{
 		typedef BOOL(WINAPI* PFN_QFIN)(HANDLE, DWORD, LPWSTR, PDWORD);
@@ -47,7 +47,7 @@ static BOOL ResolveProcPath(
 			dwPid);
 		if (!hProc && s_pQFIN)
 		{
-			// Vista+ 可用更小的查询权限；XP 不会进入此分支。
+			// Vista and later can use reduced query access; XP never enters this branch.
 			const DWORD kProcessQueryLimitedInformation = 0x1000;
 			hProc = OpenProcess(kProcessQueryLimitedInformation, FALSE, dwPid);
 			if (!hProc)
@@ -118,7 +118,7 @@ BOOL CPRCTcpServer::StartupServer()
 		return FALSE;
 	}
 
-	PrintText(_T("PRCTcpServer 监听端口: %d\r\n"), tcpaddr.GetPort());
+	PrintText(_T("PRCTcpServer listening on port: %d\r\n"), tcpaddr.GetPort());
 
 	return TRUE;
 }
@@ -129,7 +129,7 @@ BOOL CPRCTcpServer::ShutdownServer()
 	m_ProxyTaskMgr.RemoveAllTasks();
 	Close();
 
-	PrintText(_T("PRCTcpServer 关闭.\r\n"));
+	PrintText(_T("PRCTcpServer stopped.\r\n"));
 	return TRUE;
 }
 
@@ -165,13 +165,13 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 	if (sClient == INVALID_SOCKET)
 		return;
 
-	//CHookWinsock 拦截到一个连接时会将套接字和真正的请求地址登记到PRC,
-	//这里通过PRC的接口GetClientInfo得到原来的该连接的真正请求地址,
-	//GetClientInfo内部通过这里接受到的套接字查询(getpeername)连接的原ip和端口，并从PRC登记的数据中查找匹配的地址、端口信息.
+	// When CHookWinsock intercepts a connection, it registers the socket and the actual destination with the PRC.
+	// GetClientInfo retrieves that original destination through the PRC interface.
+	// It uses getpeername on the accepted socket to identify the original IP and port, then matches them against the PRC registration.
 	PRCClient PRCC;
 	if(!m_pPRC->GetClientInfo(sClient, &PRCC, TRUE))
 	{
-		PrintText(_T("PRCTcpServer接受到一个无法代理的任务.\r\n"));
+		PrintText(_T("PRCTcpServer received a task that cannot be proxied.\r\n"));
 		closesocket(sClient);
 		return;
 	}
@@ -222,9 +222,9 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 	if(!m_ProxyTaskMgr.OnNewTask(sClient, &PRCC, &pisetting))
 	{
 #ifdef _UNICODE
-		PrintText(_T("添加一个代理任务失败. PID: %d(%s), %u.%u.%u.%u:%d, 域名: %S:%d\r\n"), PRCC.dwPid, ppszName ? ppszName : L"", pucIP[0], pucIP[1], pucIP[2], pucIP[3], PRCC.dstAddr.GetPort(), PRCC.szDomainName, PRCC.dstAddr.GetPort());
+		PrintText(_T("Failed to add proxy task. PID: %d(%s), %u.%u.%u.%u:%d, domain: %S:%d\r\n"), PRCC.dwPid, ppszName ? ppszName : L"", pucIP[0], pucIP[1], pucIP[2], pucIP[3], PRCC.dstAddr.GetPort(), PRCC.szDomainName, PRCC.dstAddr.GetPort());
 #else
-		PrintText(_T("添加一个代理任务失败. PID: %d(%s), %u.%u.%u.%u:%d, 域名: %s:%d\r\n"), PRCC.dwPid, ppszName ? ppszName : L"", pucIP[0], pucIP[1], pucIP[2], pucIP[3], PRCC.dstAddr.GetPort(), PRCC.szDomainName, PRCC.dstAddr.GetPort());
+		PrintText(_T("Failed to add proxy task. PID: %d(%s), %u.%u.%u.%u:%d, domain: %s:%d\r\n"), PRCC.dwPid, ppszName ? ppszName : L"", pucIP[0], pucIP[1], pucIP[2], pucIP[3], PRCC.dstAddr.GetPort(), PRCC.szDomainName, PRCC.dstAddr.GetPort());
 #endif
 		closesocket(sClient);
 		return;

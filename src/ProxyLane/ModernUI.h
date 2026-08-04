@@ -34,12 +34,15 @@ public:
 
 protected:
 	virtual BOOL OnInitDialog();
+	afx_msg void OnSize(UINT type, int cx, int cy);
 	afx_msg BOOL OnEraseBkgnd(CDC* dc);
 	afx_msg HBRUSH OnCtlColor(CDC* dc, CWnd* wnd, UINT ctlColor);
+	void LayoutPageHeader();
 
 	CBrush m_backgroundBrush;
 	CFont m_uiFont;
 	CFont m_titleFont;
+	UINT m_templateId;
 
 	DECLARE_MESSAGE_MAP()
 };

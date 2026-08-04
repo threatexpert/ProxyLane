@@ -237,39 +237,39 @@ BOOL CProxyReceptionCentre::StartupPRCServer()
 		m_pTcpServer = new CPRCTcpServer(this);
 		if(m_pTcpServer == NULL)
 		{
-			m_szLastError = _T("创建 PRCTcpServer 失败");
+			m_szLastError = _T("Failed to create PRCTcpServer.");
 			break;
 		}
 
 		if(!m_pTcpServer->StartupServer())
 		{
-			m_szLastError = _T("启动 PRCTcpServer 失败");
+			m_szLastError = _T("Failed to start PRCTcpServer.");
 			break;
 		}
 
 		m_pUdpServer = new CPRCUdpServer(this);
 		if(m_pUdpServer == NULL)
 		{
-			m_szLastError = _T("创建 CPRCUdpServer 失败");
+			m_szLastError = _T("Failed to create CPRCUdpServer.");
 			break;
 		}
 
 		if(!m_pUdpServer->StartupServer())
 		{
-			m_szLastError = _T("启动 CPRCUdpServer 失败");
+			m_szLastError = _T("Failed to start CPRCUdpServer.");
 			break;
 		}
 
 		m_pPipeServer = new CPRCPipeServer(this);
 		if(m_pPipeServer == NULL)
 		{
-			m_szLastError = _T("创建 CPRCPipeServer 失败");
+			m_szLastError = _T("Failed to create CPRCPipeServer.");
 			break;
 		}
 
 		if(!m_pPipeServer->StartupServer())
 		{
-			m_szLastError = _T("启动 CPRCPipeServer 失败");
+			m_szLastError = _T("Failed to start CPRCPipeServer.");
 			break;
 		}
 
@@ -386,14 +386,14 @@ BOOL CProxyReceptionCentre::GetStartupInfo(LPPRCINFO lpStartupInfo)
 {
 	if(m_pTcpServer == NULL)
 	{
-		m_szLastError = _T("未创建 PRCTcpServer");
+		m_szLastError = _T("PRCTcpServer has not been created.");
 		return FALSE;
 	}
 
 	INT addlen = sizeof(lpStartupInfo->tcpaddr);
 	if(!m_pTcpServer->GetSockName(&lpStartupInfo->tcpaddr, &addlen))
 	{
-		m_szLastError = _T("GetSockName 失败.");
+		m_szLastError = _T("GetSockName failed.");
 		return FALSE;
 	}
 

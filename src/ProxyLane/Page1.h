@@ -32,6 +32,7 @@ public:
 	CModernButton m_OK;
 	CModernButton m_Cancel;
 	CModernButton m_btnSaveProfile;
+	CModernButton m_btnDeleteProfile;
 
 private:
 
@@ -111,7 +112,6 @@ public:
 	afx_msg void OnEnChangeEditAddr();
 	afx_msg void OnProfileFieldChanged();
 	afx_msg void OnCbnEditchangeComboCfgs();
-	afx_msg void OnBnClickedButtonCfgopt();
 	afx_msg void OnCfgoptLoad();
 	afx_msg void OnCfgoptSave();
 	afx_msg void OnCfgoptDelete();

@@ -1599,7 +1599,7 @@ BOOL CHookWinsock::HookWinsock()
 	{
 		if (!LoadLibraryA(m_ModuleName[i]))
 		{
-			m_szLastError = _T("初始化 HookWinsock 失败: LoadLibrary");
+			m_szLastError = _T("Failed to initialize HookWinsock: LoadLibrary");
 			return FALSE;
 		}
 	}
@@ -1610,7 +1610,7 @@ BOOL CHookWinsock::HookWinsock()
 		m_mem4bakcode[i] = myAlloc4Bakcode(GetModuleHandleA(m_ModuleName[i]), HOOKAPI_COUNT * JMPBOARD_SIZE);
 		if (!m_mem4bakcode[i])
 		{
-			m_szLastError = _T("初始化 HookWinsock 失败: myAlloc4Bakcode");
+			m_szLastError = _T("Failed to initialize HookWinsock: myAlloc4Bakcode");
 			return FALSE;
 		}
 	}
@@ -1679,7 +1679,7 @@ BOOL CHookWinsock::HookWinsock()
 
 	//!!!!
 
-	m_szLastError = _T("初始化 HookWinsock 失败: HookAPI");
+	m_szLastError = _T("Failed to initialize HookWinsock: HookAPI");
 
 	return FALSE;
 }

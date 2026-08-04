@@ -7,6 +7,7 @@
 #include "MainTab.h"
 #include "Page2.h"
 #include "AutomationOptions.h"
+#include "Localization.h"
 #include "..\ProxyLaneHook\token.h"
 #include "..\ProxyLaneHook\ElevatedLaunchProtocol.h"
 
@@ -859,16 +860,16 @@ BOOL CPage3::OnInitDialog()
 	{
 		m_windowFinderToolTip.AddTool(
 			&m_btnWindowFinder,
-			_T("按住并拖到目标窗口，松开后立即代理该进程"));
+			Localization::Get(_T("page3.finder_tip")));
 		m_windowFinderToolTip.SetMaxTipWidth(UiTheme::ScaleForWindow(m_hWnd, 320));
 	}
 	// 资源模板为兼容旧版本仍可能带有单选样式，初始化时统一启用多选。
 	m_ListCtrl.ModifyStyle(LVS_SINGLESEL, 0);
 
 	m_ListCtrl.InsertColumn(0, _T("PID"), 0, 50);
-	m_ListCtrl.InsertColumn(1, _T("进程名"), 0, 180);
-	m_ListCtrl.InsertColumn(2, _T("启动时间"), 0, 150);
-	m_ListCtrl.InsertColumn(3, _T("路径"), 0, 200);
+	m_ListCtrl.InsertColumn(1, Localization::Get(_T("page3.column_process")), 0, 180);
+	m_ListCtrl.InsertColumn(2, Localization::Get(_T("page3.column_started")), 0, 150);
+	m_ListCtrl.InsertColumn(3, Localization::Get(_T("page3.column_path")), 0, 200);
 
 	DWORD dwStyle = m_ListCtrl.GetExtendedStyle();
 	dwStyle |= LVS_EX_FULLROWSELECT;
@@ -1172,7 +1173,17 @@ void CPage3::OnSize(UINT nType, int cx, int cy)
 	int refreshWidth = UiTheme::ScaleForWindow(m_hWnd, 70);
 	int injectWidth = UiTheme::ScaleForWindow(m_hWnd, 96);
 	int buttonHeight = UiTheme::ScaleForWindow(m_hWnd, 30);
-	int buttonTop = UiTheme::ScaleForWindow(m_hWnd, 12);
+	int buttonTop = UiTheme::ScaleForWindow(m_hWnd, 8);
+	const int toolbarLeft = rcClient.right - margin - injectWidth - gap
+		- refreshWidth - gap - finderWidth;
+	if (CWnd* title = GetDlgItem(IDC_STATIC_PAGE_TITLE))
+	{
+		CRect titleRect;
+		title->GetWindowRect(&titleRect);
+		ScreenToClient(&titleRect);
+		title->MoveWindow(titleRect.left, titleRect.top,
+			max(0, toolbarLeft - gap - titleRect.left), titleRect.Height());
+	}
 	if (m_btnInject.GetSafeHwnd())
 		m_btnInject.MoveWindow(rcClient.right - margin - injectWidth, buttonTop, injectWidth, buttonHeight);
 	if (m_btnRefresh.GetSafeHwnd())
@@ -1354,7 +1365,7 @@ void CPage3::RestoreProcessPageSubtitle()
 {
 	SetDlgItemText(
 		IDC_STATIC_PAGE_SUBTITLE,
-		_T("选择运行中的进程（按住 Ctrl 或 Shift 可多选），或拖入程序/快捷方式启动并代理"));
+		Localization::Get(_T("page3.list_tip")));
 }
 
 LRESULT CPage3::OnWindowFinderBegin(WPARAM, LPARAM)
@@ -1365,7 +1376,7 @@ LRESULT CPage3::OnWindowFinderBegin(WPARAM, LPARAM)
 		m_windowFinderToolTip.Pop();
 	SetDlgItemText(
 		IDC_STATIC_PAGE_SUBTITLE,
-		_T("拖到目标窗口，松开后立即代理该进程；按 Esc 取消"));
+		Localization::Get(_T("page3.finder_active_tip")));
 	return 0;
 }
 
@@ -1387,8 +1398,8 @@ LRESULT CPage3::OnWindowFinderComplete(WPARAM, LPARAM parameter)
 	if (!ResolveWindowFinderTarget(targetWindow, processId, highlightWindow))
 	{
 		MessageBox(
-			_T("没有识别到可代理的应用程序窗口。"),
-			_T("未找到目标进程"),
+			Localization::Get(_T("page3.no_window")),
+			Localization::Get(_T("page3.no_target_title")),
 			MB_ICONINFORMATION);
 		return 0;
 	}
@@ -1397,8 +1408,8 @@ LRESULT CPage3::OnWindowFinderComplete(WPARAM, LPARAM parameter)
 	if (!SelectProcessByPid(processId))
 	{
 		MessageBox(
-			_T("目标进程已经退出，或暂时没有出现在进程列表中。"),
-			_T("目标进程不可用"),
+			Localization::Get(_T("page3.target_exited")),
+			Localization::Get(_T("page3.target_unavailable")),
 			MB_ICONWARNING);
 		return 0;
 	}
@@ -1407,7 +1418,7 @@ LRESULT CPage3::OnWindowFinderComplete(WPARAM, LPARAM parameter)
 	CollectDescendantProcessIds(processId, descendantProcessIds);
 	if (!descendantProcessIds.empty())
 	{
-		CString targetName = _T("未知进程");
+		CString targetName = Localization::Get(_T("page3.unknown_process"));
 		std::map<DWORD, _myPROCESSINFO>::const_iterator targetProcess =
 			m_processSortData.find(processId);
 		if (targetProcess != m_processSortData.end() &&
@@ -1417,8 +1428,8 @@ LRESULT CPage3::OnWindowFinderComplete(WPARAM, LPARAM parameter)
 		}
 
 		CString confirmationText;
-		confirmationText.Format(
-			_T("%s（PID %lu）当前有 %u 个正在运行的子进程（含多级）：\r\n\r\n"),
+		confirmationText = Localization::Format(
+			_T("page3.children_header"),
 			(LPCTSTR)targetName,
 			processId,
 			static_cast<unsigned int>(descendantProcessIds.size()));
@@ -1428,7 +1439,7 @@ LRESULT CPage3::OnWindowFinderComplete(WPARAM, LPARAM parameter)
 			++index)
 		{
 			DWORD childProcessId = descendantProcessIds[index];
-			CString childName = _T("未知进程");
+			CString childName = Localization::Get(_T("page3.unknown_process"));
 			std::map<DWORD, _myPROCESSINFO>::const_iterator childProcess =
 				m_processSortData.find(childProcessId);
 			if (childProcess != m_processSortData.end() &&
@@ -1437,8 +1448,8 @@ LRESULT CPage3::OnWindowFinderComplete(WPARAM, LPARAM parameter)
 				childName = childProcess->second.proname;
 			}
 			CString childLine;
-			childLine.Format(
-				_T("%u. %s（PID %lu）\r\n"),
+			childLine = Localization::Format(
+				_T("page3.child_line"),
 				static_cast<unsigned int>(index + 1),
 				(LPCTSTR)childName,
 				childProcessId);
@@ -1447,19 +1458,17 @@ LRESULT CPage3::OnWindowFinderComplete(WPARAM, LPARAM parameter)
 		if (descendantProcessIds.size() > maxDisplayedChildren)
 		{
 			CString omittedText;
-			omittedText.Format(
-				_T("……另有 %u 个子进程未列出。\r\n"),
+			omittedText = Localization::Format(
+				_T("page3.children_more"),
 				static_cast<unsigned int>(
 					descendantProcessIds.size() - maxDisplayedChildren));
 			confirmationText += omittedText;
 		}
-		confirmationText +=
-			_T("\r\n是否同时代理全部这些子进程？\r\n")
-			_T("选择“否”将只代理窗口所属进程。");
+		confirmationText += Localization::Get(_T("page3.children_question"));
 
 		const int confirmation = MessageBox(
 			confirmationText,
-			_T("发现正在运行的子进程"),
+			Localization::Get(_T("page3.children_title")),
 			MB_YESNOCANCEL | MB_ICONQUESTION);
 		if (confirmation == IDCANCEL)
 			return 0;
@@ -1990,7 +1999,8 @@ void CPage3::OnBnClickedInjectdll()
 {
 	if(!m_ListCtrl.GetSelectedCount())
 	{
-		MessageBox(_T("请先在列表中选择一个进程。"), _T("未选择进程"), MB_ICONINFORMATION);
+		MessageBox(Localization::Get(_T("page3.select_first")),
+			Localization::Get(_T("page3.none_selected")), MB_ICONINFORMATION);
 		return;
 	}
 
@@ -2029,7 +2039,8 @@ void CPage3::OnBnClickedInjectdll()
 
 	if (targets.empty())
 	{
-		MessageBox(_T("无法读取所选进程，请刷新列表后重试。"), _T("进程不可用"), MB_ICONERROR);
+		MessageBox(Localization::Get(_T("page3.read_failed")),
+			Localization::Get(_T("page3.target_unavailable")), MB_ICONERROR);
 		return;
 	}
 
@@ -2037,12 +2048,14 @@ void CPage3::OnBnClickedInjectdll()
 	IProxyReceptionCentre *pPRC = NULL;
 	if(!g_GlobalProxy || !(pPRC = g_GlobalProxy->GetPRCInstance()))
 	{
-		MessageBox(_T("请先在“代理设置”页面启动代理。"), _T("代理未启动"), MB_ICONINFORMATION);
+		MessageBox(Localization::Get(_T("page3.start_proxy_first")),
+			Localization::Get(_T("status.proxy_stopped")), MB_ICONINFORMATION);
 		return;
 	}
 	if(!pPRC->GetPRCPipeName(szPipeName, MAX_PATH))
 	{
-		MessageBox(_T("无法获取代理通信通道，请停止代理后重新启动。"), _T("代理状态异常"), MB_ICONERROR);
+		MessageBox(Localization::Get(_T("page3.channel_failed")),
+			Localization::Get(_T("page3.proxy_state_error")), MB_ICONERROR);
 		return;
 	}
 
@@ -2069,7 +2082,7 @@ void CPage3::OnBnClickedInjectdll()
 			++failedCount;
 			CString failedProcess;
 			failedProcess.Format(_T("%s (%lu)"),
-				target.name.IsEmpty() ? _T("未知进程") : static_cast<LPCTSTR>(target.name),
+				target.name.IsEmpty() ? static_cast<LPCTSTR>(Localization::Get(_T("page3.unknown_process"))) : static_cast<LPCTSTR>(target.name),
 				target.pid);
 			failedProcesses.push_back(failedProcess);
 		}
@@ -2077,8 +2090,8 @@ void CPage3::OnBnClickedInjectdll()
 
 	CString resultText;
 	int totalCount = static_cast<int>(targets.size()) + unreadableCount;
-	resultText.Format(
-		_T("已处理 %d 个进程：成功 %d 个，失败 %d 个，跳过 %d 个。"),
+	resultText = Localization::Format(
+		_T("page3.result_summary"),
 		totalCount,
 		successCount,
 		failedCount,
@@ -2086,7 +2099,7 @@ void CPage3::OnBnClickedInjectdll()
 
 	if (failedCount > 0)
 	{
-		resultText += _T("\r\n\r\n代理失败的进程：");
+		resultText += Localization::Get(_T("page3.failed_processes"));
 		const size_t maxFailureDetails = 10;
 		for (size_t index = 0;
 			index < failedProcesses.size() && index < maxFailureDetails;
@@ -2098,20 +2111,20 @@ void CPage3::OnBnClickedInjectdll()
 		if (failedProcesses.size() > maxFailureDetails)
 		{
 			CString remainingText;
-			remainingText.Format(
-				_T("\r\n以及另外 %u 个进程。"),
+			remainingText = Localization::Format(
+				_T("page3.more_processes"),
 				static_cast<unsigned int>(failedProcesses.size() - maxFailureDetails));
 			resultText += remainingText;
 		}
 		if (unreadableCount > 0)
-			resultText += _T("\r\n另有选中项无法从列表中读取。");
+			resultText += Localization::Get(_T("page3.unreadable_selection"));
 	}
 	if (skippedCount > 0)
-		resultText += _T("\r\n\r\n已跳过 ProxyLane 自身进程。");
+		resultText += Localization::Get(_T("page3.skipped_self"));
 
 	MessageBox(
 		resultText,
-		failedCount > 0 ? _T("部分进程代理失败") : _T("操作完成"),
+		Localization::Get(failedCount > 0 ? _T("page3.partial_failure") : _T("page3.completed")),
 		failedCount > 0 ? MB_ICONWARNING : MB_ICONINFORMATION);
 }
 

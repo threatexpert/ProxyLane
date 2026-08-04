@@ -2,6 +2,7 @@
 #include "ProxyLane.h"
 #include "ModernUI.h"
 #include "resource.h"
+#include "Localization.h"
 
 namespace UiTheme
 {
@@ -62,6 +63,7 @@ IMPLEMENT_DYNAMIC(CModernDialog, CDialog)
 
 CModernDialog::CModernDialog(UINT templateId, CWnd* parent)
 	: CDialog(templateId, parent)
+	, m_templateId(templateId)
 {
 }
 
@@ -79,18 +81,50 @@ BOOL CModernDialog::OnInitDialog()
 	UiTheme::CreateUiFont(m_titleFont, m_hWnd, 16, FW_SEMIBOLD);
 	SetFont(&m_uiFont, FALSE);
 	UiTheme::ApplyFontToChildren(this, &m_uiFont);
+	Localization::ApplyDialog(this, m_templateId);
 
 	CWnd* title = GetDlgItem(IDC_STATIC_PAGE_TITLE);
 	if (title)
 		title->SetFont(&m_titleFont, FALSE);
+	LayoutPageHeader();
 
 	return TRUE;
 }
 
 BEGIN_MESSAGE_MAP(CModernDialog, CDialog)
+	ON_WM_SIZE()
 	ON_WM_ERASEBKGND()
 	ON_WM_CTLCOLOR()
 END_MESSAGE_MAP()
+
+void CModernDialog::OnSize(UINT type, int cx, int cy)
+{
+	CDialog::OnSize(type, cx, cy);
+	LayoutPageHeader();
+}
+
+void CModernDialog::LayoutPageHeader()
+{
+	if (!GetSafeHwnd())
+		return;
+
+	CRect client;
+	GetClientRect(&client);
+	const int rightMargin = UiTheme::ScaleForWindow(m_hWnd, 8);
+	const UINT headerIds[] = { IDC_STATIC_PAGE_TITLE, IDC_STATIC_PAGE_SUBTITLE };
+	for (int i = 0; i < _countof(headerIds); ++i)
+	{
+		CWnd* header = GetDlgItem(headerIds[i]);
+		if (!header || !header->GetSafeHwnd())
+			continue;
+
+		CRect rect;
+		header->GetWindowRect(&rect);
+		ScreenToClient(&rect);
+		header->MoveWindow(rect.left, rect.top,
+			max(0, client.right - rightMargin - rect.left), rect.Height());
+	}
+}
 
 BOOL CModernDialog::OnEraseBkgnd(CDC* dc)
 {

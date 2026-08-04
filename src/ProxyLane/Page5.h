@@ -14,11 +14,13 @@ public:
 
 protected:
 	CToolTipCtrl m_projectTooltip;
+	CComboBox m_languageCombo;
 
 	virtual void DoDataExchange(CDataExchange* dataExchange);
 	virtual BOOL OnInitDialog();
 	virtual BOOL PreTranslateMessage(MSG* message);
 	afx_msg void OnProjectLink(NMHDR* notifyHeader, LRESULT* result);
+	afx_msg void OnLanguageChanged();
 
 	DECLARE_MESSAGE_MAP()
 };

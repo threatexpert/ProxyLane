@@ -10,6 +10,7 @@
 #include "Page4.h"
 #include "IniFile.h"
 #include "Base64.h"
+#include "Localization.h"
 #include <vector>
 #include <shlwapi.h>
 #pragma comment(lib, "shlwapi.lib")
@@ -124,6 +125,7 @@ void CPage1::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_STATIC_TestProxy, m_staticTestProxy);
 	DDX_Control(pDX, IDC_COMBO_CFGS, m_cfgls);
 	DDX_Control(pDX, IDC_BUTTON_SAVE_PROFILE, m_btnSaveProfile);
+	DDX_Control(pDX, IDC_BUTTON_DELETE_PROFILE, m_btnDeleteProfile);
 }
 
 
@@ -152,10 +154,7 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_BN_CLICKED(IDC_RADIO_CHILDFILTER_INCLUDE, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_RADIO_TARGETFILTER_BYPASS, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_RADIO_TARGETFILTER_PROXY, &CPage1::OnProfileFieldChanged)
-	ON_BN_CLICKED(IDC_BUTTON_CfgOpt, &CPage1::OnBnClickedButtonCfgopt)
-	ON_COMMAND(ID_CFGOPT_Load, &CPage1::OnCfgoptLoad)
-	ON_COMMAND(ID_CFGOPT_Save, &CPage1::OnCfgoptSave)
-	ON_COMMAND(ID_CFGOPT_Delete, &CPage1::OnCfgoptDelete)
+	ON_BN_CLICKED(IDC_BUTTON_DELETE_PROFILE, &CPage1::OnCfgoptDelete)
 	ON_CBN_SELCHANGE(IDC_COMBO_CFGS, &CPage1::OnCbnSelchangeComboCfgs)
 	ON_BN_CLICKED(IDC_CHECK_HOOKCHILDPROCESS, &CPage1::OnBnClickedHookChildProcess)
 	ON_BN_CLICKED(IDC_RADIO_TAB_BASIC, &CPage1::OnBnClickedTabBasic)
@@ -172,6 +171,7 @@ BOOL CPage1::OnInitDialog()
 	m_Cancel.SetVisualStyle(CModernButton::STYLE_DANGER);
 	m_btnTest.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	m_btnSaveProfile.SetVisualStyle(CModernButton::STYLE_SECONDARY);
+	m_btnDeleteProfile.SetVisualStyle(CModernButton::STYLE_DANGER);
 	CreateWorkflowCard();
 	UpdateProxyStateUi();
 
@@ -244,13 +244,13 @@ void CPage1::OnSize(UINT nType, int cx, int cy)
 void CPage1::CreateWorkflowCard()
 {
 	const CRect emptyRect(0, 0, 0, 0);
-	m_workflowGroup.Create(_T("使用流程"), WS_CHILD | BS_GROUPBOX,
+	m_workflowGroup.Create(Localization::Get(_T("workflow.group")), WS_CHILD | BS_GROUPBOX,
 		emptyRect, this, IDC_STATIC_WORKFLOW_GROUP);
-	m_workflowStatus.Create(_T("3 步完成设置"), WS_CHILD | SS_OWNERDRAW,
+	m_workflowStatus.Create(Localization::Get(_T("workflow.ready")), WS_CHILD | SS_OWNERDRAW,
 		emptyRect, this, IDC_STATIC_WORKFLOW_STATUS);
 	m_workflowText.Create(_T(""), WS_CHILD | SS_LEFT,
 		emptyRect, this, IDC_STATIC_WORKFLOW_TEXT);
-	m_workflowNext.Create(_T("前往应用与进程"),
+	m_workflowNext.Create(Localization::Get(_T("workflow.next")),
 		WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
 		emptyRect, this, IDC_BTN_WORKFLOW_NEXT);
 
@@ -335,18 +335,13 @@ void CPage1::UpdateWorkflowCard()
 	const BOOL running = m_proxyController.IsRunning();
 	if (running)
 	{
-		m_workflowStatus.SetStatus(_T("代理服务已启动"), CStatusLabel::TONE_SUCCESS);
-		m_workflowText.SetWindowText(
-			_T("下一步，请选择需要走代理的应用。\r\n\r\n")
-			_T("可从进程列表选择，也可以直接拖入程序或快捷方式。"));
+		m_workflowStatus.SetStatus(Localization::Get(_T("workflow.running")), CStatusLabel::TONE_SUCCESS);
+		m_workflowText.SetWindowText(Localization::Get(_T("workflow.running_text")));
 	}
 	else
 	{
-		m_workflowStatus.SetStatus(_T("3 步完成设置"), CStatusLabel::TONE_INFO);
-		m_workflowText.SetWindowText(
-			_T("1. 配置代理服务器\r\n\r\n")
-			_T("2. 启动代理服务\r\n\r\n")
-			_T("3. 选择需要走代理的应用"));
+		m_workflowStatus.SetStatus(Localization::Get(_T("workflow.ready")), CStatusLabel::TONE_INFO);
+		m_workflowText.SetWindowText(Localization::Get(_T("workflow.steps")));
 	}
 
 	if (g_MainTab)
@@ -528,11 +523,13 @@ void CPage1::SetProfileDirty(BOOL dirty)
 	m_profileDirty = dirty;
 	if (m_btnSaveProfile.GetSafeHwnd())
 		m_btnSaveProfile.EnableWindow(dirty);
+	if (m_btnDeleteProfile.GetSafeHwnd())
+		m_btnDeleteProfile.EnableWindow(m_cfgls.GetCurSel() != CB_ERR);
 
 	if (!m_bIsTesting && m_staticTestProxy.GetSafeHwnd())
 	{
 		if (dirty)
-			m_staticTestProxy.SetStatus(_T("更改未保存"), CStatusLabel::TONE_WARNING);
+			m_staticTestProxy.SetStatus(Localization::Get(_T("status.changes_unsaved")), CStatusLabel::TONE_WARNING);
 		else
 			UpdateProxyStateUi();
 	}
@@ -564,12 +561,14 @@ BOOL CPage1::SaveCurrentProfile(LPCTSTR profileName)
 
 	if (item.strName.IsEmpty())
 	{
-		MessageBox(_T("请先输入一个配置名称。"), _T("无法保存配置"), MB_ICONINFORMATION);
+		MessageBox(Localization::Get(_T("profile.name_required")),
+			Localization::Get(_T("profile.save_failed_title")), MB_ICONINFORMATION);
 		return FALSE;
 	}
 	if (!GetSettings(&item.pi))
 	{
-		MessageBox(_T("请检查代理地址和端口是否填写正确。"), _T("无法保存配置"), MB_ICONERROR);
+		MessageBox(Localization::Get(_T("profile.invalid_endpoint")),
+			Localization::Get(_T("profile.save_failed_title")), MB_ICONERROR);
 		return FALSE;
 	}
 
@@ -606,8 +605,8 @@ BOOL CPage1::ConfirmDiscardUnsavedChanges()
 		return TRUE;
 
 	const int answer = MessageBox(
-		_T("当前代理设置尚未保存。\r\n\r\n选择“是”保存，选择“否”放弃更改。"),
-		_T("未保存的代理设置"),
+		Localization::Get(_T("profile.unsaved_prompt")),
+		Localization::Get(_T("profile.unsaved_title")),
 		MB_YESNOCANCEL | MB_ICONWARNING);
 	if (answer == IDCANCEL)
 		return FALSE;
@@ -624,7 +623,8 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 	if (!GetSettings(&m_ProxyInfo))
 	{
 		if (showErrors)
-			MessageBox(_T("请检查代理地址和端口是否填写正确。"), _T("无法启动代理"), MB_ICONERROR);
+			MessageBox(Localization::Get(_T("profile.invalid_endpoint")),
+				Localization::Get(_T("proxy.start_failed_title")), MB_ICONERROR);
 		return FALSE;
 	}
 
@@ -654,7 +654,7 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 		return TRUE;
 	}
 
-	m_staticTestProxy.SetStatus(_T("启动失败"), CStatusLabel::TONE_DANGER);
+	m_staticTestProxy.SetStatus(Localization::Get(_T("status.start_failed")), CStatusLabel::TONE_DANGER);
 	return FALSE;
 }
 
@@ -717,7 +717,7 @@ void CPage1::OnBnClickedTestproxy()
 		m_pProxyTester->Release();
 		m_pProxyTester = NULL;
 		m_bIsTesting = FALSE;
-		m_btnTest.SetWindowText(_T("测试当前设置"));
+		m_btnTest.SetWindowText(Localization::Get(_T("action.test_current")));
 		UpdateProxyStateUi();
 		return;
 	}
@@ -738,8 +738,9 @@ void CPage1::OnBnClickedTestproxy()
 
 	if (!GetSettings(&m_ProxyInfo))
 	{
-		MessageBox(_T("请检查代理地址和端口是否填写正确。"), _T("无法测试连接"), MB_ICONERROR);
-		m_staticTestProxy.SetStatus(_T("配置无效"), CStatusLabel::TONE_DANGER);
+		MessageBox(Localization::Get(_T("profile.invalid_endpoint")),
+			Localization::Get(_T("test.invalid_title")), MB_ICONERROR);
+		m_staticTestProxy.SetStatus(Localization::Get(_T("status.invalid_config")), CStatusLabel::TONE_DANGER);
 		return;
 	}
 
@@ -767,14 +768,15 @@ void CPage1::OnBnClickedTestproxy()
 
 	if (!m_pProxyTester->Start(this, &client, &m_ProxyInfo))
 	{
-		MessageBox(_T("无法开始连接测试，请检查当前网络。"), _T("测试失败"), MB_ICONERROR);
-		m_staticTestProxy.SetStatus(_T("测试失败"), CStatusLabel::TONE_DANGER);
+		MessageBox(Localization::Get(_T("test.start_failed")),
+			Localization::Get(_T("test.failed_title")), MB_ICONERROR);
+		m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_failed")), CStatusLabel::TONE_DANGER);
 		ATLTRACE("OnBnClickedTestproxy -> Start failed.\r\n");
 		return;
 	}
 
-	m_btnTest.SetWindowText(_T("取消测试"));
-	m_staticTestProxy.SetStatus(_T("正在测试"), CStatusLabel::TONE_INFO);
+	m_btnTest.SetWindowText(Localization::Get(_T("action.cancel_test")));
+	m_staticTestProxy.SetStatus(Localization::Get(_T("status.testing")), CStatusLabel::TONE_INFO);
 	m_bIsTesting = TRUE;
 
 }
@@ -792,10 +794,10 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 	{
 		if(nCode == connecting)
 		{
-			szText.Format(_T("正在连接"));
+			szText = Localization::Get(_T("status.connecting"));
 		}else if (nCode == connected)
 		{
-			szText.Format(_T("正在协商"));
+			szText = Localization::Get(_T("status.negotiating"));
 		}else
 		{
 			return;
@@ -810,48 +812,48 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 
 		if(nCode == 0)
 		{
-			szText = _T("代理服务器工作正常");
+			szText = Localization::Get(_T("test.success"));
 			if (m_profileDirty)
 		{
-				m_staticTestProxy.SetStatus(_T("测试通过 · 未保存"), CStatusLabel::TONE_WARNING);
-				szText += _T("\r\n\r\n当前设置已应用，但尚未保存到配置。");
+				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_unsaved")), CStatusLabel::TONE_WARNING);
+				szText += Localization::Get(_T("test.applied_unsaved"));
 			}
 			else
-				m_staticTestProxy.SetStatus(_T("测试通过 · 已保存"), CStatusLabel::TONE_SUCCESS);
-			MessageBox(szText, _T("测试当前设置"), MB_ICONINFORMATION);
+				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_saved")), CStatusLabel::TONE_SUCCESS);
+			MessageBox(szText, Localization::Get(_T("test.title")), MB_ICONINFORMATION);
 		}else
 		{
 			switch (nCode)
 			{
 			case PROXYERROR_NOCONN:
-				szText.Format(_T("连接代理服务器失败"));
+				szText = Localization::Get(_T("test.no_connection"));
 				break;
 				/* fall through */
 			case PROXYERROR_REQUESTFAILED:
-				szText.Format(_T("代理服务器连不上目标服务器"));
+				szText = Localization::Get(_T("test.target_failed"));
 				break;
 			case PROXYERROR_AUTHREQUIRED:
-				szText.Format(_T("代理服务器需要身份验证"));
+				szText = Localization::Get(_T("test.auth_required"));
 				break;
 			case PROXYERROR_AUTHTYPEUNKNOWN:
-				szText.Format(_T("不支持代理服务器的验证方式"));
+				szText = Localization::Get(_T("test.auth_unknown"));
 				break;
 			case PROXYERROR_AUTHFAILED:
-				szText.Format(_T("身份验证失败"));
+				szText = Localization::Get(_T("test.auth_failed"));
 				break;
 
 			default:
-				szText.Format(_T("和代理服务器协商失败，错误号: %d"), nCode);
+				szText = Localization::Format(_T("test.negotiation_failed"), nCode);
 				break;
 			}
-			m_staticTestProxy.SetStatus(m_profileDirty
-				? _T("测试失败 · 未保存") : _T("测试失败"), CStatusLabel::TONE_DANGER);
+			m_staticTestProxy.SetStatus(Localization::Get(m_profileDirty
+				? _T("status.test_failed_unsaved") : _T("status.test_failed")), CStatusLabel::TONE_DANGER);
 			MessageBox(szText);
 		}
 
 		pTester->Release();
 		m_pProxyTester = NULL;
-		m_btnTest.SetWindowText(_T("测试当前设置"));
+		m_btnTest.SetWindowText(Localization::Get(_T("action.test_current")));
 		m_bIsTesting = FALSE;
 
 	}
@@ -874,22 +876,6 @@ void CPage1::OnEnChangeEditAddr()
 		m_edit_Port.SetWindowText(strPort);
 	}
 	OnProfileFieldChanged();
-}
-
-void CPage1::OnBnClickedButtonCfgopt()
-{
-	CMenu menu;
-
-	if (menu.LoadMenu(MAKEINTRESOURCE(IDR_MENU_CFGS)))
-	{
-		POINT pt;
-		GetCursorPos(&pt);
-		menu.GetSubMenu(0)->TrackPopupMenu(TPM_LEFTBUTTON, 
-			pt.x, 
-			pt.y,
-			this
-			);
-	}
 }
 
 void CPage1::OnCfgoptLoad()
@@ -920,13 +906,6 @@ void CPage1::OnCfgoptSave()
 
 void CPage1::OnCfgoptDelete()
 {
-	if (m_profileDirty && MessageBox(
-		_T("当前更改尚未保存。删除配置将放弃这些更改，是否继续？"),
-		_T("删除配置"), MB_OKCANCEL | MB_ICONWARNING) != IDOK)
-	{
-		return;
-	}
-
 	CString strName;
 	int idx = m_cfgls.GetCurSel();
 	if (idx >= 0)
@@ -934,6 +913,13 @@ void CPage1::OnCfgoptDelete()
 		m_cfgls.GetLBText(idx, strName);
 		if (strName.GetLength() > 0)
 		{
+			CString prompt = Localization::Format(_T("profile.delete_confirm"), (LPCTSTR)strName);
+			if (MessageBox(prompt, Localization::Get(_T("profile.delete_title")),
+				MB_OKCANCEL | MB_ICONWARNING) != IDOK)
+			{
+				return;
+			}
+
 			m_profileStore.Delete(strName);
 			m_cfgls.DeleteString(idx);
 			m_loadingProfile = TRUE;
@@ -1139,10 +1125,10 @@ void CPage1::UpdateProxyStateUi()
 	m_OK.EnableWindow(!running);
 	m_Cancel.EnableWindow(running);
 	if (m_profileDirty)
-		m_staticTestProxy.SetStatus(_T("更改未保存"), CStatusLabel::TONE_WARNING);
+		m_staticTestProxy.SetStatus(Localization::Get(_T("status.changes_unsaved")), CStatusLabel::TONE_WARNING);
 	else if (running)
-		m_staticTestProxy.SetStatus(_T("代理运行中"), CStatusLabel::TONE_SUCCESS);
+		m_staticTestProxy.SetStatus(Localization::Get(_T("status.proxy_running")), CStatusLabel::TONE_SUCCESS);
 	else
-		m_staticTestProxy.SetStatus(_T("代理未启动"), CStatusLabel::TONE_NEUTRAL);
+		m_staticTestProxy.SetStatus(Localization::Get(_T("status.proxy_stopped")), CStatusLabel::TONE_NEUTRAL);
 	UpdateWorkflowCard();
 }

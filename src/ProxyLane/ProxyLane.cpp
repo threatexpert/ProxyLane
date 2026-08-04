@@ -6,6 +6,7 @@
 #include "ProxyLaneDlg.h"
 #include "Page3.h"
 #include "AutomationOptions.h"
+#include "Localization.h"
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -85,6 +86,7 @@ BOOL CProxyLaneApp::InitInstance()
 	InitCommonControlsEx(&InitCtrls);
 
 	CWinApp::InitInstance();
+	Localization::Initialize();
 
 	AfxEnableControlContainer();
 

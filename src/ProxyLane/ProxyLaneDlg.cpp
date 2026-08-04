@@ -5,6 +5,7 @@
 #include "ProxyLane.h"
 #include "ProxyLaneDlg.h"
 #include "AppVersion.h"
+#include "Localization.h"
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -269,8 +270,8 @@ CString CProxyLaneDlg::BuildTaskbarTooltip() const
 	CString tooltip = AppVersion::DisplayTitle();
 	if (m_MainTab.IsProxyRunning())
 	{
-		tooltip += _T(" - 运行中：");
-		tooltip += m_MainTab.GetRunningProfileName();
+		tooltip += Localization::Format(_T("dialog.running_suffix"),
+			static_cast<LPCTSTR>(m_MainTab.GetRunningProfileName()));
 	}
 	return tooltip;
 }
@@ -406,7 +407,7 @@ void CProxyLaneDlg::OnDropFiles(HDROP dropInfo)
 	{
 		DragFinish(dropInfo);
 		m_MainTab.ShowTransientStatus(
-			_T("代理未启动，未启动拖入的程序"),
+			Localization::Get(_T("dialog.unsaved_drop")),
 			CStatusLabel::TONE_INFO);
 		return;
 	}
@@ -431,24 +432,24 @@ void CProxyLaneDlg::OnDropFiles(HDROP dropInfo)
 			int slash = max(path.ReverseFind(_T('\\')), path.ReverseFind(_T('/')));
 			CString displayName = slash >= 0 ? path.Mid(slash + 1) : path;
 			CString status;
-			status.Format(_T("已启动并代理：%s"), displayName);
+			status = Localization::Format(_T("dialog.started_proxy"), static_cast<LPCTSTR>(displayName));
 			m_MainTab.ShowTransientStatus(status, CStatusLabel::TONE_SUCCESS);
 			continue;
 		}
 
 		CString message;
 		if (result == APP_LAUNCH_INVALID_TARGET)
-			message = _T("无法识别拖入的目标，或目标文件已经不存在。");
+			message = Localization::Get(_T("dialog.drop_invalid"));
 		else if (result == APP_LAUNCH_UAC_CANCELLED)
-			message = _T("已取消 Windows 权限确认，程序未启动。");
+			message = Localization::Get(_T("dialog.drop_uac_cancelled"));
 		else if (result == APP_LAUNCH_INJECTION_FAILED)
-			message = _T("代理注入失败，目标程序已取消启动，未在无代理状态下继续运行。");
+			message = Localization::Get(_T("dialog.drop_inject_failed"));
 		else if (result == APP_LAUNCH_ELEVATED_HELPER_FAILED)
-			message = _T("提权启动或代理注入未完成，目标程序已取消启动。");
+			message = Localization::Get(_T("dialog.drop_elevated_failed"));
 		else
-			message = _T("无法启动拖入的程序，请检查文件状态和运行权限。");
+			message = Localization::Get(_T("dialog.drop_launch_failed"));
 
-		MessageBox(message, _T("无法启动并代理"), MB_OK | MB_ICONERROR);
+		MessageBox(message, Localization::Get(_T("dialog.drop_failed_title")), MB_OK | MB_ICONERROR);
 	}
 
 	DragFinish(dropInfo);

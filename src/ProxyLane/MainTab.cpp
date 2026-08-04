@@ -2,6 +2,7 @@
 #include "ProxyLane.h"
 #include "MainTab.h"
 #include "ModernUI.h"
+#include "Localization.h"
 
 namespace
 {
@@ -9,13 +10,10 @@ namespace
 	const UINT kTransientStatusId = 0x1007;
 	const UINT_PTR kTransientStatusTimer = 0x1008;
 	const UINT kSidebarStatusId = 0x1009;
-	LPCTSTR kNavigationLabels[] =
+	LPCTSTR kNavigationKeys[] =
 	{
-		_T("代理设置"),
-		_T("应用与进程"),
-		_T("运行日志"),
-		_T("数据监视"),
-		_T("关于")
+		_T("nav.proxy"), _T("nav.apps"), _T("nav.log"),
+		_T("nav.monitor"), _T("nav.about")
 	};
 }
 
@@ -77,17 +75,18 @@ BOOL CMainTab::CreateTabCtrl(CWnd* parent)
 	for (int i = 0; i < PAGE_COUNT; ++i)
 		m_pages[i]->ShowWindow(i == 0 ? SW_SHOW : SW_HIDE);
 
-	if (!m_sidebarStatus.Create(_T("代理未启动"),
+	CString stoppedText = Localization::Get(_T("status.proxy_stopped"));
+	if (!m_sidebarStatus.Create(stoppedText,
 		WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
 		CRect(0, 0, 0, 0), this, kSidebarStatusId))
 	{
 		return FALSE;
 	}
 	m_sidebarStatus.SetFont(&m_navigationFont, FALSE);
-	m_sidebarStatus.SetStatus(_T("代理未启动"), CStatusLabel::TONE_NEUTRAL);
+	m_sidebarStatus.SetStatus(stoppedText, CStatusLabel::TONE_NEUTRAL);
 	if (m_sidebarTooltip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX))
 	{
-		m_sidebarTooltip.AddTool(&m_sidebarStatus, _T("代理未启动"));
+		m_sidebarTooltip.AddTool(&m_sidebarStatus, stoppedText);
 		m_sidebarTooltip.SetMaxTipWidth(UiTheme::ScaleForWindow(m_hWnd, 360));
 		m_sidebarTooltip.Activate(TRUE);
 	}
@@ -116,7 +115,9 @@ END_MESSAGE_MAP()
 
 int CMainTab::NavigationWidth() const
 {
-	return UiTheme::ScaleForWindow(m_hWnd, 146);
+	const int width = Localization::CurrentLanguage().CompareNoCase(_T("en-US")) == 0
+		? 180 : 146;
+	return UiTheme::ScaleForWindow(m_hWnd, width);
 }
 
 CRect CMainTab::NavigationItemRect(int index) const
@@ -166,7 +167,8 @@ void CMainTab::OnPaint()
 	CRect subtitle = brand;
 	subtitle.top = UiTheme::ScaleForWindow(m_hWnd, 38);
 	subtitle.bottom = UiTheme::ScaleForWindow(m_hWnd, 62);
-	dc.DrawText(_T("代理控制中心"), subtitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+	CString subtitleText = Localization::Get(_T("nav.subtitle"));
+	dc.DrawText(subtitleText, subtitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
 	for (int i = 0; i < PAGE_COUNT; ++i)
 	{
@@ -197,7 +199,8 @@ void CMainTab::OnPaint()
 		CRect label = item;
 		label.left += UiTheme::ScaleForWindow(m_hWnd, 18);
 		dc.SetTextColor(selected ? UiTheme::Accent() : UiTheme::TextPrimary());
-		dc.DrawText(kNavigationLabels[i], label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+		CString navigationText = Localization::Get(kNavigationKeys[i]);
+		dc.DrawText(navigationText, label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
 		if (i == m_attentionPage && !selected)
 		{
@@ -342,7 +345,7 @@ void CMainTab::SetRunningProfile(LPCTSTR profileName, BOOL running)
 	CString name(profileName ? profileName : _T(""));
 	name.Trim();
 	if (running && name.IsEmpty())
-		name = _T("当前配置");
+		name = Localization::Get(_T("nav.current_profile"));
 
 	if (m_proxyRunning == running && m_runningProfileName == name)
 		return;
@@ -352,14 +355,16 @@ void CMainTab::SetRunningProfile(LPCTSTR profileName, BOOL running)
 	if (m_sidebarStatus.GetSafeHwnd())
 	{
 		if (running)
-			m_sidebarStatus.SetTwoLineStatus(_T("代理运行中"), name,
+			m_sidebarStatus.SetTwoLineStatus(Localization::Get(_T("status.proxy_running")), name,
 				CStatusLabel::TONE_SUCCESS);
 		else
-			m_sidebarStatus.SetStatus(_T("代理未启动"), CStatusLabel::TONE_NEUTRAL);
+			m_sidebarStatus.SetStatus(Localization::Get(_T("status.proxy_stopped")), CStatusLabel::TONE_NEUTRAL);
 
 		if (m_sidebarTooltip.GetSafeHwnd())
 		{
-			CString tooltipText = running ? _T("运行配置：") + name : _T("代理未启动");
+			CString tooltipText = running
+				? Localization::Format(_T("nav.running_profile"), static_cast<LPCTSTR>(name))
+				: Localization::Get(_T("status.proxy_stopped"));
 			m_sidebarTooltip.UpdateTipText(tooltipText, &m_sidebarStatus);
 		}
 		PositionWnd();
