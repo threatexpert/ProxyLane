@@ -1,3 +1,5 @@
+[简体中文](README.md) | [English](README_EN.md)
+
 # ProxyLane
 
 ProxyLane 是一款面向 Windows 的应用进程级透明代理工具。它通过进程注入和网络 API Hook，让指定程序的网络连接使用单独配置的代理，而不需要修改系统全局代理。
@@ -53,7 +55,7 @@ ProxyLane 采用纯用户态的进程注入与 API Hook 技术，对应用程序
 
 ## 界面语言
 
-ProxyLane 内置简体中文和英文。默认跟随 Windows 界面语言，也可以在“关于”页面选择语言；修改后在下次启动时生效。
+ProxyLane 内置简体中文和英文。默认跟随 Windows 界面语言，也可以在“关于与语言”页面选择语言；修改后在下次启动时生效。
 
 全部可翻译文字保存在 UTF-8 语言目录中：
 
@@ -72,7 +74,7 @@ ProxyLane 内置简体中文和英文。默认跟随 Windows 界面语言，也�
 powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 ```
 
-脚本会从程序文件属性读取版本号，检查四个发行二进制文件的版本是否一致，并生成 `dist/ProxyLane-版本-Windows.zip`。压缩包包含 Win32/x64 主程序、对应的 Hook DLL、样例配置和 README。
+脚本会从程序文件属性读取版本号，检查四个发行二进制文件的版本是否一致，并生成 `dist/ProxyLane-版本-Windows.zip`。压缩包包含 Win32/x64 主程序、对应的 Hook DLL、样例配置以及中英文 README。
 
 样例配置保存在 `examples/ProxyLane.ini`，打包后会以 `ProxyLane.ini` 放在压缩包根目录。
 
