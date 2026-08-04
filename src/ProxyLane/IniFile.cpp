@@ -32,10 +32,11 @@ void CIniFile::SetIniFileName(CString FileName)
 		IniFileName = FileName;
 	}else
 	{
-		TCHAR szAppName[MAX_PATH];
+		TCHAR szAppName[MAX_PATH] = { 0 };
 		int  len;
 
-		::GetModuleFileName(AfxGetApp()->m_hInstance, szAppName, sizeof(szAppName));
+		::GetModuleFileName(AfxGetApp()->m_hInstance, szAppName, _countof(szAppName));
+		szAppName[_countof(szAppName) - 1] = _T('\0');
 		len = _tcslen(szAppName);
 		for(int i=len; i>0; i--)
 		{

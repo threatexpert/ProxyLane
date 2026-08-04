@@ -1,4 +1,4 @@
-/************************************************************************/
+ï»¿/************************************************************************/
 /*                                                                      */
 /*                                                                      */
 /************************************************************************/
@@ -15,6 +15,7 @@ CPRCPipeClient::CPRCPipeClient(void)
 
 CPRCPipeClient::~CPRCPipeClient(void)
 {
+	Disconnect();
 }
 
 BOOL CPRCPipeClient::IsConnected()
@@ -34,7 +35,7 @@ BOOL CPRCPipeClient::Connect(LPCTSTR lpszServerName)
 
 	for(;;)
 	{
-		//Á¬½Ó¹ÜµÀ
+		//è¿žæŽ¥ç®¡é“
 		m_hPipe = CreateFile(
 			m_szFullPipename, 
 			GENERIC_READ|GENERIC_WRITE,
@@ -144,7 +145,7 @@ BOOL CPRCPipeClient::PRCRegisterClient(LPPRCClient lpClientInfo)
 	if(hdr.action != PRCPD_REPLY || hdr.flag != 1)
 		return FALSE;
 
-	//TCP Client ×¢²áºóÎÞÐè·µ»ØÆäËûÊý¾Ý
+	//TCP Client æ³¨å†ŒåŽæ— éœ€è¿”å›žå…¶ä»–æ•°æ®
 	if(lpClientInfo->sType == SOCK_STREAM && hdr.dataSize == 0)
 		return TRUE;
 
@@ -248,6 +249,39 @@ BOOL CPRCPipeClient::PRCNotifyNewProcess(LPHookNewProcessInfo lphnpi)
 		return FALSE;
 
 	return TRUE;
+}
+
+BOOL CPRCPipeClient::PRCNotifyChildInjectionResult(
+	LPHookNewProcessInfo lphnpi,
+	BOOL succeeded)
+{
+	PRCPipeDataHead hdr;
+
+	hdr.action = PRCPD_CHILD_INJECTION_RESULT;
+	hdr.flag = succeeded ? 1 : 0;
+	hdr.dataSize = sizeof(*lphnpi);
+
+	if(!WritePipe(&hdr, sizeof(hdr)))
+		return FALSE;
+
+	return WritePipe(lphnpi, sizeof(*lphnpi));
+}
+
+BOOL CPRCPipeClient::PRCRegisterProcessIdentity(
+	LPHookProcessIdentityInfo identity)
+{
+	if (!identity || !identity->dwProcessId || !identity->szAppPath[0])
+		return FALSE;
+
+	PRCPipeDataHead hdr;
+	hdr.action = PRCPD_REGISTER_PROCESS_IDENTITY;
+	hdr.flag = 0;
+	hdr.dataSize = sizeof(*identity);
+
+	if (!WritePipe(&hdr, sizeof(hdr)))
+		return FALSE;
+
+	return WritePipe(identity, sizeof(*identity));
 }
 
 BOOL CPRCPipeClient::PRCGetUDPClientPortState(UDPLocalProxyAddrInfo *pLPAI)

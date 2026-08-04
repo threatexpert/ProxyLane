@@ -1,4 +1,4 @@
-/************************************************************************/
+ï»¿/************************************************************************/
 /*                                                                      */
 /*                                                                      */
 /************************************************************************/
@@ -10,44 +10,78 @@
 #include "GlobalProxy.h"
 #include "ProxyLog.h"
 #include "ProxySettings.h"
+#include <psapi.h>
+
+#pragma comment(lib, "psapi.lib")
 
 
-static BOOL ResolveProcPath(DWORD dwPid, LPWSTR szOut, DWORD cchOut, LPWSTR &ppszName)
+static BOOL ResolveProcPath(
+	CProxyReceptionCentre* receptionCentre,
+	DWORD dwPid,
+	LPWSTR szOut,
+	DWORD cchOut,
+	LPWSTR &ppszName)
 {
-	if (!szOut || cchOut == 0)
+	if (!receptionCentre || !szOut || cchOut == 0)
 		return FALSE;
 
 	szOut[0] = L'\0';
-	ppszName = szOut;
+	ppszName = NULL;
 
-	HANDLE hProc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, dwPid);
-
-	typedef BOOL(WINAPI* PFN_QFIN)(HANDLE, DWORD, LPWSTR, PDWORD);
-	static PFN_QFIN s_pQFIN = (PFN_QFIN)-1;
-	if (s_pQFIN == (PFN_QFIN)-1)
+	// å·² Hook è¿›ç¨‹ä¼šåœ¨åˆå§‹åŒ–æ—¶ä¸»åŠ¨ä¸ŠæŠ¥ä¸€æ¬¡è·¯å¾„ï¼Œè¿æ¥çƒ­è·¯å¾„ä¼˜å…ˆå‘½ä¸­ç¼“å­˜ã€‚
+	if (!receptionCentre->GetProcessIdentity(dwPid, szOut, cchOut))
 	{
-		HMODULE hK32 = GetModuleHandleW(L"kernel32.dll");
-		s_pQFIN = hK32 ? (PFN_QFIN)GetProcAddress(hK32, "QueryFullProcessImageNameW") : NULL;
-	}
-	if (s_pQFIN)
-	{
-		DWORD cch = cchOut;
-		if (s_pQFIN(hProc, 0, szOut, &cch) && szOut[0]) {
-			if (ppszName)
-			{
-				ppszName = wcsrchr(szOut, L'\\');
-				if (ppszName)
-					(ppszName)++;
-				else
-					ppszName = szOut;
-			}
-			CloseHandle(hProc);
-			return TRUE;
+		typedef BOOL(WINAPI* PFN_QFIN)(HANDLE, DWORD, LPWSTR, PDWORD);
+		static PFN_QFIN s_pQFIN = (PFN_QFIN)-1;
+		if (s_pQFIN == (PFN_QFIN)-1)
+		{
+			HMODULE hK32 = GetModuleHandleW(L"kernel32.dll");
+			s_pQFIN = hK32
+				? (PFN_QFIN)GetProcAddress(hK32, "QueryFullProcessImageNameW")
+				: NULL;
 		}
-		szOut[0] = L'\0';
+
+		HANDLE hProc = OpenProcess(
+			PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+			FALSE,
+			dwPid);
+		if (!hProc && s_pQFIN)
+		{
+			// Vista+ å¯ç”¨æ›´å°çš„æŸ¥è¯¢æƒé™ï¼›XP ä¸ä¼šè¿›å…¥æ­¤åˆ†æ”¯ã€‚
+			const DWORD kProcessQueryLimitedInformation = 0x1000;
+			hProc = OpenProcess(kProcessQueryLimitedInformation, FALSE, dwPid);
+			if (!hProc)
+				hProc = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, dwPid);
+		}
+		if (!hProc)
+			return FALSE;
+
+		BOOL resolved = FALSE;
+		if (s_pQFIN)
+		{
+			DWORD cch = cchOut;
+			resolved = s_pQFIN(hProc, 0, szOut, &cch) && szOut[0];
+		}
+
+		if (!resolved)
+		{
+			szOut[0] = L'\0';
+			resolved = GetModuleFileNameExW(hProc, NULL, szOut, cchOut) > 0;
+			szOut[cchOut - 1] = L'\0';
+		}
+		CloseHandle(hProc);
+		if (!resolved || !szOut[0])
+			return FALSE;
+
+		HookProcessIdentityInfo identity = { 0 };
+		identity.dwProcessId = dwPid;
+		wcsncpy(identity.szAppPath, szOut, _countof(identity.szAppPath) - 1);
+		receptionCentre->RegisterProcessIdentity(&identity);
 	}
-	CloseHandle(hProc);
-	return FALSE;
+
+	ppszName = wcsrchr(szOut, L'\\');
+	ppszName = ppszName ? ppszName + 1 : szOut;
+	return ppszName[0] != L'\0';
 }
 
 CPRCTcpServer::CPRCTcpServer(CProxyReceptionCentre *pPRC)
@@ -84,7 +118,7 @@ BOOL CPRCTcpServer::StartupServer()
 		return FALSE;
 	}
 
-	PrintText(_T("PRCTcpServer ¼àÌı¶Ë¿Ú: %d\r\n"), tcpaddr.GetPort());
+	PrintText(_T("PRCTcpServer ç›‘å¬ç«¯å£: %d\r\n"), tcpaddr.GetPort());
 
 	return TRUE;
 }
@@ -95,7 +129,7 @@ BOOL CPRCTcpServer::ShutdownServer()
 	m_ProxyTaskMgr.RemoveAllTasks();
 	Close();
 
-	PrintText(_T("PRCTcpServer ¹Ø±Õ.\r\n"));
+	PrintText(_T("PRCTcpServer å…³é—­.\r\n"));
 	return TRUE;
 }
 
@@ -131,13 +165,13 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 	if (sClient == INVALID_SOCKET)
 		return;
 
-	//CHookWinsock À¹½Øµ½Ò»¸öÁ¬½ÓÊ±»á½«Ì×½Ó×ÖºÍÕæÕıµÄÇëÇóµØÖ·µÇ¼Çµ½PRC,
-	//ÕâÀïÍ¨¹ıPRCµÄ½Ó¿ÚGetClientInfoµÃµ½Ô­À´µÄ¸ÃÁ¬½ÓµÄÕæÕıÇëÇóµØÖ·,
-	//GetClientInfoÄÚ²¿Í¨¹ıÕâÀï½ÓÊÜµ½µÄÌ×½Ó×Ö²éÑ¯(getpeername)Á¬½ÓµÄÔ­ipºÍ¶Ë¿Ú£¬²¢´ÓPRCµÇ¼ÇµÄÊı¾İÖĞ²éÕÒÆ¥ÅäµÄµØÖ·¡¢¶Ë¿ÚĞÅÏ¢.
+	//CHookWinsock æ‹¦æˆªåˆ°ä¸€ä¸ªè¿æ¥æ—¶ä¼šå°†å¥—æ¥å­—å’ŒçœŸæ­£çš„è¯·æ±‚åœ°å€ç™»è®°åˆ°PRC,
+	//è¿™é‡Œé€šè¿‡PRCçš„æ¥å£GetClientInfoå¾—åˆ°åŸæ¥çš„è¯¥è¿æ¥çš„çœŸæ­£è¯·æ±‚åœ°å€,
+	//GetClientInfoå†…éƒ¨é€šè¿‡è¿™é‡Œæ¥å—åˆ°çš„å¥—æ¥å­—æŸ¥è¯¢(getpeername)è¿æ¥çš„åŸipå’Œç«¯å£ï¼Œå¹¶ä»PRCç™»è®°çš„æ•°æ®ä¸­æŸ¥æ‰¾åŒ¹é…çš„åœ°å€ã€ç«¯å£ä¿¡æ¯.
 	PRCClient PRCC;
 	if(!m_pPRC->GetClientInfo(sClient, &PRCC, TRUE))
 	{
-		PrintText(_T("PRCTcpServer½ÓÊÜµ½Ò»¸öÎŞ·¨´úÀíµÄÈÎÎñ.\r\n"));
+		PrintText(_T("PRCTcpServeræ¥å—åˆ°ä¸€ä¸ªæ— æ³•ä»£ç†çš„ä»»åŠ¡.\r\n"));
 		closesocket(sClient);
 		return;
 	}
@@ -146,7 +180,7 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 	WCHAR szChildAppPath[MAX_PATH] = L"\0";
 	LPWSTR ppszName = NULL;
 
-	ResolveProcPath(PRCC.dwPid, szChildAppPath, _countof(szChildAppPath), ppszName);
+	ResolveProcPath(m_pPRC, PRCC.dwPid, szChildAppPath, _countof(szChildAppPath), ppszName);
 
 	DWORD nIP = PRCC.dstAddr.GetdwIP();
 	const BYTE* pucIP = (BYTE*)&nIP;
@@ -188,9 +222,9 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 	if(!m_ProxyTaskMgr.OnNewTask(sClient, &PRCC, &pisetting))
 	{
 #ifdef _UNICODE
-		PrintText(_T("Ìí¼ÓÒ»¸ö´úÀíÈÎÎñÊ§°Ü. PID: %d(%s), %u.%u.%u.%u:%d, ÓòÃû: %S:%d\r\n"), PRCC.dwPid, ppszName ? ppszName : L"", pucIP[0], pucIP[1], pucIP[2], pucIP[3], PRCC.dstAddr.GetPort(), PRCC.szDomainName, PRCC.dstAddr.GetPort());
+		PrintText(_T("æ·»åŠ ä¸€ä¸ªä»£ç†ä»»åŠ¡å¤±è´¥. PID: %d(%s), %u.%u.%u.%u:%d, åŸŸå: %S:%d\r\n"), PRCC.dwPid, ppszName ? ppszName : L"", pucIP[0], pucIP[1], pucIP[2], pucIP[3], PRCC.dstAddr.GetPort(), PRCC.szDomainName, PRCC.dstAddr.GetPort());
 #else
-		PrintText(_T("Ìí¼ÓÒ»¸ö´úÀíÈÎÎñÊ§°Ü. PID: %d(%s), %u.%u.%u.%u:%d, ÓòÃû: %s:%d\r\n"), PRCC.dwPid, ppszName ? ppszName : L"", pucIP[0], pucIP[1], pucIP[2], pucIP[3], PRCC.dstAddr.GetPort(), PRCC.szDomainName, PRCC.dstAddr.GetPort());
+		PrintText(_T("æ·»åŠ ä¸€ä¸ªä»£ç†ä»»åŠ¡å¤±è´¥. PID: %d(%s), %u.%u.%u.%u:%d, åŸŸå: %s:%d\r\n"), PRCC.dwPid, ppszName ? ppszName : L"", pucIP[0], pucIP[1], pucIP[2], pucIP[3], PRCC.dstAddr.GetPort(), PRCC.szDomainName, PRCC.dstAddr.GetPort());
 #endif
 		closesocket(sClient);
 		return;

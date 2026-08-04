@@ -1,4 +1,4 @@
-/************************************************************************/
+ï»¿/************************************************************************/
 /*                                                                      */
 /*                                                                      */
 /************************************************************************/
@@ -46,11 +46,11 @@ class IProxyReceptionCentre
 public:
 	virtual ~IProxyReceptionCentre(void){}
 
-	//²éÑ¯PRCÍ¨Ñ¶µÄ¹ÜµÀÃû
+	//æŸ¥è¯¢PRCé€šè®¯çš„ç®¡é“å
 	virtual BOOL GetPRCPipeName(LPSTR lpBuf, int bufsize) = 0;
-	//²éÑ¯IProxyTaskMgr ÊµÀıµÄÖ¸Õë
+	//æŸ¥è¯¢IProxyTaskMgr å®ä¾‹çš„æŒ‡é’ˆ
 	virtual IProxyTaskMgr* GetPTMInstance(int type) = 0;
-	//²éÑ¯IProxyDataHandle ÊµÀıµÄÖ¸Õë
+	//æŸ¥è¯¢IProxyDataHandle å®ä¾‹çš„æŒ‡é’ˆ
 	virtual IProxyDataHandle* GetPDHInstance() = 0;
 };
 
@@ -96,10 +96,10 @@ public:
 
 //////////////////////////////////////////////////////////////////////////
 // IProxySettings
-// Çë¼Ì³Ğ²¢ÖØÔØ¸ÃÀà£¬ ¼ÙÉèGetGlobalProxyInstanceµÃµ½µÄÊµÀıÖ¸ÕëÎªpIGlobalProxy£¬
-// È»ºó½«ÄãµÄÀàÖ¸ÕëyourPoint ´«Èë pIGlobalProxy->GetSettingsInstance->AddInstance(yourPoint)
+// è¯·ç»§æ‰¿å¹¶é‡è½½è¯¥ç±»ï¼Œ å‡è®¾GetGlobalProxyInstanceå¾—åˆ°çš„å®ä¾‹æŒ‡é’ˆä¸ºpIGlobalProxyï¼Œ
+// ç„¶åå°†ä½ çš„ç±»æŒ‡é’ˆyourPoint ä¼ å…¥ pIGlobalProxy->GetSettingsInstance->AddInstance(yourPoint)
 // 
-// Ö®ºóÄÚ²¿Ã¿´ÎĞèÒª´úÀíÒ»¸öÍøÂçÇëÇó¶¼»á´¥·¢ÄãµÄÀàµÄGetProxyInfoº¯Êı£¬ ÕâÊ±ºòÄãµÄº¯Êı¿ÉÒÔ¸ù¾İpPRCCĞÅÏ¢ÓĞÑ¡ÔñµÄÉèÖÃÒ»¸ö´úÀí·şÎñÆ÷µÄĞÅÏ¢µ½lpPI
+// ä¹‹åå†…éƒ¨æ¯æ¬¡éœ€è¦ä»£ç†ä¸€ä¸ªç½‘ç»œè¯·æ±‚éƒ½ä¼šè§¦å‘ä½ çš„ç±»çš„GetProxyInfoå‡½æ•°ï¼Œ è¿™æ—¶å€™ä½ çš„å‡½æ•°å¯ä»¥æ ¹æ®pPRCCä¿¡æ¯æœ‰é€‰æ‹©çš„è®¾ç½®ä¸€ä¸ªä»£ç†æœåŠ¡å™¨çš„ä¿¡æ¯åˆ°lpPI
 // 
 //////////////////////////////////////////////////////////////////////////
 
@@ -129,9 +129,11 @@ public:
 
 	virtual void LogText(LPCWSTR lpText) = 0;
 	virtual void LogNewProxyTask(const LPPRCClient lpC) = 0;
-	virtual void OnNewProcess(LPHookNewProcessInfo lphnpi) = 0;
+	virtual BOOL OnNewProcess(LPHookNewProcessInfo lphnpi) = 0;
 	virtual void OnHookWsock(LPHookWSockResult res) = 0;
 	virtual void OnHookLogtext(LPHookLogtext log) = 0;
+	// æ–°å¢å›è°ƒæ”¾åœ¨æ¥å£æœ«å°¾ï¼Œé¿å…æ”¹å˜æ—¢æœ‰è™šå‡½æ•°åœ¨ vtable ä¸­çš„ä½ç½®ã€‚
+	virtual void OnChildInjectionResult(LPHookNewProcessInfo lphnpi, BOOL succeeded) = 0;
 };
 
 
@@ -181,10 +183,10 @@ public:
 //
 // pTester->Start(......);
 //
-// //È¡Ïû²âÊÔ»òÕßÔÚÄãµÄOnProxyTesterCallback±»´¥·¢Ê± ÊÍ·Å¶ÔÏó
+// //å–æ¶ˆæµ‹è¯•æˆ–è€…åœ¨ä½ çš„OnProxyTesterCallbackè¢«è§¦å‘æ—¶ é‡Šæ”¾å¯¹è±¡
 // pTester->Release();
 //
-// //Ã¿¸öGetGlobalProxyInstanceµÄµ÷ÓÃ ¶ÔÓ¦Ò»¸ö ReleaseGlobalProxyInstance 
+// //æ¯ä¸ªGetGlobalProxyInstanceçš„è°ƒç”¨ å¯¹åº”ä¸€ä¸ª ReleaseGlobalProxyInstance
 // ReleaseGlobalProxyInstance();
 //////////////////////////////////////////////////////////////////////////
 
@@ -237,9 +239,9 @@ public:
 
 
 ////////////////////////////////////////
-// »ñµÃÒ»¸öIGlobalProxy¶ÔÏóÖ¸Õë¡£
+// è·å¾—ä¸€ä¸ªIGlobalProxyå¯¹è±¡æŒ‡é’ˆã€‚
 // 
-// ×¢Òâ£ºÒ»´ÎGetGlobalProxyInstanceµÄµ÷ÓÃ¶ÔÓ¦Ò»´ÎReleaseGlobalProxyInstance, ÄÚ²¿¸ù¾İ¼ÆÊıÀ´¾ö¶¨ÊÇ·ñÊÍ·Å
+// æ³¨æ„ï¼šä¸€æ¬¡GetGlobalProxyInstanceçš„è°ƒç”¨å¯¹åº”ä¸€æ¬¡ReleaseGlobalProxyInstance, å†…éƒ¨æ ¹æ®è®¡æ•°æ¥å†³å®šæ˜¯å¦é‡Šæ”¾
 //
 ///////////////////////////////////////
 
@@ -248,13 +250,14 @@ BOOL WINAPI ReleaseGlobalProxyInstance();
 
 
 ////////////////////////////////////////
-// ÔÚĞèÒª´úÀíµÄ½ø³Ìµ÷ÓÃÒÔÏÂAPI
+// åœ¨éœ€è¦ä»£ç†çš„è¿›ç¨‹è°ƒç”¨ä»¥ä¸‹API
 //
 ///////////////////////////////////////
 
 
 BOOL WINAPI gp_HookWinsock(LPCSTR lpszPRCPipeName);
 BOOL WINAPI gp_UnhookWinsock();
+DWORD WINAPI AttachToHandles(HANDLE hProcess, HANDLE hThread, LPCSTR szPipeName);
 DWORD WINAPI AttachToI(DWORD dwPid, DWORD dwTid, LPCSTR szPipeName);
 
 

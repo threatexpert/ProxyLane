@@ -1,4 +1,4 @@
-// ListCtrlEx.cpp : ÊµÏÖÎÄ¼þ
+ï»¿// ListCtrlEx.cpp : å®žçŽ°æ–‡ä»¶
 //
 
 #include "stdafx.h"
@@ -25,13 +25,13 @@ END_MESSAGE_MAP()
 
 
 
-// CListCtrlEx ÏûÏ¢´¦Àí³ÌÐò
+// CListCtrlEx æ¶ˆæ¯å¤„ç†ç¨‹åº
 
 
 
 void CListCtrlEx::OnDropFiles(HDROP hDropInfo)
 {
-	// TODO: ÔÚ´ËÌí¼ÓÏûÏ¢´¦Àí³ÌÐò´úÂëºÍ/»òµ÷ÓÃÄ¬ÈÏÖµ
+	// TODO: åœ¨æ­¤æ·»åŠ æ¶ˆæ¯å¤„ç†ç¨‹åºä»£ç å’Œ/æˆ–è°ƒç”¨é»˜è®¤å€¼
 
 	if (m_bThrowMsg)
 	{

@@ -185,6 +185,17 @@ BOOL CProxyLaneDlg::OnInitDialog()
 	return TRUE;  // 除非将焦点设置到控件，否则返回 TRUE
 }
 
+void CProxyLaneDlg::OnCancel()
+{
+	CPage1* page1 = m_MainTab.GetPage1();
+	if (page1 && !theApp.GetAutomationOptions().enabled
+		&& !page1->ConfirmDiscardUnsavedChanges())
+	{
+		return;
+	}
+	CModernDialog::OnCancel();
+}
+
 void CProxyLaneDlg::FailAutomation(int exitCode)
 {
 	theApp.SetAutomationExitCode(exitCode);
@@ -228,6 +239,9 @@ LRESULT CProxyLaneDlg::OnAutomationStart(WPARAM wParam, LPARAM lParam)
 	{
 		int exitCode = AUTOMATION_EXIT_TARGET_INVALID;
 		if (launchResult == APP_LAUNCH_CREATE_PROCESS_FAILED)
+			exitCode = AUTOMATION_EXIT_CREATE_PROCESS_FAILED;
+		else if (launchResult == APP_LAUNCH_UAC_CANCELLED ||
+			launchResult == APP_LAUNCH_ELEVATED_HELPER_FAILED)
 			exitCode = AUTOMATION_EXIT_CREATE_PROCESS_FAILED;
 		else if (launchResult == APP_LAUNCH_INJECTION_FAILED)
 			exitCode = AUTOMATION_EXIT_INJECTION_FAILED;
@@ -425,8 +439,12 @@ void CProxyLaneDlg::OnDropFiles(HDROP dropInfo)
 		CString message;
 		if (result == APP_LAUNCH_INVALID_TARGET)
 			message = _T("无法识别拖入的目标，或目标文件已经不存在。");
+		else if (result == APP_LAUNCH_UAC_CANCELLED)
+			message = _T("已取消 Windows 权限确认，程序未启动。");
 		else if (result == APP_LAUNCH_INJECTION_FAILED)
 			message = _T("代理注入失败，目标程序已取消启动，未在无代理状态下继续运行。");
+		else if (result == APP_LAUNCH_ELEVATED_HELPER_FAILED)
+			message = _T("提权启动或代理注入未完成，目标程序已取消启动。");
 		else
 			message = _T("无法启动拖入的程序，请检查文件状态和运行权限。");
 

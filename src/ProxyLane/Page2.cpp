@@ -234,6 +234,27 @@ void CPage2::OnHookWsock(LPHookWSockResult res)
 	}
 }
 
+void CPage2::OnChildInjectionResult(
+	LPHookNewProcessInfo lphnpi,
+	BOOL succeeded)
+{
+	CString processName = lphnpi->szAppPath;
+	const int slash = processName.ReverseFind(_T('\\'));
+	if (slash >= 0)
+		processName = processName.Mid(slash + 1);
+	if (processName.IsEmpty())
+		processName = _T("Unknown");
+
+	CString text;
+	text.Format(
+		succeeded
+			? _T("New Process: %lu | %s Hooked\r\n")
+			: _T("New Process: %lu | %s InjectDll Failed\r\n"),
+		lphnpi->dwProcessId,
+		(LPCTSTR)processName);
+	AddLogText(text);
+}
+
 void CPage2::OnHookLogtext(LPHookLogtext log)
 {
 	CString str;

@@ -20,6 +20,7 @@ CString AppVersion::FileVersion()
 	TCHAR modulePath[MAX_PATH] = { 0 };
 	if (!::GetModuleFileName(NULL, modulePath, _countof(modulePath)))
 		return CString();
+	modulePath[_countof(modulePath) - 1] = _T('\0');
 
 	DWORD ignored = 0;
 	const DWORD size = ::GetFileVersionInfoSize(modulePath, &ignored);

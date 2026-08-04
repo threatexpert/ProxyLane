@@ -1,4 +1,4 @@
-/************************************************************************/
+ï»¿/************************************************************************/
 /*                                                                      */
 /*                                                                      */
 /************************************************************************/
@@ -22,20 +22,20 @@ CTcpProxyTask::~CTcpProxyTask(void)
 }
 
 /*
-²ÎÊý1£ºsClient À´×Ô PRC Server acceptµ½µÄ¿Í»§¶Ë£¬Ò²¾ÍÊÇ¸øHookÀ¹½Øºó×ªÏòµ½PRCµÄÇëÇó£¬
-²ÎÊý2£ºlpPRCClient ÎªÔ­ÇëÇóµÄµØÖ·ÐÅÏ¢£¬
-²ÎÊý3£ºlpProxyInfo ÎªGlobalProxyÉèÖÃµÄ´úÀíÐÅÏ¢
+å‚æ•°1ï¼šsClient æ¥è‡ª PRC Server acceptåˆ°çš„å®¢æˆ·ç«¯ï¼Œä¹Ÿå°±æ˜¯ç»™Hookæ‹¦æˆªåŽè½¬å‘åˆ°PRCçš„è¯·æ±‚ï¼Œ
+å‚æ•°2ï¼šlpPRCClient ä¸ºåŽŸè¯·æ±‚çš„åœ°å€ä¿¡æ¯ï¼Œ
+å‚æ•°3ï¼šlpProxyInfo ä¸ºGlobalProxyè®¾ç½®çš„ä»£ç†ä¿¡æ¯
 
-CTcpProxyTask Ö»ÊÇ¸ºÔð´´½¨²¢¹ÜÀíÁ½¸öCPRCTcpPeer¶ÔÏó·Ö±ðÎªm_pClient£¬m_pServer£¬Õâ×é¶ÔÏó´ú±íÒ»¸ö´úÀíÈÎÎñ
+CTcpProxyTask åªæ˜¯è´Ÿè´£åˆ›å»ºå¹¶ç®¡ç†ä¸¤ä¸ªCPRCTcpPeerå¯¹è±¡åˆ†åˆ«ä¸ºm_pClientï¼Œm_pServerï¼Œè¿™ç»„å¯¹è±¡ä»£è¡¨ä¸€ä¸ªä»£ç†ä»»åŠ¡
 
-ÔÚm_pServerÍ¨¹ý´úÀí(lpProxyInfo)ÓëÔ­ÇëÇóµÄµØÖ·(lpPRCClient)½¨Á¢Á¬½Óºó£¬ ½«ºÍm_pClient ½øÐÐ´¿´âµÄÊý¾Ý×ª·¢¡£
+åœ¨m_pServeré€šè¿‡ä»£ç†(lpProxyInfo)ä¸ŽåŽŸè¯·æ±‚çš„åœ°å€(lpPRCClient)å»ºç«‹è¿žæŽ¥åŽï¼Œ å°†å’Œm_pClient è¿›è¡Œçº¯ç²¹çš„æ•°æ®è½¬å‘ã€‚
 
 ================
-»ù±¾Á÷³Ì£º
+åŸºæœ¬æµç¨‹ï¼š
 
-Ò»¸öÕý³£µÄÁ¬½ÓÇëÇóconnect -> HookWinsock.connect, ÕâÀïHookWinsock¼ÇÂ¼ÏÂÔ­ÇëÇóµÄÐÅÏ¢²¢½«ÆäsocketµÇ¼Çµ½ProxyReceptionCentre (PRC), È»ºóÐÞ¸ÄÄ¿µÄµØÖ·µ½PRC
+ä¸€ä¸ªæ­£å¸¸çš„è¿žæŽ¥è¯·æ±‚connect -> HookWinsock.connect, è¿™é‡ŒHookWinsockè®°å½•ä¸‹åŽŸè¯·æ±‚çš„ä¿¡æ¯å¹¶å°†å…¶socketç™»è®°åˆ°ProxyReceptionCentre (PRC), ç„¶åŽä¿®æ”¹ç›®çš„åœ°å€åˆ°PRC
 
-PRC Server OnAccept ½ÓÊÕµ½Ò»¸ösClient£¬Í¨¹ýµØÖ·ÐÅÏ¢µ½PRC²éÑ¯Ô­ÇëÇóµØÖ·, ²¢½«GlobalProxyµ±Ç°ÉèÖÃµÄ´úÀí·þÎñÆ÷ÐÅÏ¢´«µÝ¸øCTcpProxyTask.SetTaskInfo
+PRC Server OnAccept æŽ¥æ”¶åˆ°ä¸€ä¸ªsClientï¼Œé€šè¿‡åœ°å€ä¿¡æ¯åˆ°PRCæŸ¥è¯¢åŽŸè¯·æ±‚åœ°å€, å¹¶å°†GlobalProxyå½“å‰è®¾ç½®çš„ä»£ç†æœåŠ¡å™¨ä¿¡æ¯ä¼ é€’ç»™CTcpProxyTask.SetTaskInfo
 */
 BOOL CTcpProxyTask::SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo)
 {
@@ -61,7 +61,7 @@ BOOL CTcpProxyTask::SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxy
 		if(!m_pServer->ConnectProxy(lpPRCClient, lpProxyInfo))
 			break;
 
-		//ÏÈ²»¹Ø×¢clientµÄ¶ÁÐ´£¬ µÈ´úÀí½¨Á¢³É¹¦ºóÔÙÖØÐÂÉèÖÃ
+		//å…ˆä¸å…³æ³¨clientçš„è¯»å†™ï¼Œ ç­‰ä»£ç†å»ºç«‹æˆåŠŸåŽå†é‡æ–°è®¾ç½®
 		if(!m_pClient->Attach(sClient, FD_CLOSE))
 			break;
 

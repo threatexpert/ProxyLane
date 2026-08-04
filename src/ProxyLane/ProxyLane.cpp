@@ -1,4 +1,4 @@
-// ProxyLane.cpp : ����Ӧ�ó��������Ϊ��
+﻿// ProxyLane.cpp : 定义应用程序的类行为。
 //
 
 #include "stdafx.h"
@@ -19,13 +19,13 @@ BEGIN_MESSAGE_MAP(CProxyLaneApp, CWinApp)
 END_MESSAGE_MAP()
 
 
-// CProxyLaneApp ����
+// CProxyLaneApp 构造
 
 CProxyLaneApp::CProxyLaneApp()
 	: m_automationExitCode(AUTOMATION_EXIT_SUCCESS)
 {
-	// TODO: �ڴ˴����ӹ�����룬
-	// ��������Ҫ�ĳ�ʼ�������� InitInstance ��
+	// TODO: 在此处添加构造代码，
+	// 将所有重要的初始化放置在 InitInstance 中
 }
 
 static BOOL CreateBootstrapEventName(CString& eventName)
@@ -65,22 +65,22 @@ int CProxyLaneApp::ExitInstance()
 }
 
 
-// Ψһ��һ�� CProxyLaneApp ����
+// 唯一的一个 CProxyLaneApp 对象
 
 CProxyLaneApp theApp;
 
 
-// CProxyLaneApp ��ʼ��
+// CProxyLaneApp 初始化
 
 BOOL CProxyLaneApp::InitInstance()
 {
-	// ���һ�������� Windows XP �ϵ�Ӧ�ó����嵥ָ��Ҫ
-	// ʹ�� ComCtl32.dll �汾 6 ����߰汾�����ÿ��ӻ���ʽ��
-	//����Ҫ InitCommonControlsEx()�����򣬽��޷��������ڡ�
+	// 如果一个运行在 Windows XP 上的应用程序清单指定要
+	// 使用 ComCtl32.dll 版本 6 或更高版本来启用可视化方式，
+	//则需要 InitCommonControlsEx()。否则，将无法创建窗口。
 	INITCOMMONCONTROLSEX InitCtrls;
 	InitCtrls.dwSize = sizeof(InitCtrls);
-	// ��������Ϊ��������Ҫ��Ӧ�ó�����ʹ�õ�
-	// �����ؼ��ࡣ
+	// 将它设置为包括所有要在应用程序中使用的
+	// 公共控件类。
 	InitCtrls.dwICC = ICC_WIN95_CLASSES | ICC_LINK_CLASS;
 	InitCommonControlsEx(&InitCtrls);
 
@@ -88,13 +88,13 @@ BOOL CProxyLaneApp::InitInstance()
 
 	AfxEnableControlContainer();
 
-	// ��׼��ʼ��
-	// ���δʹ����Щ���ܲ�ϣ����С
-	// ���տ�ִ���ļ��Ĵ�С����Ӧ�Ƴ�����
-	// ����Ҫ���ض���ʼ������
-	// �������ڴ洢���õ�ע�����
-	// TODO: Ӧ�ʵ��޸ĸ��ַ�����
-	// �����޸�Ϊ��˾����֯��
+	// 标准初始化
+	// 如果未使用这些功能并希望减小
+	// 最终可执行文件的大小，则应移除下列
+	// 不需要的特定初始化例程
+	// 更改用于存储设置的注册表项
+	// TODO: 应适当修改该字符串，
+	// 例如修改为公司或组织名
 	SetRegistryKey(_T("ProxyLane"));
 
 	AfxOleInit();
@@ -118,8 +118,15 @@ BOOL CProxyLaneApp::InitInstance()
 	if (IsWow64(GetCurrentProcess()))
 	{
 		CString strPath64;
-		::GetModuleFileName(m_hInstance, strPath64.GetBuffer(MAX_PATH), MAX_PATH);
+		LPTSTR pathBuffer = strPath64.GetBuffer(MAX_PATH);
+		const DWORD pathLength = ::GetModuleFileName(m_hInstance, pathBuffer, MAX_PATH);
+		pathBuffer[MAX_PATH - 1] = _T('\0');
 		strPath64.ReleaseBuffer();
+		if (!pathLength || strPath64.GetLength() < 4)
+		{
+			m_automationExitCode = AUTOMATION_EXIT_ARCH_FORWARD_FAILED;
+			return FALSE;
+		}
 
 		strPath64 = strPath64.Mid(0, strPath64.GetLength() - 4) + _T("64.exe");
 
@@ -209,16 +216,16 @@ BOOL CProxyLaneApp::InitInstance()
 	INT_PTR nResponse = dlg.DoModal();
 	if (nResponse == IDOK)
 	{
-		// TODO: �ڴ˴����ô�����ʱ�á�ȷ�������ر�
-		//  �Ի���Ĵ���
+		// TODO: 在此处放置处理何时用“确定”来关闭
+		//  对话框的代码
 	}
 	else if (nResponse == IDCANCEL)
 	{
-		// TODO: �ڴ˷��ô�����ʱ�á�ȡ�������ر�
-		//  �Ի���Ĵ���
+		// TODO: 在此放置处理何时用“取消”来关闭
+		//  对话框的代码
 	}
 
-	// ���ڶԻ����ѹرգ����Խ����� FALSE �Ա��˳�Ӧ�ó���
-	//  ����������Ӧ�ó������Ϣ�á�
+	// 由于对话框已关闭，所以将返回 FALSE 以便退出应用程序，
+	//  而不是启动应用程序的消息泵。
 	return FALSE;
 }

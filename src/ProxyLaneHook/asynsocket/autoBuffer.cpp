@@ -1,4 +1,4 @@
-
+ï»¿
 #include "stdafx.h"
 #include "autoBuffer.h"
 
@@ -18,7 +18,7 @@ autoBuffer::~autoBuffer()
 }
 
 
-//ReAlloc ±êÖ¾ÊÇ·ñ±£ÁôÔ­À´µÄÊı¾İ
+//ReAlloc æ ‡å¿—æ˜¯å¦ä¿ç•™åŸæ¥çš„æ•°æ®
 bool autoBuffer::checkBufferSize(DWORD requiredSize, bool ReAlloc)
 {
 	if(size < requiredSize)

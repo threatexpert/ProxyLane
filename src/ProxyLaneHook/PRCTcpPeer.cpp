@@ -1,4 +1,4 @@
-/************************************************************************/
+ï»¿/************************************************************************/
 /*                                                                      */
 /*                                                                      */
 /************************************************************************/
@@ -50,16 +50,16 @@ void CPRCTcpPeer::SetPartner(CPRCTcpPeer *pPartner)
 BOOL CPRCTcpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo)
 {
 
-	//ÉèÖÃ´úÀí
+	//è®¾ç½®ä»£ç†
 	if(!AddProxyLayer(lpProxyInfo))
 		return FALSE;
 
 
-	//×¢Òâ
-	//´úÀíÇëÇóµ÷ÓÃconnectÒ²»á¸øHookWinsockÀ¹½Ø£¬
-	//¾É·½·¨1
-	//SetConnectionFlag ½«ÉèÖÃÒ»¸ö8×Ö½ÚµÄ±êÖ¾£¬ ¸æÖªHookWinsockÖ±½Óµ÷ÓÃÏµÍ³µÄconnect
-	//8×Ö½ÚµÄ±êÖ¾·ÅÖÃÔÚsockaddr_in.sin_zeroµÄÖÐ, :)
+	//æ³¨æ„
+	//ä»£ç†è¯·æ±‚è°ƒç”¨connectä¹Ÿä¼šç»™HookWinsockæ‹¦æˆªï¼Œ
+	//æ—§æ–¹æ³•1
+	//SetConnectionFlag å°†è®¾ç½®ä¸€ä¸ª8å­—èŠ‚çš„æ ‡å¿—ï¼Œ å‘ŠçŸ¥HookWinsockç›´æŽ¥è°ƒç”¨ç³»ç»Ÿçš„connect
+	//8å­—èŠ‚çš„æ ‡å¿—æ”¾ç½®åœ¨sockaddr_in.sin_zeroçš„ä¸­, :)
 	/*
 	struct sockaddr_in {
 	short   sin_family;
@@ -69,7 +69,7 @@ BOOL CPRCTcpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo)
 	*/
 	//m_pProxyLayer->SetConnectionFlag('pass', 'port');
 
-	//·½·¨2
+	//æ–¹æ³•2
 	m_pProxyLayer->BypassHook(TRUE);
 
 	BOOL bConnect = FALSE;
@@ -207,7 +207,7 @@ void CPRCTcpPeer::OnReceive(int nErrorCode)
 
 	if(m_recvbufpos > 0)
 	{
-		//µÈ´ýOnSend½«ËùÓÐÊý¾Ý×ª·¢³öÈ¥ÔÙ½ÓÊÕ
+		//ç­‰å¾…OnSendå°†æ‰€æœ‰æ•°æ®è½¬å‘å‡ºåŽ»å†æŽ¥æ”¶
 		ATLTRACE("buffer not empty.\r\n");
 		return;
 	}
@@ -269,7 +269,7 @@ void CPRCTcpPeer::OnReceive(int nErrorCode)
 		}
 		//data have been completely transferred. continue receiving?
 		ATLTRACE("nValidLen = %d, TransferSend = %d\r\n", nValidLen, nRetVal);
-		//Ò»°ãÒ»¸öFD_READ¶ÔÓ¦Ò»´Îrecv£¬ Èç¹ûÁ¬½ÓÒÑ¾­ÓÅÑÅµÄ¹Ø±Õ£¬ÄÇÃ´°ÑÏµÍ³bufÖÐµÄÊý¾ÝÈ«²¿ÊÕÏÂÀ´²¢×ª·¢
+		//ä¸€èˆ¬ä¸€ä¸ªFD_READå¯¹åº”ä¸€æ¬¡recvï¼Œ å¦‚æžœè¿žæŽ¥å·²ç»ä¼˜é›…çš„å…³é—­ï¼Œé‚£ä¹ˆæŠŠç³»ç»Ÿbufä¸­çš„æ•°æ®å…¨éƒ¨æ”¶ä¸‹æ¥å¹¶è½¬å‘
 		if (m_bConnShutted)
 			continue;
 		else
@@ -290,7 +290,7 @@ void CPRCTcpPeer::OnReceive(int nErrorCode)
 //returns -1 if error occurs, otherwise, the value are total number of bytes sent
 int CPRCTcpPeer::TransferSend()
 {
-	//½«ÒÑ¾­½ÓÊÕµ½m_recvbufµÄÊý¾Ý¶¼·¢¸øPartner
+	//å°†å·²ç»æŽ¥æ”¶åˆ°m_recvbufçš„æ•°æ®éƒ½å‘ç»™Partner
 	int nBytesLeft = m_recvbufpos - m_sentpos;
 	int nBytesSent = 0;
 
@@ -327,13 +327,13 @@ int CPRCTcpPeer::TransferSend()
 	//m_recvbufpos = nBytesLeft;
 	//m_recvbuf[m_recvbufpos] = '\0';
 
-	//Èç¹ûÃ»È«²¿×ª·¢ÍêÔò±êÖ¾ÒÑ¾­·¢ËÍµÄÏÂ±ê
+	//å¦‚æžœæ²¡å…¨éƒ¨è½¬å‘å®Œåˆ™æ ‡å¿—å·²ç»å‘é€çš„ä¸‹æ ‡
 	if (nBytesLeft > 0)
 	{
 		m_sentpos += nBytesSent;
 	}else
 	{
-		//È«²¿×ª·¢Íê£¬ ÏÂ±ê¶¼Çå0
+		//å…¨éƒ¨è½¬å‘å®Œï¼Œ ä¸‹æ ‡éƒ½æ¸…0
 		m_sentpos = 0;
 		m_recvbufpos = 0;
 	}
@@ -362,12 +362,12 @@ void CPRCTcpPeer::OnSend(int nErrorCode)
 	else
 		ATLTRACE("%d.Client::OnSend()\r\n", GetSocketHandle());
 
-	//µ±Ç°Ì×½Ó×Ö¿ÉÐ´£¬ Ôò½«PartnerµÄm_recvbufÖÐµÄÓÐÐ§Êý¾Ý×ª·¢³öÈ¥
+	//å½“å‰å¥—æŽ¥å­—å¯å†™ï¼Œ åˆ™å°†Partnerçš„m_recvbufä¸­çš„æœ‰æ•ˆæ•°æ®è½¬å‘å‡ºåŽ»
 	int nRetVal;
 	int validlen = m_pPartner->GetValidDataLen();
 	if(validlen > 0)
 	{
-		//½«PartnerµÄÊý¾Ý×ª·¢ÖÁ±¾Ì×½Ó×Ö
+		//å°†Partnerçš„æ•°æ®è½¬å‘è‡³æœ¬å¥—æŽ¥å­—
 		nRetVal = m_pPartner->TransferSend();
 		if(nRetVal < 0)
 		{
@@ -378,15 +378,15 @@ void CPRCTcpPeer::OnSend(int nErrorCode)
 			return;
 		}else if(nRetVal < validlen)
 		{
-			//PartnerµÄm_recvbufÖÐµÄÊý¾Ý»¹Ã»ÄÜÍêÈ«×ª·¢³öÈ¥, µÈ´ýÏÂ´ÎOnSend
+			//Partnerçš„m_recvbufä¸­çš„æ•°æ®è¿˜æ²¡èƒ½å®Œå…¨è½¬å‘å‡ºåŽ», ç­‰å¾…ä¸‹æ¬¡OnSend
 			ATLTRACE("CPRCTcpPeer.OnSend(), nRetVal < validlen\r\n");
 		}else
 		{
-			//Êý¾ÝÈ«²¿×ª·¢³öÈ¥ÁË£¬ ÅÐ¶ÏPartnerÄÇ±ßµÄÌ×½Ó×ÖµÄFD_READ×´Ì¬£¬Ð¡ÓÚ0ÎªÁ¬½ÓÒì³££¬0ÎªÕý³£µ«ÎÞÊý¾Ý¿É¶Á£¬1ÎªÓÐÊý¾Ý¿É¶Á
+			//æ•°æ®å…¨éƒ¨è½¬å‘å‡ºåŽ»äº†ï¼Œ åˆ¤æ–­Partneré‚£è¾¹çš„å¥—æŽ¥å­—çš„FD_READçŠ¶æ€ï¼Œå°äºŽ0ä¸ºè¿žæŽ¥å¼‚å¸¸ï¼Œ0ä¸ºæ­£å¸¸ä½†æ— æ•°æ®å¯è¯»ï¼Œ1ä¸ºæœ‰æ•°æ®å¯è¯»
 			nRetVal = m_pPartner->TestSocketStatus(FD_READ);
 			if(nRetVal < 0)
 			{
-				//PartnerµÄÁ¬½ÓÒÑ¾­Òì³£
+				//Partnerçš„è¿žæŽ¥å·²ç»å¼‚å¸¸
 				ClearBuffer();
 				m_pPartner->ClearBuffer();
 
@@ -429,7 +429,7 @@ void CPRCTcpPeer::OnConnect(int nErrorCode)
 	}
 
 	ATLTRACE("CPRCTcpPeer.OnConnect()\r\n");
-	//´úÀíÒÑ¾­½¨Á¢£¬ÐÞ¸ÄClient¹Ø×¢µÄevent
+	//ä»£ç†å·²ç»å»ºç«‹ï¼Œä¿®æ”¹Clientå…³æ³¨çš„event
 	m_pPartner->AsyncSelect(FD_READ | FD_WRITE | FD_CLOSE);
 	if(m_pPartner->TestSocketStatus(FD_WRITE) > 0)
 		m_pPartner->TriggerEvent(FD_WRITE);
@@ -448,7 +448,7 @@ void CPRCTcpPeer::OnClose(int nErrorCode)
 	m_bConnShutted = TRUE;
 	if( nErrorCode == 0 )
 	{
-		//Õý³£¹Ø±Õ£¬µ« »¹ÓÐÊý¾ÝÃ»×ª·¢?
+		//æ­£å¸¸å…³é—­ï¼Œä½† è¿˜æœ‰æ•°æ®æ²¡è½¬å‘?
 		//if(GetValidDataLen() > 0)
 		//{
 		//	return;

@@ -1,4 +1,4 @@
-/************************************************************************/
+Ôªø/************************************************************************/
 /*                                                                      */
 /*                                                                      */
 /************************************************************************/
@@ -8,11 +8,25 @@
 #include <psapi.h>
 #include "GlobalProxy.h"
 #include "token.h"
+#include "ElevatedLauncher.h"
 
 #pragma comment(lib,"psapi.lib")
 #pragma comment(lib,"ws2_32.lib")
 
 CHookWinsock *g_pHookWinsock = NULL;
+
+static void RegisterCurrentProcessIdentity(CPRCPipeClient& pipeClient)
+{
+	HookProcessIdentityInfo identity = { 0 };
+	identity.dwProcessId = GetCurrentProcessId();
+	const DWORD pathLength = GetModuleFileNameW(
+		NULL,
+		identity.szAppPath,
+		_countof(identity.szAppPath));
+	identity.szAppPath[_countof(identity.szAppPath) - 1] = L'\0';
+	if (pathLength > 0 && identity.szAppPath[0])
+		pipeClient.PRCRegisterProcessIdentity(&identity);
+}
 
 
 static BOOL IsWin8OrLater()
@@ -82,6 +96,9 @@ BOOL CHookWinsock::EnableHook()
 	{
 		return FALSE;
 	}
+
+	// Âú®ÂÆâË£ÖÁΩëÁªú Hook ÂâçÁôªËÆ∞Ë∫´‰ªΩÔºåÈÅøÂÖçÂÖ∂‰ªñÁ∫øÁ®ãÁöÑÈ¶ñ‰∏™ËøûÊé•Êó©‰∫éË∑ØÂæÑÁºìÂ≠òÂª∫Á´ã„ÄÇ
+	RegisterCurrentProcessIdentity(PRCPipeClient);
 
 	if (IsHookEnabled()) {
 		PRCPipeClient.PRCNotifyHookWSockResult(0);
@@ -198,7 +215,7 @@ BOOL CHookWinsock::IsHostNameReserved(const char *name)
 
 	CPRCPipeClient PRCPipeClient;
 
-	//≤È—Ø «∑Òø…“‘¥˙¿Ì±æΩ¯≥Ã, ¡¨Ω”pipe server  ß∞‹‘Ú∑µªÿ÷µŒ™ ≤ª±£¡Ù
+	//Êü•ËØ¢ÊòØÂê¶ÂèØ‰ª•‰ª£ÁêÜÊú¨ËøõÁ®ã, ËøûÊé•pipe server Â§±Ë¥•ÂàôËøîÂõûÂÄº‰∏∫ ‰∏ç‰øùÁïô
 	if (!PRCPipeClient.Connect(m_szPRCPipeName))
 		return TRUE;
 
@@ -210,7 +227,7 @@ BOOL CHookWinsock::IsHostNameReserved(const char *name)
 
 	PRCPipeClient.Disconnect();
 
-	//ƒ‹¥˙¿Ì‘Ú≤ª «±£¡Ùµƒ÷˜ª˙√˚
+	//ËÉΩ‰ª£ÁêÜÂàô‰∏çÊòØ‰øùÁïôÁöÑ‰∏ªÊú∫Âêç
 	return !bCan;
 }
 
@@ -238,7 +255,7 @@ MyDetourProc(has_Return, hostent*, WSAAPI, gethostbyname, (const char* name))
 hostent* WSAAPI CHookWinsock::inhook_gethostbyname(const char* name)
 {
 
-	//≈–∂œΩ‚Œˆµƒ”Ú√˚£¨»Áπ˚ «…Ë÷√µƒ¥˙¿Ì∑˛ŒÒ∆˜µÿ÷∑µƒ”Ú√˚‘Ú÷±Ω”µ˜”√œµÕ≥µƒΩ‚Œˆ∫Ø ˝
+	//Âà§Êñ≠Ëß£ÊûêÁöÑÂüüÂêçÔºåÂ¶ÇÊûúÊòØËÆæÁΩÆÁöÑ‰ª£ÁêÜÊúçÂä°Âô®Âú∞ÂùÄÁöÑÂüüÂêçÂàôÁõ¥Êé•Ë∞ÉÁî®Á≥ªÁªüÁöÑËß£ÊûêÂáΩÊï∞
 
 	if (name && HackDNS(name))
 	{
@@ -376,7 +393,7 @@ struct timeval *timeout,
 
 		DWORD dummyIP = m_DummyDNS.GetDummyIP(nodename);
 
-		ret = CallTrampoline(GetAddrInfoExW)(L"localhost", // 127.0.0.1µƒª∞≤ª÷™µ¿Œ™ ≤√¥ª·“˝∆∂—∆∆ªµ£ø£ø
+		ret = CallTrampoline(GetAddrInfoExW)(L"localhost", // 127.0.0.1ÁöÑËØù‰∏çÁü•ÈÅì‰∏∫‰ªÄ‰πà‰ºöÂºïËµ∑Â†ÜÁ†¥ÂùèÔºüÔºü
 			pServiceName,
 			dwNameSpace,
 			lpNspId,
@@ -615,10 +632,10 @@ BOOL CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 
 	_SockAddr srcAddr;
 	int srcaddrlen = sizeof(_SockAddr);
-	//≤È—Ø∏√socket∞Û∂®µƒµÿ÷∑
+	//Êü•ËØ¢ËØ•socketÁªëÂÆöÁöÑÂú∞ÂùÄ
 	if (getsockname(s, &srcAddr, &srcaddrlen) == SOCKET_ERROR)
 	{
-		//Œ¥∞Û∂®‘Ú∞Û∂®÷Æ, ‘Ÿ÷ÿ–¬≤È—Ø
+		//Êú™ÁªëÂÆöÂàôÁªëÂÆö‰πã, ÂÜçÈáçÊñ∞Êü•ËØ¢
 		srcAddr.sa_family = AF_INET;
 		srcAddr.SetIPLong(0);
 		srcAddr.SetPort(0);
@@ -631,7 +648,7 @@ BOOL CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 	}
 
 
-	//±£¥Ê‘≠«Î«Ûµÿ÷∑
+	//‰øùÂ≠òÂéüËØ∑Ê±ÇÂú∞ÂùÄ
 	PRCClient prcc;
 	prcc.zero();
 	prcc.sType = nSockType;
@@ -641,7 +658,7 @@ BOOL CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 	prcc.srcAddr = srcAddr;
 	prcc.dstAddr = addrname;
 
-	//»Áπ˚∏√µÿ÷∑ «Õ®π˝dummyDNS»°µ√µƒª∞£¨‘⁄’‚¿Ô≤È—Øµ√µΩ‘≠«Î«Û”Ú√˚
+	//Â¶ÇÊûúËØ•Âú∞ÂùÄÊòØÈÄöËøádummyDNSÂèñÂæóÁöÑËØùÔºåÂú®ËøôÈáåÊü•ËØ¢ÂæóÂà∞ÂéüËØ∑Ê±ÇÂüüÂêç
 	if (m_DummyDNS.IsDummyIP(addrname.GetdwIP()))
 	{
 		if (!m_DummyDNS.GetHostByIP(addrname.GetdwIP(), prcc.szDomainName, sizeof(prcc.szDomainName)))
@@ -654,7 +671,7 @@ BOOL CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 
 	CPRCPipeClient PRCPipeClient;
 
-	//ªÒµ√PRC µƒµÿ÷∑–≈œ¢
+	//Ëé∑ÂæóPRC ÁöÑÂú∞ÂùÄ‰ø°ÊÅØ
 	if (!PRCPipeClient.Connect(m_szPRCPipeName))
 		return FALSE;
 
@@ -672,7 +689,7 @@ BOOL CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 		return FALSE;
 	}
 
-	//Ω´‘≠«Î«Ûµ«º«µΩPRC
+	//Â∞ÜÂéüËØ∑Ê±ÇÁôªËÆ∞Âà∞PRC
 	if (!PRCPipeClient.PRCRegisterClient(&prcc))
 	{
 		PRCPipeClient.Disconnect();
@@ -683,7 +700,7 @@ BOOL CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 
 	m_HackedSocket.push(&prcc);
 
-	//–ﬁ∏ƒ«Î«Ûµƒƒøµƒµÿ÷∑Œ™PRC
+	//‰øÆÊîπËØ∑Ê±ÇÁöÑÁõÆÁöÑÂú∞ÂùÄ‰∏∫PRC
 
 	if (nSockType == SOCK_DGRAM)
 	{
@@ -732,8 +749,8 @@ int WSAAPI CHookWinsock::inhook_getpeername(SOCKET s, struct sockaddr* name, int
 		return CallTrampoline(getpeername)(s, name, namelen);
 	}
 	/*
-	œ»≤È—Ø∏√Ã◊Ω”◊÷ «∑Ò÷Æ«∞±ª¿πΩÿ–ﬁ∏ƒπ˝£¨
-	±»»Á÷Æ«∞connectµƒ‘≠ƒøµƒ «aa.aa.aa.aa£¨ »ª∫Û±ªHackConnect–ﬁ∏ƒŒ™PRCµƒ∑˛ŒÒµÿ÷∑, Œ™¡À±‹√‚getpeernameµ√µΩPRCµƒµÿ÷∑£¨’‚¿Ô“™◊ˆ¥¶¿Ì
+	ÂÖàÊü•ËØ¢ËØ•Â•óÊé•Â≠óÊòØÂê¶‰πãÂâçË¢´Êã¶Êà™‰øÆÊîπËøáÔºå
+	ÊØîÂ¶Ç‰πãÂâçconnectÁöÑÂéüÁõÆÁöÑÊòØaa.aa.aa.aaÔºå ÁÑ∂ÂêéË¢´HackConnect‰øÆÊîπ‰∏∫PRCÁöÑÊúçÂä°Âú∞ÂùÄ, ‰∏∫‰∫ÜÈÅøÂÖçgetpeernameÂæóÂà∞PRCÁöÑÂú∞ÂùÄÔºåËøôÈáåË¶ÅÂÅöÂ§ÑÁêÜ
 	*/
 	PRCClient prcc;
 	if (m_HackedSocket.GetInfo(s, &prcc))
@@ -910,7 +927,7 @@ int WSAAPI CHookWinsock::inhook_WSASendTo(
 			PRCPipeClient.Disconnect();
 		}
 
-		//»Áπ˚ π”√¡ÀlpOverlapped£¨±»Ωœ¬È∑≥£¨‘› ±∑≈∆˙£¨∂™∆˙
+		//Â¶ÇÊûú‰ΩøÁî®‰∫ÜlpOverlappedÔºåÊØîËæÉÈ∫ªÁÉ¶ÔºåÊöÇÊó∂ÊîæÂºÉÔºå‰∏¢ÂºÉ
 		WSASetLastError(ERROR_CALL_NOT_IMPLEMENTED);
 		return -1;
 	}
@@ -1087,7 +1104,7 @@ struct sockaddr* lpFrom,
 		max_bufs = 32,
 	};
 
-	WSABUF wsabuf[max_bufs]; //»Áπ˚ π”√¡ÀlpOverlapped£¨’‚¿Ô≤ªƒ‹”√’ªø’º‰,≤¢«“–Ë“™GetOverlappedResult∑µªÿΩ·π˚∫ÛÃÊªª∑µªÿ ˝æ›
+	WSABUF wsabuf[max_bufs]; //Â¶ÇÊûú‰ΩøÁî®‰∫ÜlpOverlappedÔºåËøôÈáå‰∏çËÉΩÁî®Ê†àÁ©∫Èó¥,Âπ∂‰∏îÈúÄË¶ÅGetOverlappedResultËøîÂõûÁªìÊûúÂêéÊõøÊç¢ËøîÂõûÊï∞ÊçÆ
 	DWORD bufidx = 0;
 	DWORD i;
 
@@ -1104,7 +1121,7 @@ struct sockaddr* lpFrom,
 			PRCPipeClient.Disconnect();
 		}
 
-		//»Áπ˚ π”√¡ÀlpOverlapped£¨±»Ωœ¬È∑≥£¨‘› ±∑≈∆˙£¨∂™∆˙
+		//Â¶ÇÊûú‰ΩøÁî®‰∫ÜlpOverlappedÔºåÊØîËæÉÈ∫ªÁÉ¶ÔºåÊöÇÊó∂ÊîæÂºÉÔºå‰∏¢ÂºÉ
 		WSASetLastError(ERROR_CALL_NOT_IMPLEMENTED);
 		return -1;
 	}
@@ -1146,8 +1163,8 @@ struct sockaddr* lpFrom,
 
 			if (!m_HackedSocket.ReplaceAddr(s, (_SockAddr *)lpFrom, *(DWORD*)&hdr[4], *(WORD*)&hdr[8]))
 			{
-				//ø…ƒ‹∞¸µƒ¿¥‘¥≤ª «PRC
-				//∂™µÙÀ„¡À
+				//ÂèØËÉΩÂåÖÁöÑÊù•Ê∫ê‰∏çÊòØPRC
+				//‰∏¢ÊéâÁÆó‰∫Ü
 				ATLTRACE("m_HackedSocket.ReplaceAddr(%d, ...) == FALSE\r\n", s);
 				WSASetLastError(WSAEWOULDBLOCK);
 				return SOCKET_ERROR;
@@ -1160,7 +1177,7 @@ struct sockaddr* lpFrom,
 		}
 		else
 		{
-			//∂™
+			//‰∏¢
 			WSASetLastError(WSAEWOULDBLOCK);
 			return SOCKET_ERROR;
 		}
@@ -1214,7 +1231,7 @@ BOOL CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname, LPPRCClient lpC)
 
 	_SockAddr srcAddr;
 	int srcaddrlen = sizeof(_SockAddr);
-	//≤È—Ø∏√socket∞Û∂®µƒµÿ÷∑
+	//Êü•ËØ¢ËØ•socketÁªëÂÆöÁöÑÂú∞ÂùÄ
 	if (getsockname(s, &srcAddr, &srcaddrlen) == SOCKET_ERROR)
 	{
 		return FALSE;
@@ -1229,7 +1246,7 @@ BOOL CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname, LPPRCClient lpC)
 	prcc.srcAddr = srcAddr;
 	prcc.dstAddr = addrname;
 
-	//»Áπ˚∏√µÿ÷∑ «Õ®π˝dummyDNS»°µ√µƒª∞£¨‘⁄’‚¿Ô≤È—Øµ√µΩ‘≠«Î«Û”Ú√˚
+	//Â¶ÇÊûúËØ•Âú∞ÂùÄÊòØÈÄöËøádummyDNSÂèñÂæóÁöÑËØùÔºåÂú®ËøôÈáåÊü•ËØ¢ÂæóÂà∞ÂéüËØ∑Ê±ÇÂüüÂêç
 	if (m_DummyDNS.IsDummyIP(addrname.GetdwIP()))
 	{
 		if (!m_DummyDNS.GetHostByIP(addrname.GetdwIP(), prcc.szDomainName, sizeof(prcc.szDomainName)))
@@ -1239,7 +1256,7 @@ BOOL CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname, LPPRCClient lpC)
 
 	}
 
-	//»Áπ˚“—æ≠hacked ‘Ú∫Ø ˝ª·…Ë÷√prcc.udpAddr£¨ º¥¥¶¿Ì◊™∑¢udpµƒ∑˛ŒÒµÿ÷∑
+	//Â¶ÇÊûúÂ∑≤Áªèhacked ÂàôÂáΩÊï∞‰ºöËÆæÁΩÆprcc.udpAddrÔºå Âç≥Â§ÑÁêÜËΩ¨ÂèëudpÁöÑÊúçÂä°Âú∞ÂùÄ
 	if (m_HackedSocket.IsUDPReqHacked(&prcc))
 	{
 		addrname = prcc.udpAddr;
@@ -1271,7 +1288,7 @@ BOOL CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname, LPPRCClient lpC)
 
 	CPRCPipeClient PRCPipeClient;
 
-	//ªÒµ√PRC µƒµÿ÷∑–≈œ¢
+	//Ëé∑ÂæóPRC ÁöÑÂú∞ÂùÄ‰ø°ÊÅØ
 	if (!PRCPipeClient.Connect(m_szPRCPipeName))
 		return FALSE;
 
@@ -1320,7 +1337,7 @@ static BOOL ResolveChildAppPath(HANDLE hChildProc, LPCWSTR lpApplicationName, LP
 
 	szOut[0] = L'\0';
 
-	// 1) ”≈œ»”√’Ê µ¥≈≈Ã¬∑æ∂£∫QueryFullProcessImageNameW£®Vista+£¨∂ØÃ¨º”‘ÿºÊ»›∏¸¿œœµÕ≥£©
+	// 1) ‰ºòÂÖàÁî®ÁúüÂÆûÁ£ÅÁõòË∑ØÂæÑÔºöQueryFullProcessImageNameWÔºàVista+ÔºåÂä®ÊÄÅÂä†ËΩΩÂÖºÂÆπÊõ¥ËÄÅÁ≥ªÁªüÔºâ
 	if (hChildProc)
 	{
 		typedef BOOL (WINAPI *PFN_QFIN)(HANDLE, DWORD, LPWSTR, PDWORD);
@@ -1338,22 +1355,17 @@ static BOOL ResolveChildAppPath(HANDLE hChildProc, LPCWSTR lpApplicationName, LP
 			szOut[0] = L'\0';
 		}
 
-		// 2) ªÿÕÀ£∫psapi GetModuleFileNameExW£®NT4+£¨µ´◊”Ω¯≥Ã∏’ spawn ƒ£øÈ±Ìø…ƒ‹ªπ√ªæÕ–˜£¨◊˜Œ™¥Œ—°£©
-		HMODULE hMod = NULL;
-		DWORD cbNeeded = 0;
-		if (EnumProcessModules(hChildProc, &hMod, sizeof(hMod), &cbNeeded))
+		// 2) ÂõûÈÄÄÔºöXP ÊîØÊåÅÁöÑ PSAPI„ÄÇhModule ‰∏∫ NULL Êó∂Áõ¥Êé•Êü•ËØ¢‰∏ªÁ®ãÂ∫èË∑ØÂæÑ„ÄÇ
+		if (GetModuleFileNameExW(hChildProc, NULL, szOut, cchOut) > 0)
 		{
-			if (GetModuleFileNameExW(hChildProc, hMod, szOut, cchOut) > 0)
-			{
-				szOut[cchOut - 1] = L'\0';
-				if (szOut[0])
-					return TRUE;
-			}
-			szOut[0] = L'\0';
+			szOut[cchOut - 1] = L'\0';
+			if (szOut[0])
+				return TRUE;
 		}
+		szOut[0] = L'\0';
 	}
 
-	// 3) ‘ŸªÿÕÀ£∫µ˜”√∑Ω¥´»Îµƒ lpApplicationName
+	// 3) ÂÜçÂõûÈÄÄÔºöË∞ÉÁî®Êñπ‰º†ÂÖ•ÁöÑ lpApplicationName
 	if (lpApplicationName && lpApplicationName[0])
 	{
 		wcsncpy(szOut, lpApplicationName, cchOut - 1);
@@ -1361,7 +1373,7 @@ static BOOL ResolveChildAppPath(HANDLE hChildProc, LPCWSTR lpApplicationName, LP
 		return TRUE;
 	}
 
-	// 4) ◊Ó∫ÛªÿÕÀ£∫¥” lpCommandLine Ω‚Œˆ≥ˆµ⁄“ª∂Œ£®ø…ƒ‹¥¯“˝∫≈£©
+	// 4) ÊúÄÂêéÂõûÈÄÄÔºö‰ªé lpCommandLine Ëß£ÊûêÂá∫Á¨¨‰∏ÄÊÆµÔºàÂèØËÉΩÂ∏¶ÂºïÂè∑Ôºâ
 	if (lpCommandLine && lpCommandLine[0])
 	{
 		LPCWSTR p = lpCommandLine;
@@ -1391,6 +1403,33 @@ MyDetourProc(has_Return, BOOL, WINAPI, CreateProcessInternalW, (HANDLE hToken, L
 	return g_pHookWinsock->inhook_CreateProcessInternalW(hToken, lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, lpEnvironment, lpCurrentDirectory, lpStartupInfo, lpProcessInformation, hNewToken);
 }
 
+static BOOL WINAPI CreateProcessWithoutProxyLaneHook(
+	LPCWSTR applicationName,
+	LPWSTR commandLine,
+	LPSECURITY_ATTRIBUTES processAttributes,
+	LPSECURITY_ATTRIBUTES threadAttributes,
+	BOOL inheritHandles,
+	DWORD creationFlags,
+	LPVOID environment,
+	LPCWSTR currentDirectory,
+	LPSTARTUPINFOW startupInfo,
+	LPPROCESS_INFORMATION processInformation)
+{
+	return CallTrampoline(CreateProcessInternalW)(
+		NULL,
+		applicationName,
+		commandLine,
+		processAttributes,
+		threadAttributes,
+		inheritHandles,
+		creationFlags,
+		environment,
+		currentDirectory,
+		startupInfo,
+		processInformation,
+		NULL);
+}
+
 BOOL WINAPI CHookWinsock::inhook_CreateProcessInternalW(HANDLE hToken, LPCWSTR lpApplicationName, LPWSTR lpCommandLine, LPSECURITY_ATTRIBUTES lpProcessAttributes, LPSECURITY_ATTRIBUTES lpThreadAttributes, BOOL bInheritHandles, DWORD dwCreationFlags, LPVOID lpEnvironment, LPCWSTR lpCurrentDirectory, LPSTARTUPINFOW lpStartupInfo, LPPROCESS_INFORMATION lpProcessInformation, PHANDLE hNewToken)
 {
 	if (!m_psi.bHookCreateProcess)
@@ -1398,7 +1437,7 @@ BOOL WINAPI CHookWinsock::inhook_CreateProcessInternalW(HANDLE hToken, LPCWSTR l
 		return CallTrampoline(CreateProcessInternalW)(hToken, lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, lpEnvironment, lpCurrentDirectory, lpStartupInfo, lpProcessInformation, hNewToken);
 	}
 
-	//»Áπ˚√ª±Í÷æπ“∆÷˜œﬂ≥Ã£¨ ‘Ú–ﬁ∏ƒ÷Æ
+	//Â¶ÇÊûúÊ≤°Ê†áÂøóÊåÇËµ∑‰∏ªÁ∫øÁ®ãÔºå Âàô‰øÆÊîπ‰πã
 	BOOL bSuspend;
 	if ((dwCreationFlags & CREATE_SUSPENDED) == 0)
 	{
@@ -1436,11 +1475,20 @@ BOOL WINAPI CHookWinsock::inhook_CreateProcessInternalW(HANDLE hToken, LPCWSTR l
 				break;
 			}
 
+			CStringA pipeName(m_szPRCPipeName);
+			const BOOL injectionSucceeded = ProxyLaneInjectSuspendedProcess(
+				lpProcessInformation->hProcess,
+				lpProcessInformation->hThread,
+				lpProcessInformation->dwProcessId,
+				lpProcessInformation->dwThreadId,
+				pipeName,
+				CreateProcessWithoutProxyLaneHook);
+			PRCPipeClient.PRCNotifyChildInjectionResult(&hnpi, injectionSucceeded);
 			PRCPipeClient.Disconnect();
 
 		} while (FALSE);
 
-		//»Áπ˚ «±ªŒ“–ﬁ∏ƒµƒ‘Ú‘⁄Õ®÷™PRC∫Ûªÿ∏¥
+		//Â¶ÇÊûúÊòØË¢´Êàë‰øÆÊîπÁöÑÂàôÂú®ÈÄöÁü•PRCÂêéÂõûÂ§ç
 		if (bSuspend)
 		{
 			ResumeThread(lpProcessInformation->hThread);
@@ -1551,7 +1599,7 @@ BOOL CHookWinsock::HookWinsock()
 	{
 		if (!LoadLibraryA(m_ModuleName[i]))
 		{
-			m_szLastError = _T("≥ı ºªØ HookWinsock  ß∞‹: LoadLibrary");
+			m_szLastError = _T("ÂàùÂßãÂåñ HookWinsock Â§±Ë¥•: LoadLibrary");
 			return FALSE;
 		}
 	}
@@ -1562,7 +1610,7 @@ BOOL CHookWinsock::HookWinsock()
 		m_mem4bakcode[i] = myAlloc4Bakcode(GetModuleHandleA(m_ModuleName[i]), HOOKAPI_COUNT * JMPBOARD_SIZE);
 		if (!m_mem4bakcode[i])
 		{
-			m_szLastError = _T("≥ı ºªØ HookWinsock  ß∞‹: myAlloc4Bakcode");
+			m_szLastError = _T("ÂàùÂßãÂåñ HookWinsock Â§±Ë¥•: myAlloc4Bakcode");
 			return FALSE;
 		}
 	}
@@ -1631,8 +1679,7 @@ BOOL CHookWinsock::HookWinsock()
 
 	//!!!!
 
-	m_szLastError = _T("≥ı ºªØ HookWinsock  ß∞‹: HookAPI");
+	m_szLastError = _T("ÂàùÂßãÂåñ HookWinsock Â§±Ë¥•: HookAPI");
 
 	return FALSE;
 }
-

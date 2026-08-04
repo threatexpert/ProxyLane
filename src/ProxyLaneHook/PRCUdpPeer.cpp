@@ -1,4 +1,4 @@
-/************************************************************************/
+ï»¿/************************************************************************/
 /*                                                                      */
 /*                                                                      */
 /************************************************************************/
@@ -157,7 +157,7 @@ BOOL CPRCUdpPeer::CreateUDPSocket(OUT SOCKADDR* lpSockAddr, OUT int* lpSockAddrL
 
 BOOL CPRCUdpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo)
 {
-	//ÉèÖÃ´úÀí
+	//è®¾ç½®ä»£ç†
 	if (!AddProxyLayer(lpProxyInfo))
 		return FALSE;
 
@@ -296,7 +296,7 @@ void CPRCUdpPeer::OnReceive(int nErrorCode)
 
 	if(m_recvbufpos > 0)
 	{
-		//µÈ´ýOnSend½«ËùÓÐÊý¾Ý×ª·¢³öÈ¥ÔÙ½ÓÊÕ
+		//ç­‰å¾…OnSendå°†æ‰€æœ‰æ•°æ®è½¬å‘å‡ºåŽ»å†æŽ¥æ”¶
 		ATLTRACE("buffer not empty.\r\n");
 		return;
 	}
@@ -357,7 +357,7 @@ void CPRCUdpPeer::OnReceive(int nErrorCode)
 			m_ppi.lpC->dstAddr.SetIPLong(*(DWORD*)&m_recvbuf[0x04]);
 			m_ppi.lpC->dstAddr.SetPort(ntohs(*(WORD*)&m_recvbuf[0x08]));
 		}else if (m_recvbuf[3] == 0x03 && nRetVal >= 10
-			&& nRetVal >= 2+1+1+1+(BYTE)m_recvbuf[4]+2 // |RSV:2 | FRAG:1 | ATYP:1| DST.ADDR:1+[N] | DST.PORT:2 |¡¡¡¡DATA:N¡¡|
+			&& nRetVal >= 2+1+1+1+(BYTE)m_recvbuf[4]+2 // |RSV:2 | FRAG:1 | ATYP:1| DST.ADDR:1+[N] | DST.PORT:2 |ã€€ã€€DATA:Nã€€|
 			)
 		{
 			int nDN = m_recvbuf[4];
@@ -405,7 +405,7 @@ void CPRCUdpPeer::OnReceive(int nErrorCode)
 
 int CPRCUdpPeer::TransferSend()
 {
-	//½«ÒÑ¾­½ÓÊÕµ½m_recvbufµÄÊý¾Ý¶¼·¢¸øPartner
+	//å°†å·²ç»æŽ¥æ”¶åˆ°m_recvbufçš„æ•°æ®éƒ½å‘ç»™Partner
 	int nBytesLeft = m_recvbufpos;
 	int nBytesSent = 0;
 
@@ -430,8 +430,8 @@ int CPRCUdpPeer::TransferSend()
 
 		if (m_Identity == CLIENT)
 		{
-			//udp±¨Í·ÒÑ¾­ÔÚhookµÄÊ±ºò¼ÓÉÏÁË
-			//Ö±½Ó·¢µ½´úÀí·þÎñÆ÷
+			//udpæŠ¥å¤´å·²ç»åœ¨hookçš„æ—¶å€™åŠ ä¸Šäº†
+			//ç›´æŽ¥å‘åˆ°ä»£ç†æœåŠ¡å™¨
 			nRetVal	= m_pPartner->SendTo(m_recvbuf+nBytesSent, nBytesLeft, 0, 0);
 		} 
 		else
@@ -482,12 +482,12 @@ void CPRCUdpPeer::OnSend(int nErrorCode)
 	else
 		ATLTRACE("Client::OnSend()\r\n");
 
-	//µ±Ç°Ì×½Ó×Ö¿ÉÐ´£¬ Ôò½«PartnerµÄm_recvbufÖÐµÄÓÐÐ§Êý¾Ý×ª·¢³öÈ¥
+	//å½“å‰å¥—æŽ¥å­—å¯å†™ï¼Œ åˆ™å°†Partnerçš„m_recvbufä¸­çš„æœ‰æ•ˆæ•°æ®è½¬å‘å‡ºåŽ»
 	int nRetVal;
 	int validlen = m_pPartner->GetValidDataLen();
 	if(validlen > 0)
 	{
-		//½«PartnerµÄÊý¾Ý×ª·¢ÖÁ±¾Ì×½Ó×Ö
+		//å°†Partnerçš„æ•°æ®è½¬å‘è‡³æœ¬å¥—æŽ¥å­—
 		nRetVal = m_pPartner->TransferSend();
 		if(nRetVal < 0)
 		{
@@ -500,7 +500,7 @@ void CPRCUdpPeer::OnSend(int nErrorCode)
 			ATLTRACE("CPRCUdpPeer.OnSend(), nRetVal < validlen\r\n");
 		}else
 		{
-			//Êý¾ÝÈ«²¿×ª·¢³öÈ¥ÁË£¬ ÅÐ¶ÏPartnerÄÇ±ßµÄÌ×½Ó×ÖµÄFD_READ×´Ì¬£¬Ð¡ÓÚ0ÎªÁ¬½ÓÒì³££¬0ÎªÕý³£µ«ÎÞÊý¾Ý¿É¶Á£¬1ÎªÓÐÊý¾Ý¿É¶Á
+			//æ•°æ®å…¨éƒ¨è½¬å‘å‡ºåŽ»äº†ï¼Œ åˆ¤æ–­Partneré‚£è¾¹çš„å¥—æŽ¥å­—çš„FD_READçŠ¶æ€ï¼Œå°äºŽ0ä¸ºè¿žæŽ¥å¼‚å¸¸ï¼Œ0ä¸ºæ­£å¸¸ä½†æ— æ•°æ®å¯è¯»ï¼Œ1ä¸ºæœ‰æ•°æ®å¯è¯»
 			nRetVal = m_pPartner->TestSocketStatus(FD_READ);
 			if(nRetVal < 0)
 			{
@@ -552,7 +552,7 @@ void CPRCUdpPeer::Close()
 	{
 		_SockAddr srcAddr;
 		int srcaddrlen = sizeof(_SockAddr);
-		//²éÑ¯¸Ãsocket°ó¶¨µÄµØÖ·
+		//æŸ¥è¯¢è¯¥socketç»‘å®šçš„åœ°å€
 		if(getsockname(sClient, &srcAddr, &srcaddrlen) == 0)
 		{		
 			in_addr *pAddr = srcAddr.GetAddr();

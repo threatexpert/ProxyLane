@@ -1,4 +1,4 @@
-/************************************************************************/
+ï»¿/************************************************************************/
 /*                                                                      */
 /*                                                                      */
 /************************************************************************/
@@ -65,20 +65,20 @@ BOOL CGlobalProxy::EnableProxy()
 
 	if(m_pProxyRC != NULL)
 	{
-		m_szLastError = _T("´úÀíÒÑ¾­´¦ÓÚÆôÓÃ×´Ì¬..");
+		m_szLastError = _T("ä»£ç†å·²ç»å¤„äºå¯ç”¨çŠ¶æ€..");
 		return FALSE;
 	}
 
 	m_pProxyRC = new CProxyReceptionCentre(this);
 	if(m_pProxyRC == NULL)
 	{
-		m_szLastError = _T("´´½¨ PRC ¶ÔÏóÊ§°Ü.");
+		m_szLastError = _T("åˆ›å»º PRC å¯¹è±¡å¤±è´¥.");
 		return FALSE;
 	}
 
 	if(!m_pProxyRC->CreatePRC())
 	{
-		m_szLastError = _T("³õÊ¼»¯ PRC ¶ÔÏóÊ§°Ü.");
+		m_szLastError = _T("åˆå§‹åŒ– PRC å¯¹è±¡å¤±è´¥.");
 		delete m_pProxyRC;
 		m_pProxyRC = NULL;
 		return FALSE;

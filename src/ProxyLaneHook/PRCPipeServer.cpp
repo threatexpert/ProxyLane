@@ -1,4 +1,4 @@
-/************************************************************************/
+ï»¿/************************************************************************/
 /*                                                                      */
 /*                                                                      */
 /************************************************************************/
@@ -8,6 +8,8 @@
 #include "GlobalProxy.h"
 #include "ProxyReceptionCentre.h"
 #include "token.h"
+
+#include <new>
 
 //CString g_szPRCPipeServerName;
 GUID g_GuidPipeName;
@@ -24,6 +26,7 @@ CPRCPipeServer::CPRCPipeServer(CProxyReceptionCentre *pPRC)
 
 CPRCPipeServer::~CPRCPipeServer(void)
 {
+	ShutdownServer();
 }
 
 
@@ -36,7 +39,7 @@ BOOL CPRCPipeServer::StartupServer()
 
 	memset(&guid, 0, sizeof(GUID));
 
-	//Ã¿´Î½ø³ÌµÚÒ»´Î Æô¶¯ µÄÊ±ºò ²Å´´½¨Ò»¸ö guid
+	//æ¯æ¬¡è¿›ç¨‹ç¬¬ä¸€æ¬¡ å¯åŠ¨ çš„æ—¶å€™ æ‰åˆ›å»ºä¸€ä¸ª guid
 	if(memcmp(&g_GuidPipeName, &guid, sizeof(GUID)) == 0)
 	{
 		if(CoCreateGuid(&g_GuidPipeName) != S_OK)
@@ -57,10 +60,15 @@ BOOL CPRCPipeServer::StartupServer()
 	ATLTRACE(_T("PRCPipeName: %s\r\n"), m_szPipeName);
 
 	m_hTestEvent = CreateEvent(0, 0, 0, 0);
-	m_hNoThreadEvent = CreateEvent(0, 0, 1, 0);//³õÊ¼»¯ĞÅºÅ£¬ ±íÊ¾Ò»¿ªÊ¼Ã»client pipeµÄÏß³Ì
+	m_hNoThreadEvent = CreateEvent(0, 0, 1, 0);//åˆå§‹åŒ–ä¿¡å·ï¼Œ è¡¨ç¤ºä¸€å¼€å§‹æ²¡client pipeçš„çº¿ç¨‹
 	if(m_hTestEvent == NULL || m_hNoThreadEvent == NULL)
 	{
-		//
+		if (m_hTestEvent)
+			CloseHandle(m_hTestEvent);
+		if (m_hNoThreadEvent)
+			CloseHandle(m_hNoThreadEvent);
+		m_hTestEvent = NULL;
+		m_hNoThreadEvent = NULL;
 		return FALSE;
 	}
 
@@ -70,16 +78,23 @@ BOOL CPRCPipeServer::StartupServer()
 	if(m_hMainThread == NULL)
 	{
 		CloseHandle(m_hTestEvent);
+		CloseHandle(m_hNoThreadEvent);
+		m_hTestEvent = NULL;
+		m_hNoThreadEvent = NULL;
 		return FALSE;
 	}
 
 	WaitForSingleObject(m_hTestEvent, INFINITE);
 	if(m_threadstatus != threadstatus_ready)
 	{
+		WaitForSingleObject(m_hMainThread, INFINITE);
 		CloseHandle(m_hMainThread);
 		m_hMainThread = NULL;
 		CloseHandle(m_hTestEvent);
 		m_hTestEvent = NULL;
+		CloseHandle(m_hNoThreadEvent);
+		m_hNoThreadEvent = NULL;
+		return FALSE;
 	}
 
 	return TRUE;
@@ -108,13 +123,17 @@ BOOL CPRCPipeServer::ShutdownServer()
 		CloseHandle(m_hMainThread);
 		m_hMainThread = NULL;
 
-		WaitForSingleObject(m_hNoThreadEvent, INFINITE);
-		CloseHandle(m_hNoThreadEvent);
-		m_hNoThreadEvent = NULL;
+		if (m_hNoThreadEvent)
+			WaitForSingleObject(m_hNoThreadEvent, INFINITE);
 
 		ATLASSERT(m_dwThreadCount == 0);
 		ATLASSERT(m_ChildThreadList.size() == 0);
 
+	}
+	if(m_hNoThreadEvent)
+	{
+		CloseHandle(m_hNoThreadEvent);
+		m_hNoThreadEvent = NULL;
 	}
 
 	if(m_hTestEvent)
@@ -179,30 +198,73 @@ DWORD WINAPI CPRCPipeServer::_mainThread()
 
 		BOOL fConnected = ConnectNamedPipe(m_hPipeServer, NULL) ? TRUE : (GetLastError() == ERROR_PIPE_CONNECTED); 
 
-		if(fConnected && !m_bExitThread)
-		{
-			//Çå³ıĞÅºÅ
-			InterlockedIncrement(&m_dwThreadCount);
-			ResetEvent(m_hNoThreadEvent);
-
-			DWORD_PTR *pParam = new DWORD_PTR[3];
-			HANDLE hThread = CreateThread(0, 0, InstanceThread, pParam, CREATE_SUSPENDED, NULL);
-			pParam[0] = (DWORD_PTR)this;
-			pParam[1] = (DWORD_PTR)m_hPipeServer;
-			pParam[2] = (DWORD_PTR)hThread;
-
-			CTSList<HANDLE>::critical lc = m_ChildThreadList;
-			m_ChildThreadList.push_back(hThread);
-			ResumeThread(hThread);
-
-		}
-
 		if(m_bExitThread)
 		{
-			DisconnectNamedPipe(m_hPipeServer);
+			if (fConnected)
+				DisconnectNamedPipe(m_hPipeServer);
 			CloseHandle(m_hPipeServer);
+			m_hPipeServer = NULL;
 			SetThreadStatus(threadstatus_abort);
 			break;
+		}
+
+		if(fConnected)
+		{
+			DWORD_PTR *pParam = new (std::nothrow) DWORD_PTR[3];
+			if (!pParam)
+			{
+				DisconnectNamedPipe(m_hPipeServer);
+				CloseHandle(m_hPipeServer);
+				m_hPipeServer = NULL;
+				continue;
+			}
+			pParam[0] = (DWORD_PTR)this;
+			pParam[1] = (DWORD_PTR)m_hPipeServer;
+			pParam[2] = 0;
+			HANDLE hThread = CreateThread(0, 0, InstanceThread, pParam, CREATE_SUSPENDED, NULL);
+			if (!hThread)
+			{
+				delete[] pParam;
+				DisconnectNamedPipe(m_hPipeServer);
+				CloseHandle(m_hPipeServer);
+				m_hPipeServer = NULL;
+				continue;
+			}
+			pParam[2] = (DWORD_PTR)hThread;
+
+			//æ¸…é™¤ä¿¡å·
+			InterlockedIncrement(&m_dwThreadCount);
+			ResetEvent(m_hNoThreadEvent);
+			{
+				CTSList<HANDLE>::critical lc = m_ChildThreadList;
+				m_ChildThreadList.push_back(hThread);
+			}
+			if (ResumeThread(hThread) == (DWORD)-1)
+			{
+				{
+					CTSList<HANDLE>::critical lc = m_ChildThreadList;
+					m_ChildThreadList.remove(hThread);
+				}
+				if (TerminateThread(hThread, 0))
+					WaitForSingleObject(hThread, INFINITE);
+				CloseHandle(hThread);
+				delete[] pParam;
+				DisconnectNamedPipe(m_hPipeServer);
+				CloseHandle(m_hPipeServer);
+				m_hPipeServer = NULL;
+				if (InterlockedDecrement(&m_dwThreadCount) == 0)
+					SetEvent(m_hNoThreadEvent);
+				continue;
+			}
+
+			// ç®¡é“å’Œçº¿ç¨‹å¥æŸ„çš„æ‰€æœ‰æƒå·²äº¤ç»™ InstanceThreadã€‚
+			m_hPipeServer = NULL;
+
+		}
+		else
+		{
+			CloseHandle(m_hPipeServer);
+			m_hPipeServer = NULL;
 		}
 	}
 
@@ -257,13 +319,13 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 				if (!m_pPRC->GetStartupInfo(&info))
 					goto SEC_ERROR;
 
-				//ÏÈĞ´Ğ­ÒéÍ·
+				//å…ˆå†™åè®®å¤´
 				hdr.action = PRCPD_REPLY;
 				hdr.flag = 1;// means true
-				hdr.dataSize = sizeof(info); //Ğ­ÒéÍ·ºóÃæµÄÊı¾İ³¤¶È
+				hdr.dataSize = sizeof(info); //åè®®å¤´åé¢çš„æ•°æ®é•¿åº¦
 				if (! WritePipe(hPipe, &hdr, sizeof(hdr)))
 					goto SEC_ERROR;
-				//Ğ´Êı¾İ
+				//å†™æ•°æ®
 				if (! WritePipe(hPipe, &info, sizeof(info)))
 					goto SEC_ERROR;
 
@@ -272,24 +334,24 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 
 		case PRCPD_REGISTERCLIENT:
 			{
-				//½ÓÊÕµÇ¼ÇĞÅÏ¢
+				//æ¥æ”¶ç™»è®°ä¿¡æ¯
 				PRCClient client;
-				//ÅĞ¶ÏÊı¾İ³¤¶ÈÊÇ·ñ·ûºÏ
+				//åˆ¤æ–­æ•°æ®é•¿åº¦æ˜¯å¦ç¬¦åˆ
 				if (hdr.dataSize != sizeof(client))
 					goto SEC_ERROR;
 
 				if (! ReadPipe(hPipe, &client, hdr.dataSize))
 					goto SEC_ERROR;
 
-				//½«Êı¾İ×¢²áµ½PRC
+				//å°†æ•°æ®æ³¨å†Œåˆ°PRC
 				if (! m_pPRC->RegisterClient(&client))
 					goto SEC_ERROR;
 
-				//»Ø¸´³É¹¦ÏûÏ¢
+				//å›å¤æˆåŠŸæ¶ˆæ¯
 				hdr.action = PRCPD_REPLY;
 				hdr.flag = 1;
 
-				//Èç¹ûÊÇµÇ¼Ç UDPµÄÔò RegisterClient »á·µ»ØĞÂµÄÊı¾İµ½client£¬ »Ø¸´Ö®
+				//å¦‚æœæ˜¯ç™»è®° UDPçš„åˆ™ RegisterClient ä¼šè¿”å›æ–°çš„æ•°æ®åˆ°clientï¼Œ å›å¤ä¹‹
 				if (client.sType == SOCK_DGRAM)
 				{
 					hdr.dataSize = sizeof(client);
@@ -311,7 +373,7 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 		case PRCPD_UNREGISTER_CLIENT:
 			{
 				PRCClient client;
-				//ÅĞ¶ÏÊı¾İ³¤¶ÈÊÇ·ñ·ûºÏ
+				//åˆ¤æ–­æ•°æ®é•¿åº¦æ˜¯å¦ç¬¦åˆ
 				if(hdr.dataSize != sizeof(client))
 					goto SEC_ERROR;
 
@@ -321,7 +383,7 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 				if (! m_pPRC->UnregisterClient(&client))
 					goto SEC_ERROR;
 
-				//»Ø¸´³É¹¦ÏûÏ¢
+				//å›å¤æˆåŠŸæ¶ˆæ¯
 				hdr.action = PRCPD_REPLY;
 				hdr.flag = 1;
 
@@ -335,19 +397,19 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 		case PRCPD_CANPROXYME:
 			{
 				PRCClientInfo clientinfo;
-				//ÅĞ¶ÏÊı¾İ³¤¶ÈÊÇ·ñ·ûºÏ
+				//åˆ¤æ–­æ•°æ®é•¿åº¦æ˜¯å¦ç¬¦åˆ
 				if (hdr.dataSize != sizeof(clientinfo))
 					goto SEC_ERROR;
 
 				if(! ReadPipe(hPipe, &clientinfo, hdr.dataSize))
 					goto SEC_ERROR;
 
-				//²éÑ¯PRC
+				//æŸ¥è¯¢PRC
 				BOOL bFiltered = m_pPRC->IsFiltered(&clientinfo);
 
-				//»Ø¸´ÏûÏ¢
+				//å›å¤æ¶ˆæ¯
 				hdr.action = PRCPD_REPLY;
-				//Èç¹û¸ø¹ıÂËÁËÔòflagÎª false, means can not
+				//å¦‚æœç»™è¿‡æ»¤äº†åˆ™flagä¸º false, means can not
 				hdr.flag = (BYTE)!bFiltered;
 				hdr.dataSize = 0;
 				if (! WritePipe(hPipe, &hdr, sizeof(hdr)))
@@ -361,16 +423,16 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 
 				bRet = m_pPRC->GetProxySettingsInfo(&psi);
 
-				//ÏÈĞ´Ğ­ÒéÍ·
+				//å…ˆå†™åè®®å¤´
 				hdr.action = PRCPD_REPLY;
 				hdr.flag = bRet ? true : false;
 
 				if(bRet)
 				{
-					hdr.dataSize = sizeof(psi); //Ğ­ÒéÍ·ºóÃæµÄÊı¾İ³¤¶È
+					hdr.dataSize = sizeof(psi); //åè®®å¤´åé¢çš„æ•°æ®é•¿åº¦
 					if (! WritePipe(hPipe, &hdr, sizeof(hdr)))
 						goto SEC_ERROR;
-					//Ğ´Êı¾İ
+					//å†™æ•°æ®
 					if (! WritePipe(hPipe, &psi, sizeof(psi)))
 						goto SEC_ERROR;
 				}else
@@ -393,17 +455,47 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 				if(! ReadPipe(hPipe, &hnpi, hdr.dataSize))
 					goto SEC_ERROR;
 
-				//ÏÈĞ´Ğ­ÒéÍ·
+				//å…ˆå†™åè®®å¤´
 				hdr.action = PRCPD_REPLY;
-				hdr.flag = true;
+				hdr.flag = false;
 				hdr.dataSize = 0;
 
-				m_pPRC->m_pGlobalProxy->GetLogInstance()->OnNewProcess(&hnpi);
+				hdr.flag = (BYTE)m_pPRC->m_pGlobalProxy->GetLogInstance()->OnNewProcess(&hnpi);
 
 				if (! WritePipe(hPipe, &hdr, sizeof(hdr)))
 					goto SEC_ERROR;
 
 
+			}
+			break;
+
+		case PRCPD_CHILD_INJECTION_RESULT:
+			{
+				HookNewProcessInfo hnpi;
+
+				if (hdr.dataSize != sizeof(hnpi))
+					goto SEC_ERROR;
+
+				if(! ReadPipe(hPipe, &hnpi, hdr.dataSize))
+					goto SEC_ERROR;
+
+				m_pPRC->m_pGlobalProxy->GetLogInstance()->OnChildInjectionResult(
+					&hnpi,
+					hdr.flag != 0);
+			}
+			break;
+
+		case PRCPD_REGISTER_PROCESS_IDENTITY:
+			{
+				HookProcessIdentityInfo identity;
+				if (hdr.dataSize != sizeof(identity))
+					goto SEC_ERROR;
+
+				if (!ReadPipe(hPipe, &identity, hdr.dataSize))
+					goto SEC_ERROR;
+
+				identity.szAppPath[_countof(identity.szAppPath) - 1] = L'\0';
+				m_pPRC->RegisterProcessIdentity(&identity);
 			}
 			break;
 
@@ -417,7 +509,7 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 				if(! ReadPipe(hPipe, &udpai, hdr.dataSize))
 					goto SEC_ERROR;
 
-				//ÏÈĞ´Ğ­ÒéÍ·
+				//å…ˆå†™åè®®å¤´
 				hdr.action = PRCPD_REPLY;
 				hdr.flag = (BYTE)m_pPRC->GetUDPClientPortState(&udpai);
 				hdr.dataSize = 0;
@@ -432,9 +524,9 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 			{
 				ProxyInfo pi;
 
-				//½ÓÊÕPRCClientĞÅÏ¢
+				//æ¥æ”¶PRCClientä¿¡æ¯
 				PRCClient client;
-				//ÅĞ¶ÏÊı¾İ³¤¶ÈÊÇ·ñ·ûºÏ
+				//åˆ¤æ–­æ•°æ®é•¿åº¦æ˜¯å¦ç¬¦åˆ
 				if (hdr.dataSize != sizeof(client))
 					goto SEC_ERROR;
 
@@ -520,7 +612,7 @@ SEC_ERROR:
 	m_ChildThreadList.remove(hThread);
 	CloseHandle(hThread);
 
-	//Èç¹ûµ±Ç°Ïß³ÌÍË³öºóÃ»Ïß³ÌÁË£¬ ÉèÖÃĞÅºÅ
+	//å¦‚æœå½“å‰çº¿ç¨‹é€€å‡ºåæ²¡çº¿ç¨‹äº†ï¼Œ è®¾ç½®ä¿¡å·
 	if (InterlockedDecrement(&m_dwThreadCount) == 0)
 	{
 		SetEvent(m_hNoThreadEvent);

@@ -65,6 +65,8 @@
 #define IDC_BTN_WORKFLOW_NEXT            1048
 #define IDC_STATIC_ABOUT_VERSION        1049
 #define IDC_LINK_PROJECT                1050
+#define IDC_WINDOW_FINDER               1051
+#define IDC_BUTTON_SAVE_PROFILE         1052
 #define ID_CFGOPT_32771                 32771
 #define ID_CFGOPT_32772                 32772
 #define ID_CFGOPT_32773                 32773
@@ -78,7 +80,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        134
 #define _APS_NEXT_COMMAND_VALUE         32777
-#define _APS_NEXT_CONTROL_VALUE         1051
+#define _APS_NEXT_CONTROL_VALUE         1053
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

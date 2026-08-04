@@ -1,8 +1,8 @@
-// ProxyLaneHook.cpp : Defines the entry point for the DLL application.
+ï»¿// ProxyLaneHook.cpp : Defines the entry point for the DLL application.
 //
-// ²âÊÔÓÃµÄcpp
+// æµ‹è¯•ç”¨çš„cpp
 // 
-// ×ªµ½ProxyModule.cpp ¿ªÊ¼¿´°É
+// è½¬åˆ°ProxyModule.cpp å¼€å§‹çœ‹å§
 
 #include "stdafx.h"
 #include <CONIO.H>
@@ -15,7 +15,7 @@
 //CGlobalProxy *g_proxy;
 
 
-SOCKET ConnectHost(DWORD dwIP, WORD wPort)//Á¬½ÓÖ¸¶¨IPºÍ¶Ë¿Ú
+SOCKET ConnectHost(DWORD dwIP, WORD wPort)//è¿æ¥æŒ‡å®šIPå’Œç«¯å£
 {
 	SOCKET sockid;
 
@@ -267,7 +267,7 @@ int _SetTimeOut(SOCKET s, bool read, bool write, int timeout_sec)
 //	int t = 0;
 //	//while(t++ < 1)
 //	//{
-//	//	//²âÊÔÀà
+//	//	//æµ‹è¯•ç±»
 //	//	CMySocket *mysocket = new CMySocket;
 //
 //	//	SOCKADDR_IN sockAddr = {0};
@@ -323,7 +323,7 @@ public:
 
 	BOOL GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI)
 	{
-		//¿ÉÆÀ¹À´úÀíµÄ¿Í»§¶ËµÄĞÅÏ¢, ÔÙ¾ö¶¨ÊÇ·ñ·µ»Ø»ò·µ»ØÄÄ¸ö´úÀí·şÎñÆ÷µÄĞÅÏ¢
+		//å¯è¯„ä¼°ä»£ç†çš„å®¢æˆ·ç«¯çš„ä¿¡æ¯, å†å†³å®šæ˜¯å¦è¿”å›æˆ–è¿”å›å“ªä¸ªä»£ç†æœåŠ¡å™¨çš„ä¿¡æ¯
 		//pPRCC->dwPid
 		//pPRCC->szDomainName
 		//pPRCC->dstAddr.GetdwIP()

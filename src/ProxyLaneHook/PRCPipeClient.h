@@ -28,6 +28,8 @@ public:
 	BOOL PRCGetProxyInfo(LPPRCClient lpClientInfo, LPProxyInfo lpPI);
 
 	BOOL PRCNotifyNewProcess(LPHookNewProcessInfo lphnpi);
+	BOOL PRCNotifyChildInjectionResult(LPHookNewProcessInfo lphnpi, BOOL succeeded);
+	BOOL PRCRegisterProcessIdentity(LPHookProcessIdentityInfo identity);
 
 	BOOL PRCGetUDPClientPortState(UDPLocalProxyAddrInfo *pLPAI);
 

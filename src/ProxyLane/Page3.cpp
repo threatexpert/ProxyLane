@@ -8,6 +8,7 @@
 #include "Page2.h"
 #include "AutomationOptions.h"
 #include "..\ProxyLaneHook\token.h"
+#include "..\ProxyLaneHook\ElevatedLaunchProtocol.h"
 
 #include "..\ProxyLaneHook\ProxyModule.h"
 
@@ -24,6 +25,7 @@ using namespace std;
 #include <shlwapi.h>
 #include <Dbghelp.h>
 #include <shlobj.h>
+#include <shellapi.h>
 
 #pragma comment (lib,"Advapi32.lib")
 #pragma comment (lib,"shlwapi.lib")
@@ -45,6 +47,248 @@ extern ChildInjectFilterSnapshot g_ChildInjectFilter;
 
 
 using namespace ATL;
+
+BEGIN_MESSAGE_MAP(CWindowFinderOverlay, CWnd)
+	ON_WM_PAINT()
+	ON_WM_ERASEBKGND()
+	ON_WM_NCHITTEST()
+END_MESSAGE_MAP()
+
+CWindowFinderOverlay::CWindowFinderOverlay()
+	: m_transparentColor(RGB(255, 0, 255))
+{
+}
+
+BOOL CWindowFinderOverlay::ShowForWindow(HWND targetWindow, CWnd* ownerWindow)
+{
+	if (!targetWindow || !::IsWindow(targetWindow))
+		return FALSE;
+
+	CRect targetRect;
+	if (!::GetWindowRect(targetWindow, &targetRect) || targetRect.IsRectEmpty())
+		return FALSE;
+
+	if (!GetSafeHwnd())
+	{
+		CString className = AfxRegisterWndClass(
+			CS_HREDRAW | CS_VREDRAW,
+			::LoadCursor(NULL, IDC_ARROW),
+			NULL,
+			NULL);
+		CWnd* topLevelOwner = ownerWindow
+			? ownerWindow->GetTopLevelParent()
+			: NULL;
+		CRect emptyRect(0, 0, 0, 0);
+		if (!CreateEx(
+			WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW |
+				WS_EX_NOACTIVATE | WS_EX_TOPMOST,
+			className,
+			_T(""),
+			WS_POPUP,
+			emptyRect,
+			topLevelOwner,
+			0))
+		{
+			return FALSE;
+		}
+		::SetLayeredWindowAttributes(
+			m_hWnd,
+			m_transparentColor,
+			255,
+			LWA_COLORKEY);
+		// WindowFromPoint 会忽略禁用窗口，确保覆盖层不会成为查找目标。
+		EnableWindow(FALSE);
+	}
+
+	SetWindowPos(
+		&wndTopMost,
+		targetRect.left,
+		targetRect.top,
+		targetRect.Width(),
+		targetRect.Height(),
+		SWP_NOACTIVATE | SWP_SHOWWINDOW);
+	Invalidate(FALSE);
+	UpdateWindow();
+	return TRUE;
+}
+
+void CWindowFinderOverlay::HideOverlay()
+{
+	if (GetSafeHwnd())
+		ShowWindow(SW_HIDE);
+}
+
+void CWindowFinderOverlay::OnPaint()
+{
+	CPaintDC dc(this);
+	CRect clientRect;
+	GetClientRect(&clientRect);
+	dc.FillSolidRect(clientRect, m_transparentColor);
+
+	CBrush borderBrush(UiTheme::Accent());
+	const int thickness = UiTheme::ScaleForWindow(m_hWnd, 3);
+	CRect borderRect(clientRect);
+	for (int index = 0; index < thickness && !borderRect.IsRectEmpty(); ++index)
+	{
+		dc.FrameRect(borderRect, &borderBrush);
+		borderRect.DeflateRect(1, 1);
+	}
+}
+
+BOOL CWindowFinderOverlay::OnEraseBkgnd(CDC*)
+{
+	return TRUE;
+}
+
+LRESULT CWindowFinderOverlay::OnNcHitTest(CPoint)
+{
+	return HTTRANSPARENT;
+}
+
+IMPLEMENT_DYNAMIC(CWindowFinderButton, CModernButton)
+
+CWindowFinderButton::CWindowFinderButton()
+	: m_tracking(FALSE)
+{
+}
+
+BOOL CWindowFinderButton::IsTracking() const
+{
+	return m_tracking;
+}
+
+BEGIN_MESSAGE_MAP(CWindowFinderButton, CModernButton)
+	ON_WM_LBUTTONDOWN()
+	ON_WM_LBUTTONUP()
+	ON_WM_MOUSEMOVE()
+	ON_WM_CAPTURECHANGED()
+	ON_WM_KEYDOWN()
+	ON_WM_SETCURSOR()
+END_MESSAGE_MAP()
+
+void CWindowFinderButton::DrawItem(LPDRAWITEMSTRUCT info)
+{
+	CModernButton::DrawItem(info);
+
+	CDC dc;
+	dc.Attach(info->hDC);
+	CRect rect(info->rcItem);
+	const int centerX = rect.CenterPoint().x;
+	const int centerY = rect.CenterPoint().y;
+	const int radius = UiTheme::ScaleForWindow(m_hWnd, 5);
+	const int arm = UiTheme::ScaleForWindow(m_hWnd, 9);
+	COLORREF color = IsWindowEnabled()
+		? (m_tracking || m_hot ? UiTheme::Accent() : UiTheme::TextPrimary())
+		: RGB(160, 166, 177);
+	CPen pen(PS_SOLID, UiTheme::ScaleForWindow(m_hWnd, 1), color);
+	CPen* oldPen = dc.SelectObject(&pen);
+	CBrush* oldBrush = static_cast<CBrush*>(dc.SelectStockObject(NULL_BRUSH));
+	dc.Ellipse(centerX - radius, centerY - radius,
+		centerX + radius + 1, centerY + radius + 1);
+	dc.MoveTo(centerX - arm, centerY);
+	dc.LineTo(centerX + arm + 1, centerY);
+	dc.MoveTo(centerX, centerY - arm);
+	dc.LineTo(centerX, centerY + arm + 1);
+	dc.SelectObject(oldBrush);
+	dc.SelectObject(oldPen);
+	dc.Detach();
+}
+
+void CWindowFinderButton::OnLButtonDown(UINT, CPoint)
+{
+	if (!IsWindowEnabled() || m_tracking)
+		return;
+
+	SetFocus();
+	m_tracking = TRUE;
+	SetCapture();
+	::SetCursor(::LoadCursor(NULL, IDC_CROSS));
+	Invalidate(FALSE);
+	if (GetParent())
+		GetParent()->SendMessage(WM_WINDOW_FINDER_BEGIN);
+}
+
+void CWindowFinderButton::OnMouseMove(UINT flags, CPoint point)
+{
+	if (!m_tracking)
+	{
+		CModernButton::OnMouseMove(flags, point);
+		return;
+	}
+
+	POINT cursorPoint = { 0 };
+	::GetCursorPos(&cursorPoint);
+	HWND targetWindow = ::WindowFromPoint(cursorPoint);
+	::SetCursor(::LoadCursor(NULL, IDC_CROSS));
+	if (GetParent())
+		GetParent()->SendMessage(
+			WM_WINDOW_FINDER_UPDATE,
+			0,
+			reinterpret_cast<LPARAM>(targetWindow));
+}
+
+void CWindowFinderButton::OnLButtonUp(UINT, CPoint)
+{
+	if (!m_tracking)
+		return;
+
+	POINT cursorPoint = { 0 };
+	::GetCursorPos(&cursorPoint);
+	HWND targetWindow = ::WindowFromPoint(cursorPoint);
+	m_tracking = FALSE;
+	if (GetCapture() == this)
+		ReleaseCapture();
+	Invalidate(FALSE);
+	if (GetParent())
+		GetParent()->SendMessage(
+			WM_WINDOW_FINDER_COMPLETE,
+			0,
+			reinterpret_cast<LPARAM>(targetWindow));
+}
+
+void CWindowFinderButton::CancelTracking()
+{
+	if (!m_tracking)
+		return;
+	m_tracking = FALSE;
+	if (GetCapture() == this)
+		ReleaseCapture();
+	Invalidate(FALSE);
+	if (GetParent())
+		GetParent()->SendMessage(WM_WINDOW_FINDER_CANCEL);
+}
+
+void CWindowFinderButton::OnCaptureChanged(CWnd* window)
+{
+	if (m_tracking)
+	{
+		m_tracking = FALSE;
+		Invalidate(FALSE);
+		if (GetParent())
+			GetParent()->SendMessage(WM_WINDOW_FINDER_CANCEL);
+	}
+	CModernButton::OnCaptureChanged(window);
+}
+
+void CWindowFinderButton::OnKeyDown(UINT character, UINT repeatCount, UINT flags)
+{
+	if (character == VK_ESCAPE && m_tracking)
+	{
+		CancelTracking();
+		return;
+	}
+	CModernButton::OnKeyDown(character, repeatCount, flags);
+}
+
+BOOL CWindowFinderButton::OnSetCursor(CWnd* window, UINT hitTest, UINT message)
+{
+	if (m_tracking)
+	{
+		::SetCursor(::LoadCursor(NULL, IDC_CROSS));
+		return TRUE;
+	}
+	return CModernButton::OnSetCursor(window, hitTest, message);
+}
 
 
 int compareApiName(char *p1, char *p2)
@@ -113,6 +357,10 @@ BOOL DebugPrivilege(TCHAR *PName,BOOL bEnable)
 
 BOOL GetProcessFullPath(HANDLE hProc, LPTSTR buf, DWORD size)
 {
+	if (!hProc || !buf || size == 0)
+		return FALSE;
+	buf[0] = _T('\0');
+
 	typedef
 	BOOL WINAPI __QueryFullProcessImageName(
 		HANDLE hProcess,
@@ -121,8 +369,8 @@ BOOL GetProcessFullPath(HANDLE hProc, LPTSTR buf, DWORD size)
 		PDWORD lpdwSize
 		);
 
-	static __QueryFullProcessImageName * QFIN = NULL;
-	if (!QFIN)
+	static __QueryFullProcessImageName * QFIN = (__QueryFullProcessImageName*)-1;
+	if (QFIN == (__QueryFullProcessImageName*)-1)
 	{
 		QFIN = (__QueryFullProcessImageName*)GetProcAddress(
 			GetModuleHandle(TEXT("kernel32")), 
@@ -136,19 +384,20 @@ BOOL GetProcessFullPath(HANDLE hProc, LPTSTR buf, DWORD size)
 
 	if (QFIN)
 	{
-		return QFIN(hProc, 0, buf, &size);
+		DWORD pathSize = size;
+		if (QFIN(hProc, 0, buf, &pathSize) && buf[0])
+			return TRUE;
+		buf[0] = _T('\0');
 	}
-	else
-	{
-		HMODULE hMod;
-		TCHAR procName[255] = { 0 };
-		unsigned long cbNeeded;
 
-		if (!EnumProcessModules(hProc, &hMod, sizeof(hMod), &cbNeeded))
-			return 0;
-		
-		return GetModuleFileNameEx(hProc, hMod, buf, size) > 0;
+	// XP 兼容回退；hModule 为 NULL 时直接查询目标进程的主程序路径。
+	if (GetModuleFileNameEx(hProc, NULL, buf, size) > 0)
+	{
+		buf[size - 1] = _T('\0');
+		return buf[0] != _T('\0');
 	}
+	buf[0] = _T('\0');
+	return FALSE;
 }
 
 // 保存进程创建时间，并同时生成列表中的本地时间文本。
@@ -299,16 +548,15 @@ int GetProcessList(list<_myPROCESSINFO> &ls)
 				SetProcessStartTime(snapshotTime->second, mypi);
 
 			HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pe.th32ProcessID);
-			BOOL canReadPath = hProcess != NULL;
 			if (!hProcess)
 			{
-				// 某些进程不允许读取内存，但仍可能允许查询启动时间。
+				// Vista+ 的路径 API 以及启动时间只需要进程查询权限。
 				hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pe.th32ProcessID);
 			}
 			if (hProcess)
 			{
-				if (canReadPath)
-					GetProcessFullPath(hProcess, mypi.propath, MAX_PATH);
+				// 新系统优先 QueryFullProcessImageName；XP 自动回退到 PSAPI。
+				GetProcessFullPath(hProcess, mypi.propath, MAX_PATH);
 				if (!mypi.hasStartTime)
 					GetProcessStartTime(hProcess, mypi);
 				CloseHandle(hProcess);
@@ -320,50 +568,6 @@ int GetProcessList(list<_myPROCESSINFO> &ls)
 		}
 
 		::CloseHandle(hSP);
-	}
-
-	return nCount;
-}
-
-int GetProcessList_old(list<_myPROCESSINFO> &ls)
-{
-	int nCount = 0;
-	unsigned int i;
-	DWORD aProcesses[1024], cbNeeded;
-	HANDLE hProcess;
-
-	_myPROCESSINFO mypi;
-
-	if (!EnumProcesses(aProcesses, sizeof(aProcesses), &cbNeeded))
-	{
-		return 0;
-	}
-
-	for ( i = 0; i < cbNeeded / sizeof(DWORD); i++ )
-	{
-		hProcess = OpenProcess( PROCESS_QUERY_INFORMATION|PROCESS_VM_READ, FALSE, aProcesses[i]);
-
-		if ( hProcess )
-		{
-			HMODULE hMod;
-			char procName[255]={0};
-			unsigned long cbNeeded;
-
-			ZeroMemory(&mypi, sizeof(mypi));
-
-			if(EnumProcessModules(hProcess, &hMod, sizeof(hMod), &cbNeeded))
-			{
-				mypi.pid = aProcesses[i];
-				GetModuleBaseName(hProcess, hMod, mypi.proname, _countof(mypi.proname));
-				GetModuleFileNameEx(hProcess, hMod, mypi.propath, _countof(mypi.propath));
-				ls.push_back(mypi);
-				nCount++;
-			}
-
-
-			CloseHandle( hProcess );
-		}
-
 	}
 
 	return nCount;
@@ -450,45 +654,30 @@ BOOL HookProcess(DWORD pid, LPCSTR pipeName)
 	return bOK;
 }
 
-CString GetProxyLaneHookModulePath()
-{
-	HMODULE hModule = GetModuleHandle(_T("ProxyLaneHook.dll"));
-	if(!hModule)
-		return _T("");
-
-	CString szRet;
-
-	szRet.GetBuffer(MAX_PATH);
-	GetModuleFileName(hModule, szRet.GetBuffer(), MAX_PATH-1);
-	szRet.ReleaseBuffer();
-
-	return szRet;
-}
-
 CString GetProxyLaneHookModule32Path()
 {
-	CString szCurrDir;
-
-	szCurrDir.GetBuffer(MAX_PATH);
-	GetModuleFileName(NULL, szCurrDir.GetBuffer(), MAX_PATH - 1);
-	szCurrDir.ReleaseBuffer();
-
-	szCurrDir = szCurrDir.Left(szCurrDir.ReverseFind('\\'));
-
-	return szCurrDir + _T("\\ProxyLaneHook32.dll");
+	TCHAR modulePath[MAX_PATH] = { 0 };
+	if (!GetModuleFileName(NULL, modulePath, _countof(modulePath)))
+		return CString();
+	modulePath[_countof(modulePath) - 1] = _T('\0');
+	CString directory(modulePath);
+	const int slash = directory.ReverseFind(_T('\\'));
+	if (slash < 0)
+		return CString();
+	return directory.Left(slash) + _T("\\ProxyLaneHook32.dll");
 }
 
 CString GetProxyLaneHookModule64Path()
 {
-	CString szCurrDir;
-
-	szCurrDir.GetBuffer(MAX_PATH);
-	GetModuleFileName(NULL, szCurrDir.GetBuffer(), MAX_PATH - 1);
-	szCurrDir.ReleaseBuffer();
-
-	szCurrDir = szCurrDir.Left(szCurrDir.ReverseFind('\\'));
-
-	return szCurrDir + _T("\\ProxyLaneHook64.dll");
+	TCHAR modulePath[MAX_PATH] = { 0 };
+	if (!GetModuleFileName(NULL, modulePath, _countof(modulePath)))
+		return CString();
+	modulePath[_countof(modulePath) - 1] = _T('\0');
+	CString directory(modulePath);
+	const int slash = directory.ReverseFind(_T('\\'));
+	if (slash < 0)
+		return CString();
+	return directory.Left(slash) + _T("\\ProxyLaneHook64.dll");
 }
 
 BOOL myWow64DisableWow64FsRedirection(__out PVOID *OldValue)
@@ -619,90 +808,7 @@ CString ChooseRundll32(CString &strDllPath)
 
 static BOOL ResolveChildAppPath(HANDLE hChildProc, LPWSTR szOut, DWORD cchOut)
 {
-	if (!szOut || cchOut == 0)
-		return FALSE;
-
-	szOut[0] = L'\0';
-
-	typedef BOOL(WINAPI* PFN_QFIN)(HANDLE, DWORD, LPWSTR, PDWORD);
-	static PFN_QFIN s_pQFIN = (PFN_QFIN)-1;
-	if (s_pQFIN == (PFN_QFIN)-1)
-	{
-		HMODULE hK32 = GetModuleHandleW(L"kernel32.dll");
-		s_pQFIN = hK32 ? (PFN_QFIN)GetProcAddress(hK32, "QueryFullProcessImageNameW") : NULL;
-	}
-	if (s_pQFIN)
-	{
-		DWORD cch = cchOut;
-		if (s_pQFIN(hChildProc, 0, szOut, &cch) && szOut[0])
-			return TRUE;
-		szOut[0] = L'\0';
-	}
-
-	// 2) 回退：psapi GetModuleFileNameExW（NT4+，但子进程刚 spawn 模块表可能还没就绪，作为次选）
-	HMODULE hMod = NULL;
-	DWORD cbNeeded = 0;
-	if (EnumProcessModules(hChildProc, &hMod, sizeof(hMod), &cbNeeded))
-	{
-		if (GetModuleFileNameExW(hChildProc, hMod, szOut, cchOut) > 0)
-		{
-			szOut[cchOut - 1] = L'\0';
-			if (szOut[0])
-				return TRUE;
-		}
-		szOut[0] = L'\0';
-	}
-	return FALSE;
-
-}
-
-BOOL GetProcessBaseName(DWORD dwPid, HANDLE hProcess, LPTSTR szProcName)
-{
-	PROCESSENTRY32 pe;  
-	DWORD dwRet;
-	BOOL bFound = FALSE;
-
-	TCHAR szName[MAX_PATH];
-	DWORD cch = MAX_PATH;
-	if (ResolveChildAppPath(hProcess, szName, cch)) {
-		TCHAR* pName = _tcsrchr(szName, '\\');
-		if (pName) {
-			_tcscpy(szProcName, pName + 1);
-		}
-		else {
-			_tcscpy(szProcName, szName);
-		}
-		return TRUE;
-	}
-
-	//
-	// 通过 TOOHLP32 函数枚举进程
-	//
-
-	HANDLE hSP =  ::CreateToolhelp32Snapshot( TH32CS_SNAPPROCESS, 0 );
-	if ( hSP )
-	{
-		pe.dwSize = sizeof( pe );
-
-		for ( dwRet = Process32First( hSP, &pe );
-			dwRet;
-			dwRet = Process32Next( hSP, &pe ) )
-		{
-
-			if (dwPid == pe.th32ProcessID )
-			{
-
-				_tcscpy(szProcName, pe.szExeFile);
-
-				bFound = TRUE;
-				break;
-			}
-		}
-
-		::CloseHandle( hSP );
-	}
-
-	return bFound;
+	return GetProcessFullPath(hChildProc, szOut, cchOut);
 }
 
 
@@ -716,6 +822,7 @@ CPage3::CPage3(CWnd* pParent /*=NULL*/)
 	, m_sortColumn(-1)
 	, m_sortState(PROCESS_SORT_NONE)
 	, m_processNameSearchTick(0)
+	, m_finderTargetWindow(NULL)
 {
 	//m_pEdit = NULL;
 	//m_pEdit = new CMyEdit;
@@ -725,12 +832,14 @@ CPage3::CPage3(CWnd* pParent /*=NULL*/)
 
 CPage3::~CPage3()
 {
+	ClearWindowFinderHighlight();
 }
 
 void CPage3::DoDataExchange(CDataExchange* pDX)
 {
 	CDialog::DoDataExchange(pDX);
 	DDX_Control(pDX, IDC_PSLIST, m_ListCtrl);
+	DDX_Control(pDX, IDC_WINDOW_FINDER, m_btnWindowFinder);
 	DDX_Control(pDX, IDC_REFRESH, m_btnRefresh);
 	DDX_Control(pDX, IDC_INJECTDLL, m_btnInject);
 
@@ -742,11 +851,17 @@ BOOL CPage3::OnInitDialog()
 	CModernDialog::OnInitDialog();
 	DragAcceptFiles(FALSE);
 	m_ListCtrl.DragAcceptFiles(FALSE);
+	m_btnWindowFinder.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	m_btnRefresh.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	m_btnInject.SetVisualStyle(CModernButton::STYLE_PRIMARY);
-	SetDlgItemText(
-		IDC_STATIC_PAGE_SUBTITLE,
-		_T("选择运行中的进程（按住 Ctrl 或 Shift 可多选），或拖入程序/快捷方式启动并代理"));
+	RestoreProcessPageSubtitle();
+	if (m_windowFinderToolTip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX))
+	{
+		m_windowFinderToolTip.AddTool(
+			&m_btnWindowFinder,
+			_T("按住并拖到目标窗口，松开后立即代理该进程"));
+		m_windowFinderToolTip.SetMaxTipWidth(UiTheme::ScaleForWindow(m_hWnd, 320));
+	}
 	// 资源模板为兼容旧版本仍可能带有单选样式，初始化时统一启用多选。
 	m_ListCtrl.ModifyStyle(LVS_SINGLESEL, 0);
 
@@ -796,8 +911,137 @@ BOOL CPage3::OnInitDialog()
 	return TRUE;
 }
 
+static AppLaunchResult LaunchElevatedAndProxy(
+	HWND ownerWindow,
+	LPCTSTR targetPath,
+	LPCTSTR commandLine,
+	LPCTSTR workingDirectory)
+{
+	if (!targetPath || !commandLine ||
+		_tcslen(targetPath) >= PROXYLANE_ELEVATED_TARGET_CCH ||
+		_tcslen(commandLine) >= PROXYLANE_ELEVATED_COMMAND_CCH ||
+		(workingDirectory &&
+		 _tcslen(workingDirectory) >= PROXYLANE_ELEVATED_DIRECTORY_CCH))
+	{
+		return APP_LAUNCH_INVALID_TARGET;
+	}
+
+	IProxyReceptionCentre* receptionCentre = NULL;
+	char pipeName[PROXYLANE_ELEVATED_PIPE_CCH] = { 0 };
+	if (!g_GlobalProxy ||
+		!(receptionCentre = g_GlobalProxy->GetPRCInstance()) ||
+		!receptionCentre->GetPRCPipeName(pipeName, _countof(pipeName)))
+	{
+		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
+	}
+
+	ProxyLaneElevatedLaunchRequest request;
+	ZeroMemory(&request, sizeof(request));
+	request.magic = PROXYLANE_ELEVATED_REQUEST_MAGIC;
+	request.version = PROXYLANE_ELEVATED_REQUEST_VERSION;
+	request.structureSize = sizeof(request);
+	wcsncpy(request.targetPath, targetPath, _countof(request.targetPath) - 1);
+	wcsncpy(request.commandLine, commandLine, _countof(request.commandLine) - 1);
+	if (workingDirectory)
+		wcsncpy(request.workingDirectory, workingDirectory, _countof(request.workingDirectory) - 1);
+	strncpy(request.pipeName, pipeName, _countof(request.pipeName) - 1);
+
+	CStringA encodedRequest;
+	char* encodedBuffer = encodedRequest.GetBuffer(static_cast<int>(sizeof(request) * 2));
+	if (!ProxyLaneEncodeElevatedRequest(
+		request,
+		encodedBuffer,
+		sizeof(request) * 2 + 1))
+	{
+		encodedRequest.ReleaseBuffer(0);
+		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
+	}
+	encodedRequest.ReleaseBuffer(static_cast<int>(sizeof(request) * 2));
+
+#ifdef _WIN64
+	CString hookPath = GetProxyLaneHookModule64Path();
+#else
+	CString hookPath = GetProxyLaneHookModule32Path();
+#endif
+	if (hookPath.Find(_T(',')) >= 0)
+		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
+	const DWORD hookAttributes = GetFileAttributes(hookPath);
+	if (hookAttributes == INVALID_FILE_ATTRIBUTES ||
+		(hookAttributes & FILE_ATTRIBUTE_DIRECTORY))
+	{
+		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
+	}
+
+	CString rundllPath = ChooseRundll32(hookPath);
+	CString encodedRequestWide;
+	WCHAR* encodedWideBuffer = encodedRequestWide.GetBuffer(encodedRequest.GetLength());
+	const int convertedLength = MultiByteToWideChar(
+		CP_ACP,
+		0,
+		encodedRequest,
+		encodedRequest.GetLength(),
+		encodedWideBuffer,
+		encodedRequest.GetLength());
+	encodedRequestWide.ReleaseBuffer(convertedLength > 0 ? convertedLength : 0);
+	if (convertedLength <= 0)
+		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
+
+	CString parameters;
+	parameters.Format(
+		_T("\"%s\",ElevatedLaunch --request=%s"),
+		(LPCTSTR)hookPath,
+		(LPCTSTR)encodedRequestWide);
+
+	SHELLEXECUTEINFO shellInfo = { 0 };
+	shellInfo.cbSize = sizeof(shellInfo);
+	shellInfo.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+	shellInfo.hwnd = ownerWindow;
+	shellInfo.lpVerb = _T("runas");
+	shellInfo.lpFile = rundllPath;
+	shellInfo.lpParameters = parameters;
+	shellInfo.nShow = SW_HIDE;
+
+	if (!ShellExecuteEx(&shellInfo))
+	{
+		return GetLastError() == ERROR_CANCELLED
+			? APP_LAUNCH_UAC_CANCELLED
+			: APP_LAUNCH_ELEVATED_HELPER_FAILED;
+	}
+	if (!shellInfo.hProcess)
+		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
+
+	const DWORD waitResult = WaitForSingleObject(shellInfo.hProcess, INFINITE);
+	DWORD helperExitCode = PROXYLANE_ELEVATED_INTERNAL_ERROR;
+	const BOOL gotExitCode = waitResult == WAIT_OBJECT_0 &&
+		GetExitCodeProcess(shellInfo.hProcess, &helperExitCode);
+	CloseHandle(shellInfo.hProcess);
+	if (!gotExitCode)
+		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
+
+	if (helperExitCode == PROXYLANE_ELEVATED_SUCCESS)
+		return APP_LAUNCH_SUCCESS;
+	if (helperExitCode == PROXYLANE_ELEVATED_INVALID_TARGET)
+		return APP_LAUNCH_INVALID_TARGET;
+	if (helperExitCode == PROXYLANE_ELEVATED_INJECTION_FAILED)
+		return APP_LAUNCH_INJECTION_FAILED;
+	if (helperExitCode == PROXYLANE_ELEVATED_CREATE_FAILED)
+		return APP_LAUNCH_CREATE_PROCESS_FAILED;
+	return APP_LAUNCH_ELEVATED_HELPER_FAILED;
+}
+
 BOOL CPage3::PreTranslateMessage(MSG* message)
 {
+	if (message && m_windowFinderToolTip.GetSafeHwnd())
+		m_windowFinderToolTip.RelayEvent(message);
+
+	if (message && m_btnWindowFinder.IsTracking() &&
+		(message->message == WM_KEYDOWN || message->message == WM_SYSKEYDOWN) &&
+		message->wParam == VK_ESCAPE)
+	{
+		m_btnWindowFinder.CancelTracking();
+		return TRUE;
+	}
+
 	if (!message || !m_ListCtrl.GetSafeHwnd() || message->hwnd != m_ListCtrl.m_hWnd)
 		return CModernDialog::PreTranslateMessage(message);
 
@@ -892,6 +1136,10 @@ BEGIN_MESSAGE_MAP(CPage3, CModernDialog)
 	ON_NOTIFY(LVN_COLUMNCLICK, IDC_PSLIST, &CPage3::OnLvnColumnClickProcessList)
 	ON_NOTIFY(NM_CUSTOMDRAW, IDC_PSLIST, &CPage3::OnNMCustomdrawProcessList)
 	ON_MESSAGE(WM_ON_REFRESHPS, &CPage3::OnRefreshPslist)
+	ON_MESSAGE(WM_WINDOW_FINDER_BEGIN, &CPage3::OnWindowFinderBegin)
+	ON_MESSAGE(WM_WINDOW_FINDER_UPDATE, &CPage3::OnWindowFinderUpdate)
+	ON_MESSAGE(WM_WINDOW_FINDER_COMPLETE, &CPage3::OnWindowFinderComplete)
+	ON_MESSAGE(WM_WINDOW_FINDER_CANCEL, &CPage3::OnWindowFinderCancel)
 	ON_WM_TIMER()
 END_MESSAGE_MAP()
 
@@ -920,6 +1168,7 @@ void CPage3::OnSize(UINT nType, int cx, int cy)
 
 	int margin = UiTheme::ScaleForWindow(m_hWnd, 8);
 	int gap = UiTheme::ScaleForWindow(m_hWnd, 6);
+	int finderWidth = UiTheme::ScaleForWindow(m_hWnd, 30);
 	int refreshWidth = UiTheme::ScaleForWindow(m_hWnd, 70);
 	int injectWidth = UiTheme::ScaleForWindow(m_hWnd, 96);
 	int buttonHeight = UiTheme::ScaleForWindow(m_hWnd, 30);
@@ -929,6 +1178,313 @@ void CPage3::OnSize(UINT nType, int cx, int cy)
 	if (m_btnRefresh.GetSafeHwnd())
 		m_btnRefresh.MoveWindow(rcClient.right - margin - injectWidth - gap - refreshWidth,
 			buttonTop, refreshWidth, buttonHeight);
+	if (m_btnWindowFinder.GetSafeHwnd())
+		m_btnWindowFinder.MoveWindow(
+			rcClient.right - margin - injectWidth - gap - refreshWidth - gap - finderWidth,
+			buttonTop,
+			finderWidth,
+			buttonHeight);
+}
+
+static BOOL ResolveWindowFinderTarget(
+	HWND targetWindow,
+	DWORD& processId,
+	HWND& highlightWindow)
+{
+	processId = 0;
+	highlightWindow = NULL;
+	if (!targetWindow || !::IsWindow(targetWindow))
+		return FALSE;
+
+	::GetWindowThreadProcessId(targetWindow, &processId);
+	if (processId <= 4 || processId == ::GetCurrentProcessId())
+		return FALSE;
+
+	highlightWindow = ::GetAncestor(targetWindow, GA_ROOT);
+	if (!highlightWindow)
+		highlightWindow = targetWindow;
+	if (highlightWindow == ::GetDesktopWindow() ||
+		highlightWindow == ::GetShellWindow())
+	{
+		return FALSE;
+	}
+
+	TCHAR className[64] = { 0 };
+	::GetClassName(highlightWindow, className, _countof(className));
+	if (_tcsicmp(className, _T("Shell_TrayWnd")) == 0 ||
+		_tcsicmp(className, _T("Progman")) == 0 ||
+		_tcsicmp(className, _T("WorkerW")) == 0)
+	{
+		return FALSE;
+	}
+	return TRUE;
+}
+
+void CPage3::ClearWindowFinderHighlight()
+{
+	m_finderOverlay.HideOverlay();
+	m_finderTargetWindow = NULL;
+}
+
+void CPage3::UpdateWindowFinderHighlight(HWND targetWindow)
+{
+	DWORD processId = 0;
+	HWND highlightWindow = NULL;
+	if (!ResolveWindowFinderTarget(targetWindow, processId, highlightWindow))
+	{
+		ClearWindowFinderHighlight();
+		return;
+	}
+
+	m_finderTargetWindow = targetWindow;
+	if (!m_finderOverlay.ShowForWindow(highlightWindow, this))
+		ClearWindowFinderHighlight();
+}
+
+BOOL CPage3::SelectProcessByPid(DWORD processId)
+{
+	std::vector<DWORD> processIds;
+	if (processId)
+		processIds.push_back(processId);
+	return SelectProcessesByPid(processIds);
+}
+
+BOOL CPage3::SelectProcessesByPid(const std::vector<DWORD>& processIds)
+{
+	if (processIds.empty() || !m_ListCtrl.GetSafeHwnd())
+		return FALSE;
+
+	std::set<DWORD> targetIds(processIds.begin(), processIds.end());
+	m_ListCtrl.SetItemState(-1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+	int firstSelectedItem = -1;
+	int selectedCount = 0;
+	const int itemCount = m_ListCtrl.GetItemCount();
+	for (int item = 0; item < itemCount; ++item)
+	{
+		DWORD itemProcessId = static_cast<DWORD>(m_ListCtrl.GetItemData(item));
+		if (targetIds.find(itemProcessId) == targetIds.end())
+			continue;
+		m_ListCtrl.SetItemState(
+			item,
+			LVIS_SELECTED | (firstSelectedItem < 0 ? LVIS_FOCUSED : 0),
+			LVIS_SELECTED | LVIS_FOCUSED);
+		if (firstSelectedItem < 0)
+			firstSelectedItem = item;
+		++selectedCount;
+	}
+	if (firstSelectedItem >= 0)
+	{
+		m_ListCtrl.SetSelectionMark(firstSelectedItem);
+		m_ListCtrl.EnsureVisible(firstSelectedItem, FALSE);
+		m_ListCtrl.SetFocus();
+	}
+	return selectedCount > 0;
+}
+
+void CPage3::CollectDescendantProcessIds(
+	DWORD rootProcessId,
+	std::vector<DWORD>& descendants) const
+{
+	descendants.clear();
+	if (!rootProcessId ||
+		m_processSortData.find(rootProcessId) == m_processSortData.end())
+	{
+		return;
+	}
+
+	std::map<DWORD, std::vector<DWORD> > children;
+	for (std::map<DWORD, _myPROCESSINFO>::const_iterator process =
+		m_processSortData.begin(); process != m_processSortData.end(); ++process)
+	{
+		const _myPROCESSINFO& child = process->second;
+		std::map<DWORD, _myPROCESSINFO>::const_iterator parent =
+			m_processSortData.find(child.parentPid);
+		BOOL validParent = child.parentPid != 0
+			&& child.parentPid != child.pid
+			&& parent != m_processSortData.end();
+		if (validParent && parent->second.hasStartTime && child.hasStartTime &&
+			parent->second.startTimeValue > child.startTimeValue)
+		{
+			validParent = FALSE;
+		}
+		if (validParent)
+			children[child.parentPid].push_back(child.pid);
+	}
+
+	std::set<DWORD> visited;
+	visited.insert(rootProcessId);
+	std::vector<DWORD> pending;
+	pending.push_back(rootProcessId);
+	for (size_t pendingIndex = 0; pendingIndex < pending.size(); ++pendingIndex)
+	{
+		std::map<DWORD, std::vector<DWORD> >::const_iterator childList =
+			children.find(pending[pendingIndex]);
+		if (childList == children.end())
+			continue;
+		for (size_t childIndex = 0;
+			childIndex < childList->second.size(); ++childIndex)
+		{
+			DWORD childProcessId = childList->second[childIndex];
+			if (!visited.insert(childProcessId).second)
+				continue;
+			descendants.push_back(childProcessId);
+			pending.push_back(childProcessId);
+		}
+	}
+
+	std::sort(
+		descendants.begin(),
+		descendants.end(),
+		[this](DWORD leftProcessId, DWORD rightProcessId)
+		{
+			std::map<DWORD, _myPROCESSINFO>::const_iterator left =
+				m_processSortData.find(leftProcessId);
+			std::map<DWORD, _myPROCESSINFO>::const_iterator right =
+				m_processSortData.find(rightProcessId);
+			if (left != m_processSortData.end() && right != m_processSortData.end() &&
+				left->second.treeOrder != right->second.treeOrder)
+			{
+				return left->second.treeOrder < right->second.treeOrder;
+			}
+			return leftProcessId < rightProcessId;
+		});
+}
+
+void CPage3::RestoreProcessPageSubtitle()
+{
+	SetDlgItemText(
+		IDC_STATIC_PAGE_SUBTITLE,
+		_T("选择运行中的进程（按住 Ctrl 或 Shift 可多选），或拖入程序/快捷方式启动并代理"));
+}
+
+LRESULT CPage3::OnWindowFinderBegin(WPARAM, LPARAM)
+{
+	KillTimer(TIMER_PSLIST);
+	ClearWindowFinderHighlight();
+	if (m_windowFinderToolTip.GetSafeHwnd())
+		m_windowFinderToolTip.Pop();
+	SetDlgItemText(
+		IDC_STATIC_PAGE_SUBTITLE,
+		_T("拖到目标窗口，松开后立即代理该进程；按 Esc 取消"));
+	return 0;
+}
+
+LRESULT CPage3::OnWindowFinderUpdate(WPARAM, LPARAM parameter)
+{
+	UpdateWindowFinderHighlight(reinterpret_cast<HWND>(parameter));
+	return 0;
+}
+
+LRESULT CPage3::OnWindowFinderComplete(WPARAM, LPARAM parameter)
+{
+	HWND targetWindow = reinterpret_cast<HWND>(parameter);
+	ClearWindowFinderHighlight();
+	RestoreProcessPageSubtitle();
+	SetTimer(TIMER_PSLIST, 2000, NULL);
+
+	DWORD processId = 0;
+	HWND highlightWindow = NULL;
+	if (!ResolveWindowFinderTarget(targetWindow, processId, highlightWindow))
+	{
+		MessageBox(
+			_T("没有识别到可代理的应用程序窗口。"),
+			_T("未找到目标进程"),
+			MB_ICONINFORMATION);
+		return 0;
+	}
+
+	UpdatePslist(TRUE);
+	if (!SelectProcessByPid(processId))
+	{
+		MessageBox(
+			_T("目标进程已经退出，或暂时没有出现在进程列表中。"),
+			_T("目标进程不可用"),
+			MB_ICONWARNING);
+		return 0;
+	}
+
+	std::vector<DWORD> descendantProcessIds;
+	CollectDescendantProcessIds(processId, descendantProcessIds);
+	if (!descendantProcessIds.empty())
+	{
+		CString targetName = _T("未知进程");
+		std::map<DWORD, _myPROCESSINFO>::const_iterator targetProcess =
+			m_processSortData.find(processId);
+		if (targetProcess != m_processSortData.end() &&
+			targetProcess->second.proname[0])
+		{
+			targetName = targetProcess->second.proname;
+		}
+
+		CString confirmationText;
+		confirmationText.Format(
+			_T("%s（PID %lu）当前有 %u 个正在运行的子进程（含多级）：\r\n\r\n"),
+			(LPCTSTR)targetName,
+			processId,
+			static_cast<unsigned int>(descendantProcessIds.size()));
+		const size_t maxDisplayedChildren = 5;
+		for (size_t index = 0;
+			index < descendantProcessIds.size() && index < maxDisplayedChildren;
+			++index)
+		{
+			DWORD childProcessId = descendantProcessIds[index];
+			CString childName = _T("未知进程");
+			std::map<DWORD, _myPROCESSINFO>::const_iterator childProcess =
+				m_processSortData.find(childProcessId);
+			if (childProcess != m_processSortData.end() &&
+				childProcess->second.proname[0])
+			{
+				childName = childProcess->second.proname;
+			}
+			CString childLine;
+			childLine.Format(
+				_T("%u. %s（PID %lu）\r\n"),
+				static_cast<unsigned int>(index + 1),
+				(LPCTSTR)childName,
+				childProcessId);
+			confirmationText += childLine;
+		}
+		if (descendantProcessIds.size() > maxDisplayedChildren)
+		{
+			CString omittedText;
+			omittedText.Format(
+				_T("……另有 %u 个子进程未列出。\r\n"),
+				static_cast<unsigned int>(
+					descendantProcessIds.size() - maxDisplayedChildren));
+			confirmationText += omittedText;
+		}
+		confirmationText +=
+			_T("\r\n是否同时代理全部这些子进程？\r\n")
+			_T("选择“否”将只代理窗口所属进程。");
+
+		const int confirmation = MessageBox(
+			confirmationText,
+			_T("发现正在运行的子进程"),
+			MB_YESNOCANCEL | MB_ICONQUESTION);
+		if (confirmation == IDCANCEL)
+			return 0;
+		if (confirmation == IDYES)
+		{
+			std::vector<DWORD> processesToProxy;
+			processesToProxy.push_back(processId);
+			processesToProxy.insert(
+				processesToProxy.end(),
+				descendantProcessIds.begin(),
+				descendantProcessIds.end());
+			SelectProcessesByPid(processesToProxy);
+		}
+	}
+
+	OnBnClickedInjectdll();
+	return 0;
+}
+
+LRESULT CPage3::OnWindowFinderCancel(WPARAM, LPARAM)
+{
+	ClearWindowFinderHighlight();
+	RestoreProcessPageSubtitle();
+	SetTimer(TIMER_PSLIST, 2000, NULL);
+	return 0;
 }
 
 int CPage3::UpdatePslist(BOOL bRefresh)
@@ -1566,7 +2122,8 @@ void CPage3::OnTimer(UINT_PTR nIDEvent)
 	{
 	case TIMER_PSLIST:
 		{
-			UpdatePslist(FALSE);
+			if (!m_btnWindowFinder.IsTracking())
+				UpdatePslist(FALSE);
 		}
 		break;
 	}
@@ -1581,9 +2138,49 @@ LRESULT CPage3::OnRefreshPslist(WPARAM w, LPARAM l)
 }
 
 
-void CPage3::OnNewProcess(LPHookNewProcessInfo lphnpi)
+BOOL CPage3::OnNewProcess(LPHookNewProcessInfo lphnpi)
 {
-	InjectNewProcess(lphnpi);
+	SendMessage(WM_ON_REFRESHPS, TRUE);
+	return ShouldProxyChildProcess(lphnpi);
+}
+
+BOOL CPage3::ShouldProxyChildProcess(LPHookNewProcessInfo lphnpi)
+{
+	// 子进程注入过滤：按 profile 配置决定是否调用 InjectDll
+	if (g_ChildInjectFilter.bEnabled && !g_ChildInjectFilter.patterns.empty())
+	{
+		BOOL bMatched = FALSE;
+		if (lphnpi->szAppPath[0])
+		{
+			for (size_t i = 0; i < g_ChildInjectFilter.patterns.size(); i++)
+			{
+				if (PathMatchSpecW(lphnpi->szAppPath, g_ChildInjectFilter.patterns[i]))
+				{
+					bMatched = TRUE;
+					break;
+				}
+			}
+		}
+
+		BOOL bShouldInject = (g_ChildInjectFilter.nMode == CHILDFILTER_MODE_INCLUDE) ? bMatched : !bMatched;
+		if (!bShouldInject)
+		{
+			CString processName = lphnpi->szAppPath;
+			const int slash = processName.ReverseFind(_T('\\'));
+			if (slash >= 0)
+				processName = processName.Mid(slash + 1);
+			CString text;
+			text.Format(
+				_T("New Process: %d | %s Skipped by filter\r\n"),
+				lphnpi->dwProcessId,
+				(LPCTSTR)processName);
+			CPage2* page2 = g_MainTab ? g_MainTab->GetPage2() : NULL;
+			if (page2)
+				page2->AddLogText(text);
+			return FALSE;
+		}
+	}
+	return TRUE;
 }
 
 BOOL CPage3::InjectNewProcess(LPHookNewProcessInfo lphnpi)
@@ -1606,49 +2203,30 @@ BOOL CPage3::InjectNewProcess(LPHookNewProcessInfo lphnpi)
 	}
 
 	hProcess = OpenProcess(PROCESS_ALL_ACCESS, 0, hnpi.dwProcessId);
-
 	if (!hProcess)
 		return FALSE;
 
-	CPage2 *pPage2 = g_MainTab->GetPage2();
-
-	TCHAR procName[MAX_PATH]={0};
-	GetProcessBaseName(hnpi.dwProcessId, hProcess, procName);
-
-	CString szText;
-
-	// 子进程注入过滤：按 profile 配置决定是否调用 InjectDll
-	if (g_ChildInjectFilter.bEnabled && !g_ChildInjectFilter.patterns.empty())
+	if (!ShouldProxyChildProcess(&hnpi))
 	{
-		BOOL bMatched = FALSE;
-		if (hnpi.szAppPath[0])
-		{
-			for (size_t i = 0; i < g_ChildInjectFilter.patterns.size(); i++)
-			{
-				if (PathMatchSpecW(hnpi.szAppPath, g_ChildInjectFilter.patterns[i]))
-				{
-					bMatched = TRUE;
-					break;
-				}
-			}
-		}
-
-		BOOL bShouldInject = (g_ChildInjectFilter.nMode == CHILDFILTER_MODE_INCLUDE) ? bMatched : !bMatched;
-		if (!bShouldInject)
-		{
-			szText.Format(_T("New Process: %d | %s Skipped by filter\r\n"), hnpi.dwProcessId, procName);
-			pPage2->AddLogText(szText);
-			CloseHandle(hProcess);
-			return FALSE;
-		}
+		CloseHandle(hProcess);
+		return FALSE;
 	}
+
+	CPage2 *pPage2 = g_MainTab->GetPage2();
+	CString procName = hnpi.szAppPath;
+	const int nameSlash = procName.ReverseFind(_T('\\'));
+	if (nameSlash >= 0)
+		procName = procName.Mid(nameSlash + 1);
+	if (procName.IsEmpty())
+		procName = _T("Unknown");
+	CString szText;
 
 	bRet = InjectDll(hProcess, hnpi.dwProcessId, hnpi.dwThreadId, szPipeName);
 
 	if (bRet > 0)
-		szText.Format(_T("New Process: %d | %s Hooked\r\n"), hnpi.dwProcessId, procName);
+		szText.Format(_T("New Process: %d | %s Hooked\r\n"), hnpi.dwProcessId, (LPCTSTR)procName);
 	else
-		szText.Format(_T("New Process: %d | %s InjectDll Failed\r\n"), hnpi.dwProcessId, procName);
+		szText.Format(_T("New Process: %d | %s InjectDll Failed\r\n"), hnpi.dwProcessId, (LPCTSTR)procName);
 
 	pPage2->AddLogText(szText);
 
@@ -1890,12 +2468,21 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 		szBaseDir[0] == 0 ? NULL : szBaseDir,
 		&si,
 		&pi);
+	const DWORD createProcessError = ret ? ERROR_SUCCESS : GetLastError();
 	commandLine.ReleaseBuffer();
 
 	myWow64RevertWow64FsRedirection(WowRedirOldValue);
 
 	if (!ret)
 	{
+		if (createProcessError == ERROR_ELEVATION_REQUIRED)
+		{
+			return LaunchElevatedAndProxy(
+				GetSafeHwnd(),
+				szTargetPath,
+				commandLine,
+				szBaseDir[0] == 0 ? NULL : szBaseDir);
+		}
 		return APP_LAUNCH_CREATE_PROCESS_FAILED;
 	}
 
@@ -1907,7 +2494,17 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 #else
 #error unicode required
 #endif
-	ResolveChildAppPath(pi.hProcess, hnpi.szAppPath, MAX_PATH);
+	if (!ResolveChildAppPath(pi.hProcess, hnpi.szAppPath, MAX_PATH) ||
+		!hnpi.szAppPath[0])
+	{
+		// XP 下挂起进程的模块信息可能尚未就绪；回退显示用户传入的文件名。
+#ifdef UNICODE
+		wcsncpy(hnpi.szAppPath, fileName, MAX_PATH - 1);
+		hnpi.szAppPath[MAX_PATH - 1] = L'\0';
+#else
+#error unicode required
+#endif
+	}
 
 	BOOL injectionSucceeded = InjectNewProcess(&hnpi);
 	if (!injectionSucceeded && strictInjection)

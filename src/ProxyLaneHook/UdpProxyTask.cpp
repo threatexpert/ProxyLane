@@ -1,4 +1,4 @@
-/************************************************************************/
+﻿/************************************************************************/
 /*                                                                      */
 /*                                                                      */
 /************************************************************************/
@@ -92,7 +92,7 @@ BOOL CUdpProxyTask::SetTaskInfo(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo
 		if(!m_pServer->ConnectProxy(lpPRCClient, lpProxyInfo))
 			break;
 
-		//��֪PRC m_pClient�󶨵ĵ�ַ
+		//告知PRC m_pClient绑定的地址
 		//if(addrname.GetdwIP() == 0)
 		//	addrname.SetIP("127.0.0.1");
 

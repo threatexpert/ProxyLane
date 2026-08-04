@@ -1,4 +1,4 @@
-
+ï»¿
 
 
 #include "stdafx.h"
@@ -143,7 +143,7 @@ NTSTATUS __stdcall insert_detour(pbyte target
 	long target_length = 0;
 	if (written)
 		*written = 0;
-	//È·¶¨Ä¿±êº¯ÊıÊÇ·ñÄÜÈİÄÉÒ»¸öjmpÖ¸ÁîµÄ¿Õ¼ä.
+	//ç¡®å®šç›®æ ‡å‡½æ•°æ˜¯å¦èƒ½å®¹çº³ä¸€ä¸ªjmpæŒ‡ä»¤çš„ç©ºé—´.
 	for(; target_length < SIZE_OF_TRP_OPS ;)
 	{
 		pbyte	op = cont;
@@ -186,7 +186,7 @@ NTSTATUS __stdcall insert_detour(pbyte target
 			, &trampoline_perm);
 		enable_write_on_code_page(target , target_length , &target_perm);
 #endif
-		//½«Ä¿±êº¯ÊıÒªÌæ»»µÄÖ¸Áî±£´æÔÚtrampolineº¯ÊıÄÚ.
+		//å°†ç›®æ ‡å‡½æ•°è¦æ›¿æ¢çš„æŒ‡ä»¤ä¿å­˜åœ¨trampolineå‡½æ•°å†….
 		for( ; copy_bytes < target_length ; )
 		{
 			src = detour_copy_instruction(dst , src , NULL , NULL);
@@ -200,15 +200,15 @@ NTSTATUS __stdcall insert_detour(pbyte target
 		if (written)
 			*written = copy_bytes;
 
-		//ÔÚtrampolineº¯Êı½ÓÒ»¸öÌø×ªÖ¸Áî,
-		//Ìø×ªµ½Ä¿±êº¯ÊıÎ´Ìæ»»µÄµÚÒ»¸öÖ¸Áî
+		//åœ¨trampolineå‡½æ•°æ¥ä¸€ä¸ªè·³è½¬æŒ‡ä»¤,
+		//è·³è½¬åˆ°ç›®æ ‡å‡½æ•°æœªæ›¿æ¢çš„ç¬¬ä¸€ä¸ªæŒ‡ä»¤
 		if(!NT_SUCCESS(insert_jump(dst , target + copy_bytes , SIZE_OF_JMP)))
 			return STATUS_UNSUCCESSFUL;
 		
-		//ÔÚtrampolineº¯ÊıÄ©Î²Ğ´ÈëÌæ»»µÄÖ¸Áî³¤¶È.(ÓÃÓÚ»¹Ô­ºÍ¼ì²é)
+		//åœ¨trampolineå‡½æ•°æœ«å°¾å†™å…¥æ›¿æ¢çš„æŒ‡ä»¤é•¿åº¦.(ç”¨äºè¿˜åŸå’Œæ£€æŸ¥)
 		trampoline[DETOUR_TRAMPOLINE_SIZE - 1] = (byte)copy_bytes;
 		
-		//ÔÚÄ¿±êº¯ÊıÍ·²¿Ğ´ÈëÌø×ªÖ¸Áî,Ìø×ªµ½hookerº¯Êı
+		//åœ¨ç›®æ ‡å‡½æ•°å¤´éƒ¨å†™å…¥è·³è½¬æŒ‡ä»¤,è·³è½¬åˆ°hookerå‡½æ•°
 		if(!NT_SUCCESS(insert_jump(target , hooker , copy_bytes)))
 			return STATUS_UNSUCCESSFUL;
 

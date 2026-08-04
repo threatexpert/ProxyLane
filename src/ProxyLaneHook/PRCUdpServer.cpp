@@ -1,4 +1,4 @@
-#include "stdafx.h"
+ï»¿#include "stdafx.h"
 #include "PRCUdpServer.h"
 #include "GlobalProxy.h"
 #include "ProxyLog.h"
@@ -103,13 +103,13 @@ BOOL CPRCUdpServer::OnLocalThreadRegister(LPPRCClient lpPRCClient)
 	IProxySettings *pProxySettings = m_pGlobalProxy->GetSettingsInstance();
 	if(!pProxySettings->GetProxyInfo(lpPRCClient, &pisetting))
 	{
-		PrintText(_T("»ñÈ¡´úÀíĞÅÏ¢Ê§°Ü\r\n"));
+		PrintText(_T("è·å–ä»£ç†ä¿¡æ¯å¤±è´¥\r\n"));
 		return FALSE;
 	}
 
 	if(!m_ProxyTaskMgr.OnNewTask(lpPRCClient, &pisetting))
 	{
-		PrintText(_T("Ìí¼ÓÒ»¸öUDP´úÀíÈÎÎñÊ§°Ü.\r\n"));
+		PrintText(_T("æ·»åŠ ä¸€ä¸ªUDPä»£ç†ä»»åŠ¡å¤±è´¥.\r\n"));
 		return FALSE;
 	}
 

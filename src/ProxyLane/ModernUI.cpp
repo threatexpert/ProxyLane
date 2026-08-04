@@ -279,6 +279,12 @@ void CStatusLabel::DrawItem(LPDRAWITEMSTRUCT info)
 		border = RGB(191, 209, 250);
 		text = UiTheme::Accent();
 	}
+	else if (m_tone == TONE_WARNING)
+	{
+		fill = RGB(255, 247, 230);
+		border = RGB(245, 196, 113);
+		text = RGB(180, 83, 9);
+	}
 	else if (m_tone == TONE_SUCCESS)
 	{
 		fill = UiTheme::SuccessSoft();

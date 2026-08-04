@@ -1,10 +1,11 @@
-#pragma once
+Ôªø#pragma once
 
 #include "ProxyModule.h"
 #include "PRCPipeServer.h"
 #include "PRCTcpServer.h"
 #include "PRCUdpServer.h"
 #include "TimerQueue.h"
+#include <map>
 
 class CGlobalProxy;
 class CProxyDataHandle;
@@ -17,7 +18,7 @@ public:
 	CProxyReceptionCentre(CGlobalProxy *pGlobalProxy);
 	~CProxyReceptionCentre(void);
 
-	//÷ÿ‘ÿ
+	//ÈáçËΩΩ
 	BOOL GetPRCPipeName(LPSTR lpBuf, int bufsize);
 	IProxyTaskMgr* GetPTMInstance(int type);
 	IProxyDataHandle* GetPDHInstance();
@@ -42,6 +43,8 @@ public:
 	BOOL GetProxyInfo(LPPRCClient lpClientInfo, LPProxyInfo lpPI);
 
 	BOOL GetClientInfo(SOCKET accepted, LPPRCClient lpClientInfo, BOOL bpop=FALSE);
+	BOOL RegisterProcessIdentity(LPHookProcessIdentityInfo identity);
+	BOOL GetProcessIdentity(DWORD processId, LPWSTR appPath, DWORD appPathCount);
 
 
 protected:
@@ -81,6 +84,8 @@ private:
 	CProxyDataHandle *m_pProxyDataHandle;
 
 	CTSList<PRCClient> m_RegisteredClient;
+	std::map<DWORD, HookProcessIdentityInfo> m_ProcessIdentities;
+	CRITICAL_SECTION m_ProcessIdentityLock;
 
 public:
 

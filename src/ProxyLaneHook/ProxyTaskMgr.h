@@ -1,4 +1,4 @@
-#pragma once
+Ôªø#pragma once
 
 #include "structinfo.h"
 #include "TcpProxyTask.h"
@@ -18,7 +18,7 @@ public:
 	CProxyXTaskMgr(CProxyReceptionCentre *pPRC);
 	~CProxyXTaskMgr(void);
 
-	//÷ÿ‘ÿIProxyTaskMgr
+	//ÈáçËΩΩIProxyTaskMgr
 	virtual void OnAddTask(const LPPRCClient lpC, const LPProxyInfo lpPI);
 	virtual void OnDelTask(const LPPRCClient lpC);
 	virtual void EnumTask(IProxyTaskMgr *pCallBack);

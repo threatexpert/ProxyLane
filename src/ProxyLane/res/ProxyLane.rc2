@@ -1,13 +1,13 @@
 //
-// ProxyLane.RC2 - Microsoft Visual C++ ����ֱ�ӱ༭����Դ
+// ProxyLane.RC2 - Microsoft Visual C++ 不会直接编辑的资源
 //
 
 #ifdef APSTUDIO_INVOKED
-#error ���ļ������� Microsoft Visual C++ �༭
+#error 此文件不能由 Microsoft Visual C++ 编辑
 #endif //APSTUDIO_INVOKED
 
 
 /////////////////////////////////////////////////////////////////////////////
-// �ڴ˴������ֶ��༭����Դ...
+// 在此处添加手动编辑的资源...
 
 /////////////////////////////////////////////////////////////////////////////

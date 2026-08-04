@@ -1,4 +1,4 @@
-#pragma once
+ï»¿#pragma once
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
@@ -111,7 +111,7 @@ typedef struct _tagProxyInfo
 	};
 
 
-/////////////////////½á¹¹³ÉÔ±±äÁ¿
+/////////////////////ç»“æ„æˆå‘˜å˜é‡
 	string<128> szItemName;
 	string<32> strProxyType;
 	string<128> strProxyHost;
@@ -158,7 +158,7 @@ typedef struct  _tagProxySettingsInfo
 	BOOL bHookCreateProcess;
 	BOOL bHookLanIP;
 	BOOL bDisableLLMNR;
-	BOOL bBlockUDP;            // ½ûÖ¹ UDP£»ÓÅÏÈÓÚ bHookUDP£¬ÃüÖĞÔò sendto/recvfrom ÏµÁĞÖ±½ÓÊ§°Ü
+	BOOL bBlockUDP;            // ç¦æ­¢ UDPï¼›ä¼˜å…ˆäº bHookUDPï¼Œå‘½ä¸­åˆ™ sendto/recvfrom ç³»åˆ—ç›´æ¥å¤±è´¥
 }ProxySettingsInfo, *LPProxySettingsInfo;
 
 #define PSI_DNSOPT_LOCAL 0
@@ -184,8 +184,8 @@ typedef struct _tagPRCClient
 	_SockAddr srcAddr;
 	_SockAddr dstAddr;
 
-	DWORD uaFlag; //UDP Address Flag, Ä¬ÈÏ0
-	//¸ù¾İ±êÖ¾Î»ÔÚÇëÇó´úÀí·şÎñÆ÷UDPµØÖ·µÄÊ±ºò£¬±¾µØsocketµÄµØÖ·½«ÔÚudpAddrÖĞÈ¡µÃ
+	DWORD uaFlag; //UDP Address Flag, é»˜è®¤0
+	//æ ¹æ®æ ‡å¿—ä½åœ¨è¯·æ±‚ä»£ç†æœåŠ¡å™¨UDPåœ°å€çš„æ—¶å€™ï¼Œæœ¬åœ°socketçš„åœ°å€å°†åœ¨udpAddrä¸­å–å¾—
 	_SockAddr udpAddr;
 
 	DWORD reserved;
@@ -239,6 +239,12 @@ typedef struct _HookNewProcessInfo
 	DWORD dwThreadId;
 }HookNewProcessInfo, *LPHookNewProcessInfo;
 
+typedef struct _HookProcessIdentityInfo
+{
+	DWORD dwProcessId;
+	WCHAR szAppPath[MAX_PATH];
+}HookProcessIdentityInfo, *LPHookProcessIdentityInfo;
+
 //PRC Pipe Protocol Data Head
 typedef struct _tagPRCPDHead
 {
@@ -272,6 +278,8 @@ typedef struct _tagHookLogtext
 #define PRCPD_GET_PROXYINFO  8
 #define PRCPD_HOOKWSOCK_RESULT  9
 #define PRCPD_Logtext    10
+#define PRCPD_CHILD_INJECTION_RESULT 11
+#define PRCPD_REGISTER_PROCESS_IDENTITY 12
 
 #pragma pack(pop)
 

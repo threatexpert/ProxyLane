@@ -1,4 +1,4 @@
-/************************************************************************/
+ï»¿/************************************************************************/
 /*                                                                      */
 /************************************************************************/
 
@@ -128,7 +128,7 @@ public:
 
 	BOOL SetTimer(__in UINT_PTR nIDEvent, __in UINT uElapse)
 	{
-		//²ÎÊı2 µÄuElapse ±íÊ¾ ÔÚ uElapseÃëºó´¥·¢µÚÒ»´ÎOnTimer 
+		//å‚æ•°2 çš„uElapse è¡¨ç¤º åœ¨ uElapseç§’åè§¦å‘ç¬¬ä¸€æ¬¡OnTimer
 		return SetTimer(nIDEvent, uElapse, uElapse, WT_EXECUTEINTIMERTHREAD);
 	}
 
@@ -142,7 +142,7 @@ public:
 		return perTimer.KillTimer();
 	}
 
-	//²»ÄÜÔÚOnTimerÄÚ²¿µ÷ÓÃ£¬·ñÔò»á³öÏÖËøËÀ»òÆäËüÎÊÌâ
+	//ä¸èƒ½åœ¨OnTimerå†…éƒ¨è°ƒç”¨ï¼Œå¦åˆ™ä¼šå‡ºç°é”æ­»æˆ–å…¶å®ƒé—®é¢˜
 	BOOL KillAllTimer(BOOL bWait)
 	{
 		if(bWait == TRUE)

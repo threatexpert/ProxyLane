@@ -1,4 +1,4 @@
-#if !defined(AFX_TIMEOUTMONITOR_H__C5C2E8A2_5742_2F43_A6D5_F07BA59ECDEA__INCLUDED_)
+ï»¿#if !defined(AFX_TIMEOUTMONITOR_H__C5C2E8A2_5742_2F43_A6D5_F07BA59ECDEA__INCLUDED_)
 #define AFX_TIMEOUTMONITOR_H__C5C2E8A2_5742_2F43_A6D5_F07BA59ECDEA__INCLUDED_
 
 #if _MSC_VER > 1000
@@ -7,7 +7,7 @@
 
 
 
-//¸÷ÖÖ×´Ì¬µÄ³¬Ê±Ë÷Òı
+//å„ç§çŠ¶æ€çš„è¶…æ—¶ç´¢å¼•
 typedef enum 
 {
 	TM_0 = 0,

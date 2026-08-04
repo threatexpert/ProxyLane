@@ -69,6 +69,8 @@ IMPLEMENT_DYNAMIC(CPage1, CModernDialog)
 
 CPage1::CPage1(CWnd* pParent /*=NULL*/)
 	: CModernDialog(CPage1::IDD, pParent)
+	, m_profileDirty(FALSE)
+	, m_loadingProfile(TRUE)
 	, m_profileStore(g_ini)
 	, m_filterEditBaseHeight(0)
 {
@@ -121,6 +123,7 @@ void CPage1::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_RADIO_TAB_TARGET, m_radioTabTarget);
 	DDX_Control(pDX, IDC_STATIC_TestProxy, m_staticTestProxy);
 	DDX_Control(pDX, IDC_COMBO_CFGS, m_cfgls);
+	DDX_Control(pDX, IDC_BUTTON_SAVE_PROFILE, m_btnSaveProfile);
 }
 
 
@@ -131,7 +134,24 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_BN_CLICKED(IDCANCEL, &CPage1::OnBnClickedCancel)
 	ON_WM_DESTROY()
 	ON_BN_CLICKED(IDC_TestProxy, &CPage1::OnBnClickedTestproxy)
+	ON_BN_CLICKED(IDC_BUTTON_SAVE_PROFILE, &CPage1::OnCfgoptSave)
 	ON_EN_CHANGE(IDC_EDIT_ADDR, &CPage1::OnEnChangeEditAddr)
+	ON_EN_CHANGE(IDC_EDIT_PORT, &CPage1::OnProfileFieldChanged)
+	ON_EN_CHANGE(IDC_EDIT_USER, &CPage1::OnProfileFieldChanged)
+	ON_EN_CHANGE(IDC_EDIT_PASS, &CPage1::OnProfileFieldChanged)
+	ON_EN_CHANGE(IDC_EDIT_CHILDFILTER, &CPage1::OnProfileFieldChanged)
+	ON_EN_CHANGE(IDC_EDIT_TARGETFILTER, &CPage1::OnProfileFieldChanged)
+	ON_CBN_SELCHANGE(IDC_CB_PROXYTYPE, &CPage1::OnProfileFieldChanged)
+	ON_CBN_EDITCHANGE(IDC_COMBO_CFGS, &CPage1::OnCbnEditchangeComboCfgs)
+	ON_BN_CLICKED(IDC_CHECK_HOOKTCP, &CPage1::OnProfileFieldChanged)
+	ON_BN_CLICKED(IDC_CHECK_HOOK_UDP, &CPage1::OnProfileFieldChanged)
+	ON_BN_CLICKED(IDC_CHECK_BLOCKUDP, &CPage1::OnProfileFieldChanged)
+	ON_BN_CLICKED(IDC_RADIO_DNSLOCAL, &CPage1::OnProfileFieldChanged)
+	ON_BN_CLICKED(IDC_RADIO_DNSREMOTE, &CPage1::OnProfileFieldChanged)
+	ON_BN_CLICKED(IDC_RADIO_CHILDFILTER_EXCLUDE, &CPage1::OnProfileFieldChanged)
+	ON_BN_CLICKED(IDC_RADIO_CHILDFILTER_INCLUDE, &CPage1::OnProfileFieldChanged)
+	ON_BN_CLICKED(IDC_RADIO_TARGETFILTER_BYPASS, &CPage1::OnProfileFieldChanged)
+	ON_BN_CLICKED(IDC_RADIO_TARGETFILTER_PROXY, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_BUTTON_CfgOpt, &CPage1::OnBnClickedButtonCfgopt)
 	ON_COMMAND(ID_CFGOPT_Load, &CPage1::OnCfgoptLoad)
 	ON_COMMAND(ID_CFGOPT_Save, &CPage1::OnCfgoptSave)
@@ -151,6 +171,7 @@ BOOL CPage1::OnInitDialog()
 	m_OK.SetVisualStyle(CModernButton::STYLE_PRIMARY);
 	m_Cancel.SetVisualStyle(CModernButton::STYLE_DANGER);
 	m_btnTest.SetVisualStyle(CModernButton::STYLE_SECONDARY);
+	m_btnSaveProfile.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	CreateWorkflowCard();
 	UpdateProxyStateUi();
 
@@ -204,6 +225,8 @@ BOOL CPage1::OnInitDialog()
 	m_bDisableLLMNR = g_ini.GetInt(_T("options"), _T("DisableLLMNR"), 1);
 
 	ShowTab(0);
+	m_loadingProfile = FALSE;
+	SetProfileDirty(FALSE);
 
 	return TRUE;
 }
@@ -500,6 +523,99 @@ BOOL CPage1::LoadProfileByName(LPCTSTR profileName)
 	return TRUE;
 }
 
+void CPage1::SetProfileDirty(BOOL dirty)
+{
+	m_profileDirty = dirty;
+	if (m_btnSaveProfile.GetSafeHwnd())
+		m_btnSaveProfile.EnableWindow(dirty);
+
+	if (!m_bIsTesting && m_staticTestProxy.GetSafeHwnd())
+	{
+		if (dirty)
+			m_staticTestProxy.SetStatus(_T("更改未保存"), CStatusLabel::TONE_WARNING);
+		else
+			UpdateProxyStateUi();
+	}
+}
+
+void CPage1::OnProfileFieldChanged()
+{
+	if (!m_loadingProfile)
+		SetProfileDirty(TRUE);
+}
+
+void CPage1::OnCbnEditchangeComboCfgs()
+{
+	if (m_loadingProfile)
+		return;
+	m_cfgls.GetWindowText(m_draftProfileName);
+	m_draftProfileName.Trim();
+	SetProfileDirty(TRUE);
+}
+
+BOOL CPage1::SaveCurrentProfile(LPCTSTR profileName)
+{
+	CfgProxyItem item;
+	if (profileName && profileName[0])
+		item.strName = profileName;
+	else
+		m_cfgls.GetWindowText(item.strName);
+	item.strName.Trim();
+
+	if (item.strName.IsEmpty())
+	{
+		MessageBox(_T("请先输入一个配置名称。"), _T("无法保存配置"), MB_ICONINFORMATION);
+		return FALSE;
+	}
+	if (!GetSettings(&item.pi))
+	{
+		MessageBox(_T("请检查代理地址和端口是否填写正确。"), _T("无法保存配置"), MB_ICONERROR);
+		return FALSE;
+	}
+
+	m_profileStore.SetLastSelected(item.strName);
+	UIGetCfg(&item);
+	m_profileStore.Save(item);
+
+	int index = m_cfgls.FindStringExact(-1, item.strName);
+	if (index == CB_ERR)
+		index = m_cfgls.AddString(item.strName);
+	m_loadingProfile = TRUE;
+	m_cfgls.SetCurSel(index);
+	m_cfgls.SetWindowText(item.strName);
+	m_loadingProfile = FALSE;
+	m_loadedProfileName = item.strName;
+	m_draftProfileName = item.strName;
+	SetProfileDirty(FALSE);
+	return TRUE;
+}
+
+void CPage1::RestoreProfileSelection()
+{
+	m_loadingProfile = TRUE;
+	int index = m_loadedProfileName.IsEmpty()
+		? CB_ERR : m_cfgls.FindStringExact(-1, m_loadedProfileName);
+	m_cfgls.SetCurSel(index);
+	m_cfgls.SetWindowText(m_draftProfileName);
+	m_loadingProfile = FALSE;
+}
+
+BOOL CPage1::ConfirmDiscardUnsavedChanges()
+{
+	if (!m_profileDirty)
+		return TRUE;
+
+	const int answer = MessageBox(
+		_T("当前代理设置尚未保存。\r\n\r\n选择“是”保存，选择“否”放弃更改。"),
+		_T("未保存的代理设置"),
+		MB_YESNOCANCEL | MB_ICONWARNING);
+	if (answer == IDCANCEL)
+		return FALSE;
+	if (answer == IDYES)
+		return SaveCurrentProfile(m_draftProfileName);
+	return TRUE;
+}
+
 BOOL CPage1::StartProxy(BOOL showErrors)
 {
 	if (m_proxyController.IsRunning())
@@ -601,7 +717,7 @@ void CPage1::OnBnClickedTestproxy()
 		m_pProxyTester->Release();
 		m_pProxyTester = NULL;
 		m_bIsTesting = FALSE;
-		m_btnTest.SetWindowText(_T("测试连接"));
+		m_btnTest.SetWindowText(_T("测试当前设置"));
 		UpdateProxyStateUi();
 		return;
 	}
@@ -695,8 +811,14 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 		if(nCode == 0)
 		{
 			szText = _T("代理服务器工作正常");
-			m_staticTestProxy.SetStatus(_T("测试通过"), CStatusLabel::TONE_SUCCESS);
-			MessageBox(szText);
+			if (m_profileDirty)
+		{
+				m_staticTestProxy.SetStatus(_T("测试通过 · 未保存"), CStatusLabel::TONE_WARNING);
+				szText += _T("\r\n\r\n当前设置已应用，但尚未保存到配置。");
+			}
+			else
+				m_staticTestProxy.SetStatus(_T("测试通过 · 已保存"), CStatusLabel::TONE_SUCCESS);
+			MessageBox(szText, _T("测试当前设置"), MB_ICONINFORMATION);
 		}else
 		{
 			switch (nCode)
@@ -722,13 +844,14 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 				szText.Format(_T("和代理服务器协商失败，错误号: %d"), nCode);
 				break;
 			}
-			m_staticTestProxy.SetStatus(_T("测试失败"), CStatusLabel::TONE_DANGER);
+			m_staticTestProxy.SetStatus(m_profileDirty
+				? _T("测试失败 · 未保存") : _T("测试失败"), CStatusLabel::TONE_DANGER);
 			MessageBox(szText);
 		}
 
 		pTester->Release();
 		m_pProxyTester = NULL;
-		m_btnTest.SetWindowText(_T("测试连接"));
+		m_btnTest.SetWindowText(_T("测试当前设置"));
 		m_bIsTesting = FALSE;
 
 	}
@@ -750,6 +873,7 @@ void CPage1::OnEnChangeEditAddr()
 		m_edit_HostName.SetWindowText(strHost);
 		m_edit_Port.SetWindowText(strPort);
 	}
+	OnProfileFieldChanged();
 }
 
 void CPage1::OnBnClickedButtonCfgopt()
@@ -771,8 +895,14 @@ void CPage1::OnBnClickedButtonCfgopt()
 void CPage1::OnCfgoptLoad()
 {
 	CfgProxyItem item;
-	
+	CString previousDraftName = m_draftProfileName;
 	m_cfgls.GetWindowText(item.strName);
+	if (!ConfirmDiscardUnsavedChanges())
+	{
+		m_draftProfileName = previousDraftName;
+		RestoreProfileSelection();
+		return;
+	}
 
 	if (m_profileStore.Load(item))
 	{
@@ -783,28 +913,20 @@ void CPage1::OnCfgoptLoad()
 
 void CPage1::OnCfgoptSave()
 {
-	CfgProxyItem item;
-
-	m_cfgls.GetWindowText(item.strName);
-	item.strName.Trim();
-	if (item.strName.IsEmpty())
-	{
-		MessageBox(_T("请先输入一个配置名称。"), _T("无法保存配置"), MB_ICONINFORMATION);
-		return;
-	}
-	m_profileStore.SetLastSelected(item.strName);
-
-	UIGetCfg(&item);
-	m_profileStore.Save(item);
-
-	if (m_cfgls.FindStringExact(-1, item.strName) == CB_ERR)
-	{
-		m_cfgls.AddString(item.strName);
-	}
+	m_cfgls.GetWindowText(m_draftProfileName);
+	m_draftProfileName.Trim();
+	SaveCurrentProfile(m_draftProfileName);
 }
 
 void CPage1::OnCfgoptDelete()
 {
+	if (m_profileDirty && MessageBox(
+		_T("当前更改尚未保存。删除配置将放弃这些更改，是否继续？"),
+		_T("删除配置"), MB_OKCANCEL | MB_ICONWARNING) != IDOK)
+	{
+		return;
+	}
+
 	CString strName;
 	int idx = m_cfgls.GetCurSel();
 	if (idx >= 0)
@@ -814,12 +936,20 @@ void CPage1::OnCfgoptDelete()
 		{
 			m_profileStore.Delete(strName);
 			m_cfgls.DeleteString(idx);
+			m_loadingProfile = TRUE;
+			m_cfgls.SetCurSel(-1);
+			m_cfgls.SetWindowText(strName);
+			m_loadingProfile = FALSE;
+			m_loadedProfileName.Empty();
+			m_draftProfileName = strName;
+			SetProfileDirty(TRUE);
 		}
 	}
 }
 
 void CPage1::UILoadCfg( CfgProxyItem *item )
 {
+	m_loadingProfile = TRUE;
 	if (item == NULL)
 	{
 		m_cbProxyType.SelectString(0, _T("SOCKS5"));
@@ -878,7 +1008,10 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_radioTargetFilterBypass.SetCheck(bTgtProxy ? BST_UNCHECKED : BST_CHECKED);
 		UpdateChildFilterEnable();
 	}
-
+	m_loadedProfileName = item ? item->strName : _T("");
+	m_draftProfileName = m_loadedProfileName;
+	m_loadingProfile = FALSE;
+	SetProfileDirty(FALSE);
 }
 
 void CPage1::UIGetCfg( CfgProxyItem *item )
@@ -908,6 +1041,7 @@ void CPage1::UIGetCfg( CfgProxyItem *item )
 void CPage1::OnBnClickedHookChildProcess()
 {
 	UpdateChildFilterEnable();
+	OnProfileFieldChanged();
 }
 
 void CPage1::UpdateChildFilterEnable()
@@ -983,8 +1117,14 @@ void CPage1::OnBnClickedWorkflowNext()
 void CPage1::OnCbnSelchangeComboCfgs()
 {
 	CfgProxyItem item;
-
+	CString previousDraftName = m_draftProfileName;
 	m_cfgls.GetLBText(m_cfgls.GetCurSel(), item.strName);
+	if (!ConfirmDiscardUnsavedChanges())
+	{
+		m_draftProfileName = previousDraftName;
+		RestoreProfileSelection();
+		return;
+	}
 
 	if (m_profileStore.Load(item))
 	{
@@ -998,7 +1138,9 @@ void CPage1::UpdateProxyStateUi()
 	BOOL running = m_proxyController.IsRunning();
 	m_OK.EnableWindow(!running);
 	m_Cancel.EnableWindow(running);
-	if (running)
+	if (m_profileDirty)
+		m_staticTestProxy.SetStatus(_T("更改未保存"), CStatusLabel::TONE_WARNING);
+	else if (running)
 		m_staticTestProxy.SetStatus(_T("代理运行中"), CStatusLabel::TONE_SUCCESS);
 	else
 		m_staticTestProxy.SetStatus(_T("代理未启动"), CStatusLabel::TONE_NEUTRAL);

@@ -36,12 +36,25 @@ void CProxyLog::LogNewProxyTask(const LPPRCClient lpC)
 	}
 }
 
-void CProxyLog::OnNewProcess(LPHookNewProcessInfo lphnpi)
+BOOL CProxyLog::OnNewProcess(LPHookNewProcessInfo lphnpi)
+{
+	BOOL shouldProxy = TRUE;
+	IProxyLog *p = IProxyLog::m_pNext;
+	while(p)
+	{
+		if (!p->OnNewProcess(lphnpi))
+			shouldProxy = FALSE;
+		p = p->m_pNext;
+	}
+	return shouldProxy;
+}
+
+void CProxyLog::OnChildInjectionResult(LPHookNewProcessInfo lphnpi, BOOL succeeded)
 {
 	IProxyLog *p = IProxyLog::m_pNext;
 	while(p)
 	{
-		p->OnNewProcess(lphnpi);
+		p->OnChildInjectionResult(lphnpi, succeeded);
 		p = p->m_pNext;
 	}
 }

@@ -11,7 +11,8 @@ public:
 
 	void LogText(LPCWSTR lpText);
 	void LogNewProxyTask(const LPPRCClient lpC);
-	void OnNewProcess(LPHookNewProcessInfo lphnpi);
+	BOOL OnNewProcess(LPHookNewProcessInfo lphnpi);
+	void OnChildInjectionResult(LPHookNewProcessInfo lphnpi, BOOL succeeded);
 	void OnHookWsock(LPHookWSockResult res);
 	void OnHookLogtext(LPHookLogtext log);
 

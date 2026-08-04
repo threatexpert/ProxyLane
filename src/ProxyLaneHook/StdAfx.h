@@ -1,4 +1,4 @@
-// stdafx.h : include file for standard system include files,
+﻿// stdafx.h : include file for standard system include files,
 //  or project specific include files that are used frequently, but
 //      are changed infrequently
 //
@@ -16,28 +16,28 @@
 #endif
 
 #ifndef VC_EXTRALEAN
-#define VC_EXTRALEAN		// �� Windows ͷ���ų�����ʹ�õ�����
+#define VC_EXTRALEAN		// 从 Windows 头中排除极少使用的资料
 #endif
 
-// ���������ʹ��������ָ����ƽ̨֮ǰ��ƽ̨�����޸�����Ķ��塣
-// �йز�ͬƽ̨����Ӧֵ��������Ϣ����ο� MSDN��
-#ifndef WINVER				// ����ʹ���ض��� Windows XP ����߰汾�Ĺ��ܡ�
-#define WINVER 0x0501		// ����ֵ����Ϊ��Ӧ��ֵ���������� Windows �������汾��
+// 如果您必须使用下列所指定的平台之前的平台，则修改下面的定义。
+// 有关不同平台的相应值的最新信息，请参考 MSDN。
+#ifndef WINVER				// 允许使用特定于 Windows XP 或更高版本的功能。
+#define WINVER 0x0501		// 将此值更改为相应的值，以适用于 Windows 的其他版本。
 #endif
 
-#ifndef _WIN32_WINNT		// ����ʹ���ض��� Windows XP ����߰汾�Ĺ��ܡ�
-#define _WIN32_WINNT 0x0600	// ����ֵ����Ϊ��Ӧ��ֵ���������� Windows �������汾��
+#ifndef _WIN32_WINNT		// 允许使用特定于 Windows XP 或更高版本的功能。
+#define _WIN32_WINNT 0x0600	// 将此值更改为相应的值，以适用于 Windows 的其他版本。
 #endif						
 
-#ifndef _WIN32_WINDOWS		// ����ʹ���ض��� Windows 98 ����߰汾�Ĺ��ܡ�
-#define _WIN32_WINDOWS 0x0410 // ��������Ϊ�ʺ� Windows Me ����߰汾����Ӧֵ��
+#ifndef _WIN32_WINDOWS		// 允许使用特定于 Windows 98 或更高版本的功能。
+#define _WIN32_WINDOWS 0x0410 // 将它更改为适合 Windows Me 或更高版本的相应值。
 #endif
 
-#ifndef _WIN32_IE			// ����ʹ���ض��� IE 6.0 ����߰汾�Ĺ��ܡ�
-#define _WIN32_IE 0x0600	// ����ֵ����Ϊ��Ӧ��ֵ���������� IE �������汾��ֵ��
+#ifndef _WIN32_IE			// 允许使用特定于 IE 6.0 或更高版本的功能。
+#define _WIN32_IE 0x0600	// 将此值更改为相应的值，以适用于 IE 的其他版本。值。
 #endif
 
-#define _ATL_CSTRING_EXPLICIT_CONSTRUCTORS	// ĳЩ CString ���캯��������ʽ��
+#define _ATL_CSTRING_EXPLICIT_CONSTRUCTORS	// 某些 CString 构造函数将是显式的
 
 
 
@@ -46,7 +46,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 
 
-#define WIN32_LEAN_AND_MEAN		// �� Windows ͷ���ų�����ʹ�õ�����
+#define WIN32_LEAN_AND_MEAN		// 从 Windows 头中排除极少使用的资料
 #define _WIN32_DCOM
 #define _CRTDBG_MAP_ALLOC
 #include <stdlib.h>

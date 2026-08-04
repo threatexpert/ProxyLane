@@ -1,6 +1,6 @@
-// stdafx.h : ��׼ϵͳ�����ļ��İ����ļ���
-// ���Ǿ���ʹ�õ��������ĵ�
-// �ض�����Ŀ�İ����ļ�
+﻿// stdafx.h : 标准系统包含文件的包含文件，
+// 或是经常使用但不常更改的
+// 特定于项目的包含文件
 
 #pragma once
 
@@ -9,47 +9,47 @@
 #endif
 
 #ifndef VC_EXTRALEAN
-#define VC_EXTRALEAN		// �� Windows ͷ���ų�����ʹ�õ�����
+#define VC_EXTRALEAN		// 从 Windows 头中排除极少使用的资料
 #endif
 
-// ���������ʹ��������ָ����ƽ̨֮ǰ��ƽ̨�����޸�����Ķ��塣
-// �йز�ͬƽ̨����Ӧֵ��������Ϣ����ο� MSDN��
-#ifndef WINVER				// ����ʹ���ض��� Windows XP ����߰汾�Ĺ��ܡ�
-#define WINVER 0x0501		// ����ֵ����Ϊ��Ӧ��ֵ���������� Windows �������汾��
+// 如果您必须使用下列所指定的平台之前的平台，则修改下面的定义。
+// 有关不同平台的相应值的最新信息，请参考 MSDN。
+#ifndef WINVER				// 允许使用特定于 Windows XP 或更高版本的功能。
+#define WINVER 0x0501		// 将此值更改为相应的值，以适用于 Windows 的其他版本。
 #endif
 
-#ifndef _WIN32_WINNT		// ����ʹ���ض��� Windows XP ����߰汾�Ĺ��ܡ�
-#define _WIN32_WINNT 0x0600	// ����ֵ����Ϊ��Ӧ��ֵ���������� Windows �������汾��
+#ifndef _WIN32_WINNT		// 允许使用特定于 Windows XP 或更高版本的功能。
+#define _WIN32_WINNT 0x0600	// 将此值更改为相应的值，以适用于 Windows 的其他版本。
 #endif						
 
-#ifndef _WIN32_WINDOWS		// ����ʹ���ض��� Windows 98 ����߰汾�Ĺ��ܡ�
-#define _WIN32_WINDOWS 0x0410 // ��������Ϊ�ʺ� Windows Me ����߰汾����Ӧֵ��
+#ifndef _WIN32_WINDOWS		// 允许使用特定于 Windows 98 或更高版本的功能。
+#define _WIN32_WINDOWS 0x0410 // 将它更改为适合 Windows Me 或更高版本的相应值。
 #endif
 
-#ifndef _WIN32_IE			// ����ʹ���ض��� IE 6.0 ����߰汾�Ĺ��ܡ�
-#define _WIN32_IE 0x0600	// ����ֵ����Ϊ��Ӧ��ֵ���������� IE �������汾��ֵ��
+#ifndef _WIN32_IE			// 允许使用特定于 IE 6.0 或更高版本的功能。
+#define _WIN32_IE 0x0600	// 将此值更改为相应的值，以适用于 IE 的其他版本。值。
 #endif
 
-#define _ATL_CSTRING_EXPLICIT_CONSTRUCTORS	// ĳЩ CString ���캯��������ʽ��
+#define _ATL_CSTRING_EXPLICIT_CONSTRUCTORS	// 某些 CString 构造函数将是显式的
 
-// �ر� MFC ��ĳЩ�����������ɷ��ĺ��Եľ�����Ϣ������
+// 关闭 MFC 对某些常见但经常可放心忽略的警告消息的隐藏
 #define _AFX_ALL_WARNINGS
 
 #define _CRT_SECURE_NO_WARNINGS
 
-#include <afxwin.h>         // MFC ��������ͱ�׼���
-#include <afxext.h>         // MFC ��չ
+#include <afxwin.h>         // MFC 核心组件和标准组件
+#include <afxext.h>         // MFC 扩展
 
 
-#include <afxdisp.h>        // MFC �Զ�����
+#include <afxdisp.h>        // MFC 自动化类
 
 
 
 #ifndef _AFX_NO_OLE_SUPPORT
-#include <afxdtctl.h>		// MFC �� Internet Explorer 4 �����ؼ���֧��
+#include <afxdtctl.h>		// MFC 对 Internet Explorer 4 公共控件的支持
 #endif
 #ifndef _AFX_NO_AFXCMN_SUPPORT
-#include <afxcmn.h>			// MFC �� Windows �����ؼ���֧��
+#include <afxcmn.h>			// MFC 对 Windows 公共控件的支持
 #endif // _AFX_NO_AFXCMN_SUPPORT
 
 

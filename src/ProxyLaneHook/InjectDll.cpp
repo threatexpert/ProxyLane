@@ -1,4 +1,4 @@
-#include "stdafx.h"
+ï»¿#include "stdafx.h"
 #include "InjectDll.h"
 #include "../remotecode/remoteCode.h"
 
@@ -102,14 +102,14 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 		goto __CleanUp;
 	}
 
-	//¸Ä±äEIPµ½remoteCodeº¯ÊıÖ´ĞĞÍêºó·µ»ØÕâ¸öÖµ£¬ÓÃÒâ¾ÍÊÇ»Ö¸´Ö®Ç°µÄEAX
+	//æ”¹å˜EIPåˆ°remoteCodeå‡½æ•°æ‰§è¡Œå®Œåè¿”å›è¿™ä¸ªå€¼ï¼Œç”¨æ„å°±æ˜¯æ¢å¤ä¹‹å‰çš„EAX
 	param_myapi.retval = ctx.Rax;
 
 	lpParam = VirtualAllocEx(hProc, 0, sizeof(myapi), MEM_COMMIT, PAGE_READWRITE);
 	lpSC = VirtualAllocEx(hProc, 0, sizeof(sc_ldr), MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 	lpJmper = VirtualAllocEx(hProc, 0, sizeof(lvJmper), MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 	lpROnldParam = VirtualAllocEx(hProc, 0, MAX_PATH, MEM_COMMIT, PAGE_READWRITE);
-	if (!lpParam || !lpSC || !lpJmper)
+	if (!lpParam || !lpSC || !lpJmper || !lpROnldParam)
 	{
 		goto __CleanUp;
 	}
@@ -129,8 +129,8 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 		goto __CleanUp;
 	}
 
-	//×¼±¸¸ü¸ÄÖ÷Ïß³ÌµÄeip£¬ÏÈÖ´ĞĞÎÒµÄÒ»¸öº¯Êı
-	//ÏÈÅäÖÃÒ»¶ÎÌø×ª²¢µ÷ÓÃremoteCodeµÄ´úÂë
+	//å‡†å¤‡æ›´æ”¹ä¸»çº¿ç¨‹çš„eipï¼Œå…ˆæ‰§è¡Œæˆ‘çš„ä¸€ä¸ªå‡½æ•°
+	//å…ˆé…ç½®ä¸€æ®µè·³è½¬å¹¶è°ƒç”¨remoteCodeçš„ä»£ç 
 
 	*(DWORD_PTR*)&lvJmper[2] = (DWORD_PTR)ctx.Rip;
 	*(DWORD_PTR*)&lvJmper[0x13] = (DWORD_PTR)lpParam;
@@ -223,14 +223,14 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 		goto __CleanUp;
 	}
 
-	//¸Ä±äEIPµ½remoteCodeº¯ÊıÖ´ĞĞÍêºó·µ»ØÕâ¸öÖµ£¬ÓÃÒâ¾ÍÊÇ»Ö¸´Ö®Ç°µÄEAX
+	//æ”¹å˜EIPåˆ°remoteCodeå‡½æ•°æ‰§è¡Œå®Œåè¿”å›è¿™ä¸ªå€¼ï¼Œç”¨æ„å°±æ˜¯æ¢å¤ä¹‹å‰çš„EAX
 	param_myapi.retval = ctx.Eax;
 
 	lpParam = VirtualAllocEx(hProc, 0, sizeof(myapi), MEM_COMMIT, PAGE_READWRITE);
 	lpSC = VirtualAllocEx(hProc, 0, sizeof(sc_ldr), MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 	lpJmper = VirtualAllocEx(hProc, 0, sizeof(_JMPER), MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 	lpROnldParam = VirtualAllocEx(hProc, 0, MAX_PATH, MEM_COMMIT, PAGE_READWRITE);
-	if (!lpParam || !lpSC || !lpJmper)
+	if (!lpParam || !lpSC || !lpJmper || !lpROnldParam)
 	{
 		goto __CleanUp;
 	}
@@ -250,15 +250,15 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 		goto __CleanUp;
 	}
 
-	//×¼±¸¸ü¸ÄÖ÷Ïß³ÌµÄeip£¬ÏÈÖ´ĞĞÎÒµÄÒ»¸öº¯Êı
-	//ÏÈÅäÖÃÒ»¶ÎÌø×ª²¢µ÷ÓÃremoteCodeµÄ´úÂë
+	//å‡†å¤‡æ›´æ”¹ä¸»çº¿ç¨‹çš„eipï¼Œå…ˆæ‰§è¡Œæˆ‘çš„ä¸€ä¸ªå‡½æ•°
+	//å…ˆé…ç½®ä¸€æ®µè·³è½¬å¹¶è°ƒç”¨remoteCodeçš„ä»£ç 
 	lvJmper.pushAddr1 = 0x68;
 	lvJmper.addr1 = (DWORD)lpParam;
 	lvJmper.pushAddr2 = 0x68;
-	lvJmper.addr2 = (DWORD)ctx.Eip;//!!ÕâÀïÊÇ·µ»ØµØÖ·
+	lvJmper.addr2 = (DWORD)ctx.Eip;//!!è¿™é‡Œæ˜¯è¿”å›åœ°å€
 	lvJmper.pushAddr3 = 0x68;
 	lvJmper.addr3 = (DWORD)lpSC;
-	lvJmper.retn = 0xc3;//²»ÓÃcall£¬¶øÊÇÓÃpush ret£¬ËùÒÔÉÏÃæµÄaddr2ÊÇ·µ»ØµØÖ·,·µ»Øµ½Ô­À´µÄeip
+	lvJmper.retn = 0xc3;//ä¸ç”¨callï¼Œè€Œæ˜¯ç”¨push retï¼Œæ‰€ä»¥ä¸Šé¢çš„addr2æ˜¯è¿”å›åœ°å€,è¿”å›åˆ°åŸæ¥çš„eip
 
 	if (!WriteProcessMemory(hProc, lpJmper, &lvJmper, sizeof(lvJmper), NULL))
 	{

@@ -80,6 +80,7 @@ public:
 	{
 		TONE_NEUTRAL,
 		TONE_INFO,
+		TONE_WARNING,
 		TONE_SUCCESS,
 		TONE_DANGER
 	};

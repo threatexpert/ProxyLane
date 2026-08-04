@@ -1,4 +1,4 @@
-
+ï»¿
 
 
 #pragma once
@@ -83,13 +83,13 @@ __declspec(naked) trampoline \
 	__asm { nop };\
 }
 //////////////////////////////////////////////////////////////////////////
-//¸Ã½Ó¿ÚÔÚÇı¶¯²ãµ÷ÓÃ»á³öÎÊÌâ!!!!
+//è¯¥æ¥å£åœ¨é©±åŠ¨å±‚è°ƒç”¨ä¼šå‡ºé—®é¢˜!!!!
 NTSTATUS __stdcall hook_function_with_trampoline(pbyte trampoline
 										 , pbyte hooker
 										 , pbyte*	real_trampoline
 										 , pbyte* real_target);
 
-//Çı¶¯Ö»ÄÜµ÷ÓÃÕâ¸ö½Ó¿Ú
+//é©±åŠ¨åªèƒ½è°ƒç”¨è¿™ä¸ªæ¥å£
 NTSTATUS __stdcall hook_function_with_empty_trampoline(pbyte trampoline
 											 , pbyte target
 											 , pbyte hooker

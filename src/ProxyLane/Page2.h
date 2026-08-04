@@ -30,7 +30,8 @@ public:
 	////重载IProxyLog的成员函数
 	void LogText(LPCWSTR lpText);
 	void LogNewProxyTask(const LPPRCClient lpC){}
-	void OnNewProcess(LPHookNewProcessInfo lphnpi){}
+	BOOL OnNewProcess(LPHookNewProcessInfo lphnpi){ return TRUE; }
+	void OnChildInjectionResult(LPHookNewProcessInfo lphnpi, BOOL succeeded);
 	void OnHookWsock(LPHookWSockResult res);
 	void OnHookLogtext(LPHookLogtext log);
 

@@ -1,4 +1,4 @@
-/************************************************************************/
+ï»¿/************************************************************************/
 /*                                                                      */
 /*                                                                      */
 /************************************************************************/
@@ -13,6 +13,7 @@
 
 CProxyReceptionCentre::CProxyReceptionCentre(CGlobalProxy *pGlobalProxy)
 {
+	InitializeCriticalSection(&m_ProcessIdentityLock);
 	m_hPRCThread = NULL;
 	m_dwPRCThreadId = 0;
 	m_PRCWnd = NULL;
@@ -28,6 +29,7 @@ CProxyReceptionCentre::CProxyReceptionCentre(CGlobalProxy *pGlobalProxy)
 CProxyReceptionCentre::~CProxyReceptionCentre(void)
 {
 	delete m_pProxyDataHandle;
+	DeleteCriticalSection(&m_ProcessIdentityLock);
 }
 //
 //BOOL CProxyReceptionCentre::InitPRCWnd()
@@ -93,7 +95,7 @@ BOOL CProxyReceptionCentre::CreatePRC()
 	m_hTestEvent = CreateEvent(0, 0, 0, 0);
 	if(m_hTestEvent == NULL)
 	{
-		//
+		WSACleanup();
 		return FALSE;
 	}
 
@@ -104,10 +106,21 @@ BOOL CProxyReceptionCentre::CreatePRC()
 		//szError
 		CloseHandle(m_hTestEvent);
 		m_hTestEvent = NULL;
+		WSACleanup();
 		return FALSE;
 	}
 
-	ResumeThread(m_hPRCThread);
+	if (ResumeThread(m_hPRCThread) == (DWORD)-1)
+	{
+		if (TerminateThread(m_hPRCThread, 0))
+			WaitForSingleObject(m_hPRCThread, INFINITE);
+		CloseHandle(m_hPRCThread);
+		m_hPRCThread = NULL;
+		CloseHandle(m_hTestEvent);
+		m_hTestEvent = NULL;
+		WSACleanup();
+		return FALSE;
+	}
 	WaitForSingleObject(m_hTestEvent, INFINITE);
 
 	if(m_ThreadStatus != threadstatus_running)
@@ -116,6 +129,7 @@ BOOL CProxyReceptionCentre::CreatePRC()
 		m_hPRCThread = NULL;
 		CloseHandle(m_hTestEvent);
 		m_hTestEvent = NULL;
+		WSACleanup();
 		return FALSE;
 	}
 
@@ -129,7 +143,7 @@ BOOL CProxyReceptionCentre::DestroyPRC()
 
 	if (m_dwPRCThreadId == GetCurrentThreadId())
 	{
-		//±ÜÃâÔÚ»Øµ÷ÖÐÊÔÍ¼µÈ´ý×Ô¼ºÍË³ö
+		//é¿å…åœ¨å›žè°ƒä¸­è¯•å›¾ç­‰å¾…è‡ªå·±é€€å‡º
 		ATLASSERT(FALSE);
 		return FALSE;
 	}
@@ -223,39 +237,39 @@ BOOL CProxyReceptionCentre::StartupPRCServer()
 		m_pTcpServer = new CPRCTcpServer(this);
 		if(m_pTcpServer == NULL)
 		{
-			m_szLastError = _T("´´½¨ PRCTcpServer Ê§°Ü");
+			m_szLastError = _T("åˆ›å»º PRCTcpServer å¤±è´¥");
 			break;
 		}
 
 		if(!m_pTcpServer->StartupServer())
 		{
-			m_szLastError = _T("Æô¶¯ PRCTcpServer Ê§°Ü");
+			m_szLastError = _T("å¯åŠ¨ PRCTcpServer å¤±è´¥");
 			break;
 		}
 
 		m_pUdpServer = new CPRCUdpServer(this);
 		if(m_pUdpServer == NULL)
 		{
-			m_szLastError = _T("´´½¨ CPRCUdpServer Ê§°Ü");
+			m_szLastError = _T("åˆ›å»º CPRCUdpServer å¤±è´¥");
 			break;
 		}
 
 		if(!m_pUdpServer->StartupServer())
 		{
-			m_szLastError = _T("Æô¶¯ CPRCUdpServer Ê§°Ü");
+			m_szLastError = _T("å¯åŠ¨ CPRCUdpServer å¤±è´¥");
 			break;
 		}
 
 		m_pPipeServer = new CPRCPipeServer(this);
 		if(m_pPipeServer == NULL)
 		{
-			m_szLastError = _T("´´½¨ CPRCPipeServer Ê§°Ü");
+			m_szLastError = _T("åˆ›å»º CPRCPipeServer å¤±è´¥");
 			break;
 		}
 
 		if(!m_pPipeServer->StartupServer())
 		{
-			m_szLastError = _T("Æô¶¯ CPRCPipeServer Ê§°Ü");
+			m_szLastError = _T("å¯åŠ¨ CPRCPipeServer å¤±è´¥");
 			break;
 		}
 
@@ -329,19 +343,57 @@ IProxyDataHandle* CProxyReceptionCentre::GetPDHInstance()
 	return m_pProxyDataHandle;
 }
 
+BOOL CProxyReceptionCentre::RegisterProcessIdentity(
+	LPHookProcessIdentityInfo identity)
+{
+	if (!identity || !identity->dwProcessId || !identity->szAppPath[0])
+		return FALSE;
+
+	HookProcessIdentityInfo safeIdentity = *identity;
+	safeIdentity.szAppPath[_countof(safeIdentity.szAppPath) - 1] = L'\0';
+
+	EnterCriticalSection(&m_ProcessIdentityLock);
+	m_ProcessIdentities[safeIdentity.dwProcessId] = safeIdentity;
+	LeaveCriticalSection(&m_ProcessIdentityLock);
+	return TRUE;
+}
+
+BOOL CProxyReceptionCentre::GetProcessIdentity(
+	DWORD processId,
+	LPWSTR appPath,
+	DWORD appPathCount)
+{
+	if (!processId || !appPath || appPathCount == 0)
+		return FALSE;
+	appPath[0] = L'\0';
+
+	BOOL found = FALSE;
+	EnterCriticalSection(&m_ProcessIdentityLock);
+	std::map<DWORD, HookProcessIdentityInfo>::const_iterator it =
+		m_ProcessIdentities.find(processId);
+	if (it != m_ProcessIdentities.end())
+	{
+		wcsncpy(appPath, it->second.szAppPath, appPathCount - 1);
+		appPath[appPathCount - 1] = L'\0';
+		found = appPath[0] != L'\0';
+	}
+	LeaveCriticalSection(&m_ProcessIdentityLock);
+	return found;
+}
+
 
 BOOL CProxyReceptionCentre::GetStartupInfo(LPPRCINFO lpStartupInfo)
 {
 	if(m_pTcpServer == NULL)
 	{
-		m_szLastError = _T("Î´´´½¨ PRCTcpServer");
+		m_szLastError = _T("æœªåˆ›å»º PRCTcpServer");
 		return FALSE;
 	}
 
 	INT addlen = sizeof(lpStartupInfo->tcpaddr);
 	if(!m_pTcpServer->GetSockName(&lpStartupInfo->tcpaddr, &addlen))
 	{
-		m_szLastError = _T("GetSockName Ê§°Ü.");
+		m_szLastError = _T("GetSockName å¤±è´¥.");
 		return FALSE;
 	}
 
@@ -437,10 +489,10 @@ BOOL CProxyReceptionCentre::GetClientInfo(SOCKET accepted, LPPRCClient lpClientI
 	CTSList<PRCClient>::critical lc = m_RegisteredClient;
 	for(list<PRCClient>::iterator it=m_RegisteredClient.begin(); it!=m_RegisteredClient.end(); it++)
 	{
-		//¶Ë¿ÚÒ»ÖÂ
+		//ç«¯å£ä¸€è‡´
 		if(sa1.GetPort() == it->srcAddr.GetPort())
 		{
-			//bindµÄÊ±ºòµØÖ·Îª0Ôò²»Æ¥ÅäµØÖ·
+			//bindçš„æ—¶å€™åœ°å€ä¸º0åˆ™ä¸åŒ¹é…åœ°å€
 			if(it->srcAddr.GetdwIP() == 0 || sa1.GetdwIP() == it->srcAddr.GetdwIP())
 			{
 				*lpClientInfo = *it;

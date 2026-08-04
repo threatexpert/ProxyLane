@@ -162,11 +162,29 @@ static UINT get_arg(LPSTR lpszIn, LPCSTR lpszOpt, LPSTR lpszBuf, int size)
 	return (UINT)(pW - lpszBuf);
 }
 
+DWORD WINAPI AttachToHandles(HANDLE hProcess, HANDLE hThread, LPCSTR szPipeName)
+{
+	DWORD dwExitCode = 0xf;
+	char myDllPath[MAX_PATH];
+
+	if (!hProcess || !hThread || !szPipeName || !szPipeName[0])
+		return dwExitCode;
+
+	if (!GetModuleFileNameA(g_hDllModule, myDllPath, MAX_PATH))
+		return dwExitCode;
+	myDllPath[MAX_PATH - 1] = '\0';
+
+	if (InjectDll(hProcess, hThread, myDllPath, szPipeName) == 1)
+		dwExitCode = 0xFF01;
+
+	return dwExitCode;
+}
+
 DWORD WINAPI AttachToI(DWORD dwPid, DWORD dwTid, LPCSTR szPipeName)
 {
 	DWORD dwExitCode = 0xf;
-	HANDLE hProc;
-	HANDLE hThread;
+	HANDLE hProc = NULL;
+	HANDLE hThread = NULL;
 	char myDllPath[MAX_PATH];
 
 	HANDLE hRemoteThread = NULL;
@@ -181,13 +199,19 @@ DWORD WINAPI AttachToI(DWORD dwPid, DWORD dwTid, LPCSTR szPipeName)
 	memcpy(scspace + sizeof(scspace)-sizeof(sc_ret), sc_ret, sizeof(sc_ret));
 #endif
 
-	GetModuleFileNameA(g_hDllModule, myDllPath, MAX_PATH);
+	if (!GetModuleFileNameA(g_hDllModule, myDllPath, MAX_PATH))
+		return dwExitCode;
+	myDllPath[MAX_PATH - 1] = '\0';
 
 	hProc = OpenProcess(PROCESS_ALL_ACCESS, 0, dwPid);
+	if (!hProc)
+		goto __Cleanup;
 
 	if (dwTid != 0)
 	{
 		hThread = OpenThread(THREAD_ALL_ACCESS, 0, dwTid);
+		if (!hThread)
+			goto __Cleanup;
 	}
 	else
 	{
@@ -195,41 +219,46 @@ DWORD WINAPI AttachToI(DWORD dwPid, DWORD dwTid, LPCSTR szPipeName)
 			VirtualAllocEx(hProc, NULL, sizeof(scspace), MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 
 		if (!pfnThreadRtn)
-		{
-			return 0;
-		}
+			goto __Cleanup;
 
 		if (!::WriteProcessMemory(hProc, pfnThreadRtn,
 			(PVOID)scspace, sizeof(scspace), NULL))
-		{
-			return 0;
-		}
+			goto __Cleanup;
 
 		hRemoteThread = ::CreateRemoteThread(hProc, NULL, 0,
 			pfnThreadRtn, NULL, CREATE_SUSPENDED, &dwTid);
 
 		if (!hRemoteThread)
-		{
-			return 0;
-		}
+			goto __Cleanup;
 
 		hThread = hRemoteThread;
 	}
 
-	if (hProc && hThread)
+	if (InjectDll(hProc, hThread, myDllPath, szPipeName) == 1)
 	{
-		int ret = InjectDll(hProc, hThread, myDllPath, szPipeName);
-		if (ret == 1)
+		if (hRemoteThread)
 		{
-			if (hRemoteThread)
-				ResumeThread(hRemoteThread);
-
-			dwExitCode = 0xFF01;
+			if (ResumeThread(hRemoteThread) == (DWORD)-1)
+				goto __Cleanup;
 		}
 
-		CloseHandle(hProc);
-		CloseHandle(hThread);
+		dwExitCode = 0xFF01;
 	}
+
+__Cleanup:
+	if (hRemoteThread && dwExitCode != 0xFF01)
+	{
+		// 该线程由本函数以挂起状态创建；注入失败时必须结束它，
+		// 否则即使关闭句柄，目标进程中仍会遗留一个永久挂起的线程。
+		if (TerminateThread(hRemoteThread, 0))
+			WaitForSingleObject(hRemoteThread, INFINITE);
+	}
+	if (pfnThreadRtn && hProc && dwExitCode != 0xFF01)
+		VirtualFreeEx(hProc, pfnThreadRtn, 0, MEM_RELEASE);
+	if (hThread)
+		CloseHandle(hThread);
+	if (hProc)
+		CloseHandle(hProc);
 
 	return dwExitCode;
 }

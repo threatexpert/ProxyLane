@@ -31,6 +31,7 @@ public:
 	CEdit     m_edit_Pass;
 	CModernButton m_OK;
 	CModernButton m_Cancel;
+	CModernButton m_btnSaveProfile;
 
 private:
 
@@ -39,6 +40,10 @@ private:
 	IGlobalProxy* m_pTestProxy;
 	IProxyTester* m_pProxyTester;
 	BOOL m_bIsTesting;
+	BOOL m_profileDirty;
+	BOOL m_loadingProfile;
+	CString m_loadedProfileName;
+	CString m_draftProfileName;
 
 	BOOL m_bDisableLLMNR;
 	BOOL m_bHookLanIP;
@@ -54,6 +59,9 @@ private:
 	void CreateWorkflowCard();
 	void LayoutWorkflowCard();
 	void UpdateWorkflowCard();
+	void SetProfileDirty(BOOL dirty);
+	BOOL SaveCurrentProfile(LPCTSTR profileName = NULL);
+	void RestoreProfileSelection();
 
 public:
 
@@ -62,6 +70,7 @@ public:
 	BOOL StartProxy(BOOL showErrors);
 	BOOL StopProxy();
 	BOOL IsProxyRunning() const;
+	BOOL ConfirmDiscardUnsavedChanges();
 
 	//重载IProxySettings的成员函数////////////////////////////////////////////
 	BOOL GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI);
@@ -100,6 +109,8 @@ public:
 	CButton m_radioTabTarget;
 	CStatusLabel m_staticTestProxy;
 	afx_msg void OnEnChangeEditAddr();
+	afx_msg void OnProfileFieldChanged();
+	afx_msg void OnCbnEditchangeComboCfgs();
 	afx_msg void OnBnClickedButtonCfgopt();
 	afx_msg void OnCfgoptLoad();
 	afx_msg void OnCfgoptSave();

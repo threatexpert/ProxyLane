@@ -304,7 +304,13 @@
       <OutputFile>$(OutDir)$(TargetName).bsc</OutputFile>
     </Bscmake>
   </ItemDefinitionGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalOptions>/source-charset:utf-8 /execution-charset:.936 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <ItemGroup>
+	<ClCompile Include="ElevatedLauncher.cpp" />
     <ClCompile Include="GlobalProxy.cpp" />
     <ClCompile Include="ProxyLaneHook.cpp" />
     <ClCompile Include="HookWinsock.cpp">
@@ -343,6 +349,8 @@
     <ClCompile Include="asynsocket\autoBuffer.cpp" />
   </ItemGroup>
   <ItemGroup>
+	<ClInclude Include="ElevatedLauncher.h" />
+	<ClInclude Include="ElevatedLaunchProtocol.h" />
     <ClInclude Include="asynsocket\types.h" />
     <ClInclude Include="detour.h" />
     <ClInclude Include="GlobalProxy.h" />

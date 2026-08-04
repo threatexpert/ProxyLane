@@ -1,4 +1,4 @@
-#pragma once
+ï»¿#pragma once
 
 
 #include "structinfo.h"
@@ -87,8 +87,8 @@ class CHookWinsock
 
 	//CDummyDNS start
 
-	//½«½ø³ÌµÄdnsÇëÇóÀ¹½ØÏÂÀ´£¬ ¼ÇÏÂÇëÇó½âÎöµÄÓòÃû£¬È»ºó·µ»ØÒ»¸öÌØÖÆµÄip£¬
-	//Èç¹ûÕâ¸öÌØÖÆµÄip³öÏÖÔÚÖ®ºóµÄconnect¶¯×÷£¬ ÔòÔÚÖ®ºóµÄ´úÀí»áÓÃÔ­ÇëÇó½âÎöµÄÓòÃûÈ¥½âÎö²¢Á¬½Ó
+	//å°†è¿›ç¨‹çš„dnsè¯·æ±‚æ‹¦æˆªä¸‹æ¥ï¼Œ è®°ä¸‹è¯·æ±‚è§£æçš„åŸŸåï¼Œç„¶åè¿”å›ä¸€ä¸ªç‰¹åˆ¶çš„ipï¼Œ
+	//å¦‚æœè¿™ä¸ªç‰¹åˆ¶çš„ipå‡ºç°åœ¨ä¹‹åçš„connectåŠ¨ä½œï¼Œ åˆ™åœ¨ä¹‹åçš„ä»£ç†ä¼šç”¨åŸè¯·æ±‚è§£æçš„åŸŸåå»è§£æå¹¶è¿æ¥
 	class CDummyDNS
 	{
 	public:
@@ -287,7 +287,7 @@ class CHookWinsock
 				return TRUE;
 			}
 
-			//Èç¹û³ÌĞòÒª·ÃÎÊ±¾µØ¾ÖÓòÍøÂç£¬µ«ÊÇ´úÀí·şÎñÆ÷ÊÇ¹«ÍøµÄ£¬Ôò²»½Ù³ÖÕâ¸ösocket
+			//å¦‚æœç¨‹åºè¦è®¿é—®æœ¬åœ°å±€åŸŸç½‘ç»œï¼Œä½†æ˜¯ä»£ç†æœåŠ¡å™¨æ˜¯å…¬ç½‘çš„ï¼Œåˆ™ä¸åŠ«æŒè¿™ä¸ªsocket
 			in_addr dstaddr;
 			in_addr proxyaddr;
 
@@ -335,20 +335,20 @@ class CHookWinsock
 		{
 			CTSList<CONNINFO>::critical lc = m_ls;
 
-			//Á´ÖĞ¼ÇÂ¼×ÅËùÓĞ½Ù³Ö¹ıµÄudp°üµÄ¿Í»§¶ËĞÅÏ¢
+			//é“¾ä¸­è®°å½•ç€æ‰€æœ‰åŠ«æŒè¿‡çš„udpåŒ…çš„å®¢æˆ·ç«¯ä¿¡æ¯
 			for (CTSList<CONNINFO>::iterator it=m_ls.begin(); it!=m_ls.end(); it++)
 			{
 				if(it->s == pCI->s && it->sType == SOCK_DGRAM)
 				{
-					//ÅĞ¶ÏÔ­µØÖ·ÊÇ·ñÒ»ÖÂ
+					//åˆ¤æ–­åŸåœ°å€æ˜¯å¦ä¸€è‡´
 					if ( it->srcAddr.GetPort() != ((LPPRCClient)pCI)->srcAddr.GetPort()
 						|| (it->srcAddr.GetdwIP() != 0 && it->srcAddr.GetdwIP() != ((LPPRCClient)pCI)->srcAddr.GetdwIP())
 						)
-						continue;//µ±Ç°½ÚµãĞÅÏ¢²»Ò»ÖÂ£¬ µ«²»ÄÜÈ·¶¨Ã»½Ù³Ö¹ıÕâ¸ösocket£¬ ¼ÌĞø²éÕÒÆäËû½Úµã
+						continue;//å½“å‰èŠ‚ç‚¹ä¿¡æ¯ä¸ä¸€è‡´ï¼Œ ä½†ä¸èƒ½ç¡®å®šæ²¡åŠ«æŒè¿‡è¿™ä¸ªsocketï¼Œ ç»§ç»­æŸ¥æ‰¾å…¶ä»–èŠ‚ç‚¹
 
-					//UDP¿ÉÒÔÔÚ±¾µØÒ»¸öµØÖ·¶ÔÍâ¶à¸öµØÖ··¢°ü£¬ ËùÒÔ¿ÉÒÔ²»ÓÃÅĞ¶ÏÄ¿µÄIPÀ´È·ÈÏ¸ÃudpµÄsocketÊÇ·ñ½Ù³Ö¹ı
-					//µ«Èç¹ûÄ¿µÄµØÖ·ÊÇÓòÃûµÄ»°£¬ ÎªÁËÄÜÔÚÊÕ°üµÄÊ±ºò´úÌæµØÖ·ÎªdummyIP£¬ ËùÒÔÓòÃû²»Ò»ÖÂµÄÇé¿öÒªµ¥¶À¿ª¸ö±¾µØ´úÀíudp¶Ë¿Ú
-					//¶¼Ò»ÖÂÔò±íÊ¾¸Ãudp socketÒÑ¾­hijacked
+					//UDPå¯ä»¥åœ¨æœ¬åœ°ä¸€ä¸ªåœ°å€å¯¹å¤–å¤šä¸ªåœ°å€å‘åŒ…ï¼Œ æ‰€ä»¥å¯ä»¥ä¸ç”¨åˆ¤æ–­ç›®çš„IPæ¥ç¡®è®¤è¯¥udpçš„socketæ˜¯å¦åŠ«æŒè¿‡
+					//ä½†å¦‚æœç›®çš„åœ°å€æ˜¯åŸŸåçš„è¯ï¼Œ ä¸ºäº†èƒ½åœ¨æ”¶åŒ…çš„æ—¶å€™ä»£æ›¿åœ°å€ä¸ºdummyIPï¼Œ æ‰€ä»¥åŸŸåä¸ä¸€è‡´çš„æƒ…å†µè¦å•ç‹¬å¼€ä¸ªæœ¬åœ°ä»£ç†udpç«¯å£
+					//éƒ½ä¸€è‡´åˆ™è¡¨ç¤ºè¯¥udp socketå·²ç»hijacked
 					if (((LPPRCClient)pCI)->IsDNValid())
 					{
 						//if (it->dstAddr.GetPort() != ((LPPRCClient)pCI)->dstAddr.GetPort()
@@ -401,14 +401,14 @@ class CHookWinsock
 			return FALSE;
 		}
 
-		//ÔÚ½ÓÊÕºó ´úÌæ Ô´µØÖ·
-		//dwIP¡¢PortÊÇudp°üÍ·ÖĞµÄµØÖ·ĞÅÏ¢
-		//Èç¹ûÀ´×ÔPRCµÄ°ü£¬ ÔòÒª°ÑÔ´µØÖ·´úÌæÎªdwIP¡¢Port
+		//åœ¨æ¥æ”¶å ä»£æ›¿ æºåœ°å€
+		//dwIPã€Portæ˜¯udpåŒ…å¤´ä¸­çš„åœ°å€ä¿¡æ¯
+		//å¦‚æœæ¥è‡ªPRCçš„åŒ…ï¼Œ åˆ™è¦æŠŠæºåœ°å€ä»£æ›¿ä¸ºdwIPã€Port
 		BOOL ReplaceAddr(SOCKET s, _SockAddr* from, DWORD dwIP, WORD Port)
 		{
 			_SockAddr srcAddr;
 			int srcaddrlen = sizeof(_SockAddr);
-			//²éÑ¯¸Ãsocket°ó¶¨µÄµØÖ·
+			//æŸ¥è¯¢è¯¥socketç»‘å®šçš„åœ°å€
 			if(getsockname(s, &srcAddr, &srcaddrlen) == SOCKET_ERROR)
 			{
 				return FALSE;
@@ -425,7 +425,7 @@ class CHookWinsock
 						)
 						continue;
 
-					//È·¶¨°üÊÇÀ´×ÔPRCµÄ£¨udpAddrÊÇ±¾µØudp´úÀíµÄµØÖ·£©
+					//ç¡®å®šåŒ…æ˜¯æ¥è‡ªPRCçš„ï¼ˆudpAddræ˜¯æœ¬åœ°udpä»£ç†çš„åœ°å€ï¼‰
 					if (from->GetPort() != it->udpAddr.GetPort()
 						|| (it->udpAddr.GetdwIP() != 0 && it->udpAddr.GetdwIP() != from->GetdwIP())
 						)
@@ -433,18 +433,18 @@ class CHookWinsock
 						continue;
 					}
 
-					//ÅĞ¶Ï¿Í»§¶Ë·¢°üÊ±µÄÄ¿µÄµØÖ·ÊÇÓòÃû»¹ÊÇIP
+					//åˆ¤æ–­å®¢æˆ·ç«¯å‘åŒ…æ—¶çš„ç›®çš„åœ°å€æ˜¯åŸŸåè¿˜æ˜¯IP
 					if (it->IsDNValid())
 					{
-						//ÓòÃû
-						//°ÑµØÖ·´úÌæÎª dummyIP!
+						//åŸŸå
+						//æŠŠåœ°å€ä»£æ›¿ä¸º dummyIP!
 						from->SetIPLong(it->dstAddr.GetdwIP());
 						from->SetPort(ntohs(Port));
 						return TRUE;
 					}else
 					{
 						//IP
-						//½«udp°üÍ·µÄIPĞÅÏ¢´úÌæ½øÈ¥
+						//å°†udpåŒ…å¤´çš„IPä¿¡æ¯ä»£æ›¿è¿›å»
 						from->SetIPLong(dwIP);
 						from->SetPort(ntohs(Port));
 						return TRUE;
@@ -453,7 +453,7 @@ class CHookWinsock
 				}
 			}
 
-			//°ü²»ÊÇÀ´×ÔPRC£¿£¿
+			//åŒ…ä¸æ˜¯æ¥è‡ªPRCï¼Ÿï¼Ÿ
 
 			return FALSE;
 		}
@@ -493,19 +493,19 @@ public:
 
 	BOOL IsHostNameReserved(const char *name);
 
-	//¸ºÔğdnsµÄ¼¸¸öAPI
+	//è´Ÿè´£dnsçš„å‡ ä¸ªAPI
 	hostent* WSAAPI inhook_gethostbyname(const char* name);
 
 	HANDLE WSAAPI inhook_WSAAsyncGetHostByName(HWND hWnd, unsigned int wMsg, const char* name, char* buf, int buflen);
 
 	int WSAAPI inhook_getaddrinfo(IN const char FAR * nodename, IN const char FAR * servname, IN const struct addrinfo FAR * hints, OUT struct addrinfo FAR * FAR * res);
 
-	//¸ºÔğ½¨Á¢Á¬½ÓµÄAPI
+	//è´Ÿè´£å»ºç«‹è¿æ¥çš„API
 	int WSAAPI inhook_connect(SOCKET s, const struct sockaddr FAR * name, int namelen);
 
 	int WSAAPI inhook_WSAConnect(SOCKET s, const struct sockaddr* name, int namelen, LPWSABUF lpCallerData, LPWSABUF lpCalleeData, LPQOS lpSQOS, LPQOS lpGQOS);
 
-	//´¦ÀíÀ¹½ØÏÂÀ´µÄÁ¬½Ó
+	//å¤„ç†æ‹¦æˆªä¸‹æ¥çš„è¿æ¥
 	BOOL HackConnect(SOCKET s, _SockAddr &addrname);
 
 	//
