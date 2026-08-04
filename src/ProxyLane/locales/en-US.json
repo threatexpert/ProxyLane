@@ -90,7 +90,7 @@
   "page4.hex": "Show HEX",
   "page4.connections_zero": "TCP: 0    UDP: 0",
   "page4.connections": "TCP: %d    UDP: %d",
-  "page5.title": "About & Language",
+  "page5.title": "About && Language",
   "page5.subtitle": "Interface language, ProxyLane project information, and source code",
   "page5.version": "Version",
   "page5.version_value": "Version %s",
