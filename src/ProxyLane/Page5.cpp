@@ -30,7 +30,7 @@ BOOL CPage5::OnInitDialog()
 {
 	CModernDialog::OnInitDialog();
 
-	const CString version = AppVersion::FileVersion();
+	const CString version = AppVersion::DisplayVersion();
 	CString displayVersion = version.IsEmpty() ? Localization::Get(_T("common.unknown")) : version;
 	CString versionText = Localization::Format(_T("page5.version_value"),
 		static_cast<LPCTSTR>(displayVersion));

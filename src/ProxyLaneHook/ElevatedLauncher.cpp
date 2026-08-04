@@ -4,6 +4,7 @@
 #include "ProxyModule.h"
 
 #include <strsafe.h>
+#include <vector>
 
 extern HMODULE g_hDllModule;
 
@@ -141,6 +142,88 @@ namespace
 		return function ? function(*oldValue) : FALSE;
 	}
 
+	BOOL Utf8FieldToWide(
+		const BYTE* source,
+		DWORD sourceLength,
+		size_t maximumCharacterCount,
+		std::vector<WCHAR>& destination)
+	{
+		destination.clear();
+		if (!sourceLength)
+		{
+			destination.push_back(L'\0');
+			return TRUE;
+		}
+
+		const int requiredLength = MultiByteToWideChar(
+			CP_UTF8,
+			MB_ERR_INVALID_CHARS,
+			reinterpret_cast<LPCSTR>(source),
+			static_cast<int>(sourceLength),
+			NULL,
+			0);
+		if (requiredLength <= 0 ||
+			static_cast<size_t>(requiredLength) >= maximumCharacterCount)
+		{
+			return FALSE;
+		}
+
+		destination.resize(static_cast<size_t>(requiredLength) + 1, L'\0');
+		if (MultiByteToWideChar(
+			CP_UTF8,
+			MB_ERR_INVALID_CHARS,
+			reinterpret_cast<LPCSTR>(source),
+			static_cast<int>(sourceLength),
+			&destination[0],
+			requiredLength) != requiredLength)
+		{
+			return FALSE;
+		}
+
+		for (int index = 0; index < requiredLength; ++index)
+		{
+			if (destination[index] == L'\0')
+				return FALSE;
+		}
+		return TRUE;
+	}
+
+	BOOL ValidateDecodedElevatedRequest(
+		const std::vector<WCHAR>& targetPath,
+		const std::vector<WCHAR>& commandLine,
+		const std::vector<WCHAR>& workingDirectory,
+		const std::vector<CHAR>& pipeName)
+	{
+		if (targetPath.size() <= 1 || commandLine.size() <= 1 || pipeName.size() <= 1)
+			return FALSE;
+
+		const size_t targetLength = targetPath.size() - 1;
+		const BOOL targetDriveAbsolute =
+			targetLength >= 3 && targetPath[1] == L':' &&
+			(targetPath[2] == L'\\' || targetPath[2] == L'/');
+		const BOOL targetUncAbsolute =
+			targetLength >= 2 && targetPath[0] == L'\\' && targetPath[1] == L'\\';
+		if (!targetDriveAbsolute && !targetUncAbsolute)
+			return FALSE;
+
+		if (workingDirectory.size() > 1)
+		{
+			const size_t directoryLength = workingDirectory.size() - 1;
+			const BOOL directoryDriveAbsolute =
+				directoryLength >= 3 && workingDirectory[1] == L':' &&
+				(workingDirectory[2] == L'\\' || workingDirectory[2] == L'/');
+			const BOOL directoryUncAbsolute =
+				directoryLength >= 2 && workingDirectory[0] == L'\\' &&
+				workingDirectory[1] == L'\\';
+			if (!directoryDriveAbsolute && !directoryUncAbsolute)
+				return FALSE;
+		}
+
+		static const char pipePrefix[] = "\\\\.\\pipe\\PRCPipeName";
+		return pipeName.size() - 1 >= sizeof(pipePrefix) - 1 &&
+			memcmp(&pipeName[0], pipePrefix, sizeof(pipePrefix) - 1) == 0;
+	}
+
 }
 
 BOOL ProxyLaneInjectSuspendedProcess(
@@ -239,12 +322,67 @@ void CALLBACK ElevatedLaunch(HWND, HINSTANCE, LPSTR commandLine, int)
 	if (!commandLine || strncmp(commandLine, requestPrefix, sizeof(requestPrefix) - 1) != 0)
 		ExitProcess(PROXYLANE_ELEVATED_INVALID_REQUEST);
 
-	ProxyLaneElevatedLaunchRequest request;
-	ZeroMemory(&request, sizeof(request));
-	if (!ProxyLaneDecodeElevatedRequest(
-		commandLine + sizeof(requestPrefix) - 1,
-		&request) ||
-		!ProxyLaneValidateElevatedRequest(request))
+	const char* encodedRequest = commandLine + sizeof(requestPrefix) - 1;
+	const size_t encodedLength = strlen(encodedRequest);
+	const size_t decodedCapacity = ProxyLaneBase64UrlDecodedLength(encodedLength);
+	if (decodedCapacity == static_cast<size_t>(-1) ||
+		decodedCapacity < sizeof(ProxyLaneElevatedLaunchWireHeader) ||
+		decodedCapacity > PROXYLANE_ELEVATED_MAX_WIRE_BYTES)
+	{
+		ExitProcess(PROXYLANE_ELEVATED_INVALID_REQUEST);
+	}
+
+	std::vector<BYTE> decodedRequest(decodedCapacity);
+	size_t decodedLength = 0;
+	ProxyLaneElevatedLaunchRequestView request = { 0 };
+	if (!ProxyLaneBase64UrlDecode(
+		encodedRequest,
+		encodedLength,
+		&decodedRequest[0],
+		decodedRequest.size(),
+		&decodedLength) ||
+		!ProxyLaneParseElevatedRequest(&decodedRequest[0], decodedLength, &request))
+	{
+		ExitProcess(PROXYLANE_ELEVATED_INVALID_REQUEST);
+	}
+
+	std::vector<WCHAR> targetPath;
+	std::vector<WCHAR> targetCommandLine;
+	std::vector<WCHAR> workingDirectory;
+	std::vector<CHAR> pipeName;
+	if (!Utf8FieldToWide(
+		request.targetPath,
+		request.targetPathBytes,
+		PROXYLANE_ELEVATED_TARGET_CCH,
+		targetPath) ||
+		!Utf8FieldToWide(
+			request.commandLine,
+			request.commandLineBytes,
+			PROXYLANE_ELEVATED_COMMAND_CCH,
+			targetCommandLine) ||
+		!Utf8FieldToWide(
+			request.workingDirectory,
+			request.workingDirectoryBytes,
+			PROXYLANE_ELEVATED_DIRECTORY_CCH,
+			workingDirectory) ||
+		!request.pipeNameBytes ||
+		request.pipeNameBytes >= PROXYLANE_ELEVATED_PIPE_CCH)
+	{
+		ExitProcess(PROXYLANE_ELEVATED_INVALID_REQUEST);
+	}
+
+	pipeName.resize(static_cast<size_t>(request.pipeNameBytes) + 1, '\0');
+	memcpy(&pipeName[0], request.pipeName, request.pipeNameBytes);
+	for (DWORD index = 0; index < request.pipeNameBytes; ++index)
+	{
+		if (pipeName[index] == '\0')
+			ExitProcess(PROXYLANE_ELEVATED_INVALID_REQUEST);
+	}
+	if (!ValidateDecodedElevatedRequest(
+		targetPath,
+		targetCommandLine,
+		workingDirectory,
+		pipeName))
 	{
 		ExitProcess(PROXYLANE_ELEVATED_INVALID_REQUEST);
 	}
@@ -252,31 +390,22 @@ void CALLBACK ElevatedLaunch(HWND, HINSTANCE, LPSTR commandLine, int)
 	if (!IsCurrentProcessElevated())
 		ExitProcess(PROXYLANE_ELEVATED_NOT_ELEVATED);
 
-	const DWORD attributes = GetFileAttributesW(request.targetPath);
+	const DWORD attributes = GetFileAttributesW(&targetPath[0]);
 	if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY))
 		ExitProcess(PROXYLANE_ELEVATED_INVALID_TARGET);
-
-	WCHAR mutableCommandLine[PROXYLANE_ELEVATED_COMMAND_CCH] = { 0 };
-	if (FAILED(StringCchCopyW(
-		mutableCommandLine,
-		_countof(mutableCommandLine),
-		request.commandLine)))
-	{
-		ExitProcess(PROXYLANE_ELEVATED_INVALID_REQUEST);
-	}
 
 	STARTUPINFOW startupInfo = { 0 };
 	startupInfo.cb = sizeof(startupInfo);
 	PROCESS_INFORMATION processInfo = { 0 };
 	if (!CreateProcessW(
-		request.targetPath,
-		mutableCommandLine,
+		&targetPath[0],
+		&targetCommandLine[0],
 		NULL,
 		NULL,
 		FALSE,
 		CREATE_SUSPENDED,
 		NULL,
-		request.workingDirectory[0] ? request.workingDirectory : NULL,
+		workingDirectory[0] ? &workingDirectory[0] : NULL,
 		&startupInfo,
 		&processInfo))
 	{
@@ -288,7 +417,7 @@ void CALLBACK ElevatedLaunch(HWND, HINSTANCE, LPSTR commandLine, int)
 		processInfo.hThread,
 		processInfo.dwProcessId,
 		processInfo.dwThreadId,
-		request.pipeName,
+		&pipeName[0],
 		CreateProcessW))
 	{
 		TerminateProcess(processInfo.hProcess, PROXYLANE_ELEVATED_INJECTION_FAILED);

@@ -5,5 +5,6 @@
 namespace AppVersion
 {
 	CString FileVersion();
+	CString DisplayVersion();
 	CString DisplayTitle();
 }

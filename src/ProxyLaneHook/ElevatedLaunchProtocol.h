@@ -2,12 +2,17 @@
 
 #include <windows.h>
 #include <stddef.h>
+#include <string.h>
 
-// The UI and elevated rundll32 exchange a fixed-version request encoded as ASCII hex.
-// This preserves Unicode paths without parsing nested command-line quoting in the elevated host.
+#ifndef WC_ERR_INVALID_CHARS
+#define WC_ERR_INVALID_CHARS 0x00000080
+#endif
+
+// The UI and elevated rundll32 exchange a length-prefixed request encoded as
+// unpadded Base64URL. Only the bytes used by each field are transmitted.
 
 #define PROXYLANE_ELEVATED_REQUEST_MAGIC   0x4C454C50UL // "PLEL"
-#define PROXYLANE_ELEVATED_REQUEST_VERSION 1
+#define PROXYLANE_ELEVATED_REQUEST_VERSION 2
 
 #define PROXYLANE_ELEVATED_TARGET_CCH      (MAX_PATH + 1024)
 #define PROXYLANE_ELEVATED_COMMAND_CCH     4096
@@ -27,138 +32,212 @@ enum ProxyLaneElevatedLaunchExitCode
 };
 
 #pragma pack(push, 1)
-struct ProxyLaneElevatedLaunchRequest
+struct ProxyLaneElevatedLaunchWireHeader
 {
 	DWORD magic;
-	DWORD version;
-	DWORD structureSize;
-	WCHAR targetPath[PROXYLANE_ELEVATED_TARGET_CCH];
-	WCHAR commandLine[PROXYLANE_ELEVATED_COMMAND_CCH];
-	WCHAR workingDirectory[PROXYLANE_ELEVATED_DIRECTORY_CCH];
-	CHAR pipeName[PROXYLANE_ELEVATED_PIPE_CCH];
+	WORD version;
+	WORD headerSize;
+	DWORD totalSize;
+	DWORD targetPathBytes;
+	DWORD commandLineBytes;
+	DWORD workingDirectoryBytes;
+	DWORD pipeNameBytes;
+	DWORD flags;
 };
 #pragma pack(pop)
 
-inline int ProxyLaneHexDigitValue(char value)
+struct ProxyLaneElevatedLaunchRequestView
 {
+	const BYTE* targetPath;
+	DWORD targetPathBytes;
+	const BYTE* commandLine;
+	DWORD commandLineBytes;
+	const BYTE* workingDirectory;
+	DWORD workingDirectoryBytes;
+	const BYTE* pipeName;
+	DWORD pipeNameBytes;
+};
+
+// A valid UTF-8 string uses at most three bytes per UTF-16 code unit. A
+// surrogate pair uses four bytes for two code units and is therefore smaller.
+#define PROXYLANE_ELEVATED_MAX_WIRE_BYTES \
+	(sizeof(ProxyLaneElevatedLaunchWireHeader) + \
+	 (PROXYLANE_ELEVATED_TARGET_CCH - 1) * 3 + \
+	 (PROXYLANE_ELEVATED_COMMAND_CCH - 1) * 3 + \
+	 (PROXYLANE_ELEVATED_DIRECTORY_CCH - 1) * 3 + \
+	 (PROXYLANE_ELEVATED_PIPE_CCH - 1))
+
+inline size_t ProxyLaneBase64UrlEncodedLength(size_t sourceSize)
+{
+	const size_t fullGroups = sourceSize / 3;
+	const size_t remainder = sourceSize % 3;
+	return fullGroups * 4 + (remainder ? remainder + 1 : 0);
+}
+
+inline size_t ProxyLaneBase64UrlDecodedLength(size_t sourceLength)
+{
+	const size_t remainder = sourceLength % 4;
+	if (remainder == 1)
+		return static_cast<size_t>(-1);
+	return (sourceLength / 4) * 3 + (remainder ? remainder - 1 : 0);
+}
+
+inline int ProxyLaneBase64UrlDigitValue(char value)
+{
+	if (value >= 'A' && value <= 'Z')
+		return value - 'A';
+	if (value >= 'a' && value <= 'z')
+		return value - 'a' + 26;
 	if (value >= '0' && value <= '9')
-		return value - '0';
-	if (value >= 'a' && value <= 'f')
-		return value - 'a' + 10;
-	if (value >= 'A' && value <= 'F')
-		return value - 'A' + 10;
+		return value - '0' + 52;
+	if (value == '-')
+		return 62;
+	if (value == '_')
+		return 63;
 	return -1;
 }
 
-inline BOOL ProxyLaneEncodeElevatedRequest(
-	const ProxyLaneElevatedLaunchRequest& request,
-	char* output,
-	size_t outputSize)
+inline BOOL ProxyLaneBase64UrlEncode(
+	const BYTE* source,
+	size_t sourceSize,
+	char* destination,
+	size_t destinationSize,
+	size_t* destinationLength)
 {
-	static const char digits[] = "0123456789ABCDEF";
-	const size_t byteCount = sizeof(request);
-	if (!output || outputSize < byteCount * 2 + 1)
-		return FALSE;
-
-	const BYTE* bytes = reinterpret_cast<const BYTE*>(&request);
-	for (size_t index = 0; index < byteCount; ++index)
+	static const char alphabet[] =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+	const size_t requiredLength = ProxyLaneBase64UrlEncodedLength(sourceSize);
+	if ((!source && sourceSize) || !destination ||
+		destinationSize <= requiredLength)
 	{
-		output[index * 2] = digits[(bytes[index] >> 4) & 0x0F];
-		output[index * 2 + 1] = digits[bytes[index] & 0x0F];
+		return FALSE;
 	}
-	output[byteCount * 2] = '\0';
+
+	size_t sourceOffset = 0;
+	size_t destinationOffset = 0;
+	while (sourceSize - sourceOffset >= 3)
+	{
+		const BYTE first = source[sourceOffset++];
+		const BYTE second = source[sourceOffset++];
+		const BYTE third = source[sourceOffset++];
+		destination[destinationOffset++] = alphabet[first >> 2];
+		destination[destinationOffset++] = alphabet[((first & 0x03) << 4) | (second >> 4)];
+		destination[destinationOffset++] = alphabet[((second & 0x0F) << 2) | (third >> 6)];
+		destination[destinationOffset++] = alphabet[third & 0x3F];
+	}
+
+	const size_t remainder = sourceSize - sourceOffset;
+	if (remainder)
+	{
+		const BYTE first = source[sourceOffset++];
+		destination[destinationOffset++] = alphabet[first >> 2];
+		if (remainder == 1)
+		{
+			destination[destinationOffset++] = alphabet[(first & 0x03) << 4];
+		}
+		else
+		{
+			const BYTE second = source[sourceOffset];
+			destination[destinationOffset++] = alphabet[((first & 0x03) << 4) | (second >> 4)];
+			destination[destinationOffset++] = alphabet[(second & 0x0F) << 2];
+		}
+	}
+
+	destination[destinationOffset] = '\0';
+	if (destinationLength)
+		*destinationLength = destinationOffset;
 	return TRUE;
 }
 
-inline BOOL ProxyLaneDecodeElevatedRequest(
-	const char* input,
-	ProxyLaneElevatedLaunchRequest* request)
+inline BOOL ProxyLaneBase64UrlDecode(
+	const char* source,
+	size_t sourceLength,
+	BYTE* destination,
+	size_t destinationSize,
+	size_t* destinationLength)
 {
-	if (!input || !request)
-		return FALSE;
-
-	const size_t byteCount = sizeof(*request);
-	if (strlen(input) != byteCount * 2)
-		return FALSE;
-
-	BYTE* bytes = reinterpret_cast<BYTE*>(request);
-	for (size_t index = 0; index < byteCount; ++index)
+	const size_t requiredLength = ProxyLaneBase64UrlDecodedLength(sourceLength);
+	if (!source || requiredLength == static_cast<size_t>(-1) ||
+		(!destination && requiredLength) || destinationSize < requiredLength)
 	{
-		const int high = ProxyLaneHexDigitValue(input[index * 2]);
-		const int low = ProxyLaneHexDigitValue(input[index * 2 + 1]);
-		if (high < 0 || low < 0)
+		return FALSE;
+	}
+
+	size_t sourceOffset = 0;
+	size_t destinationOffset = 0;
+	while (sourceLength - sourceOffset >= 4)
+	{
+		const int first = ProxyLaneBase64UrlDigitValue(source[sourceOffset++]);
+		const int second = ProxyLaneBase64UrlDigitValue(source[sourceOffset++]);
+		const int third = ProxyLaneBase64UrlDigitValue(source[sourceOffset++]);
+		const int fourth = ProxyLaneBase64UrlDigitValue(source[sourceOffset++]);
+		if (first < 0 || second < 0 || third < 0 || fourth < 0)
 			return FALSE;
-		bytes[index] = static_cast<BYTE>((high << 4) | low);
-	}
-	return TRUE;
-}
-
-inline BOOL ProxyLaneHasTerminatorW(const WCHAR* value, size_t count)
-{
-	if (!value || count == 0)
-		return FALSE;
-	for (size_t index = 0; index < count; ++index)
-	{
-		if (value[index] == L'\0')
-			return TRUE;
-	}
-	return FALSE;
-}
-
-inline BOOL ProxyLaneHasTerminatorA(const CHAR* value, size_t count)
-{
-	if (!value || count == 0)
-		return FALSE;
-	for (size_t index = 0; index < count; ++index)
-	{
-		if (value[index] == '\0')
-			return TRUE;
-	}
-	return FALSE;
-}
-
-inline BOOL ProxyLaneValidateElevatedRequest(
-	const ProxyLaneElevatedLaunchRequest& request)
-{
-	if (request.magic != PROXYLANE_ELEVATED_REQUEST_MAGIC ||
-		request.version != PROXYLANE_ELEVATED_REQUEST_VERSION ||
-		request.structureSize != sizeof(request))
-	{
-		return FALSE;
+		destination[destinationOffset++] = static_cast<BYTE>((first << 2) | (second >> 4));
+		destination[destinationOffset++] = static_cast<BYTE>((second << 4) | (third >> 2));
+		destination[destinationOffset++] = static_cast<BYTE>((third << 6) | fourth);
 	}
 
-	if (!ProxyLaneHasTerminatorW(request.targetPath, _countof(request.targetPath)) ||
-		!ProxyLaneHasTerminatorW(request.commandLine, _countof(request.commandLine)) ||
-		!ProxyLaneHasTerminatorW(request.workingDirectory, _countof(request.workingDirectory)) ||
-		!ProxyLaneHasTerminatorA(request.pipeName, _countof(request.pipeName)))
+	const size_t remainder = sourceLength - sourceOffset;
+	if (remainder)
 	{
-		return FALSE;
-	}
-
-	if (!request.targetPath[0] || !request.commandLine[0] || !request.pipeName[0])
-		return FALSE;
-
-	// Never reinterpret a relative path in the elevated process.
-	const BOOL targetDriveAbsolute =
-		request.targetPath[0] != L'\0' &&
-		request.targetPath[1] == L':' &&
-		(request.targetPath[2] == L'\\' || request.targetPath[2] == L'/');
-	const BOOL targetUncAbsolute =
-		request.targetPath[0] == L'\\' && request.targetPath[1] == L'\\';
-	if (!targetDriveAbsolute && !targetUncAbsolute)
-		return FALSE;
-
-	if (request.workingDirectory[0])
-	{
-		const BOOL directoryDriveAbsolute =
-			request.workingDirectory[1] == L':' &&
-			(request.workingDirectory[2] == L'\\' || request.workingDirectory[2] == L'/');
-		const BOOL directoryUncAbsolute =
-			request.workingDirectory[0] == L'\\' && request.workingDirectory[1] == L'\\';
-		if (!directoryDriveAbsolute && !directoryUncAbsolute)
+		const int first = ProxyLaneBase64UrlDigitValue(source[sourceOffset++]);
+		const int second = ProxyLaneBase64UrlDigitValue(source[sourceOffset++]);
+		if (first < 0 || second < 0 || (remainder == 2 && (second & 0x0F) != 0))
 			return FALSE;
+		destination[destinationOffset++] = static_cast<BYTE>((first << 2) | (second >> 4));
+
+		if (remainder == 3)
+		{
+			const int third = ProxyLaneBase64UrlDigitValue(source[sourceOffset]);
+			if (third < 0 || (third & 0x03) != 0)
+				return FALSE;
+			destination[destinationOffset++] = static_cast<BYTE>((second << 4) | (third >> 2));
+		}
 	}
 
-	static const char pipePrefix[] = "\\\\.\\pipe\\PRCPipeName";
-	return strncmp(request.pipeName, pipePrefix, sizeof(pipePrefix) - 1) == 0;
+	if (destinationLength)
+		*destinationLength = destinationOffset;
+	return destinationOffset == requiredLength;
+}
+
+inline BOOL ProxyLaneParseElevatedRequest(
+	const BYTE* data,
+	size_t dataSize,
+	ProxyLaneElevatedLaunchRequestView* request)
+{
+	if (!data || !request || dataSize < sizeof(ProxyLaneElevatedLaunchWireHeader) ||
+		dataSize > PROXYLANE_ELEVATED_MAX_WIRE_BYTES)
+	{
+		return FALSE;
+	}
+
+	ProxyLaneElevatedLaunchWireHeader header;
+	memcpy(&header, data, sizeof(header));
+	if (header.magic != PROXYLANE_ELEVATED_REQUEST_MAGIC ||
+		header.version != PROXYLANE_ELEVATED_REQUEST_VERSION ||
+		header.headerSize != sizeof(header) ||
+		header.totalSize != dataSize ||
+		header.flags != 0 ||
+		!header.targetPathBytes || !header.commandLineBytes || !header.pipeNameBytes)
+	{
+		return FALSE;
+	}
+
+	size_t offset = sizeof(header);
+#define PROXYLANE_ASSIGN_WIRE_FIELD(pointerField, lengthField, headerLength) \
+	do { \
+		if ((headerLength) > dataSize - offset) return FALSE; \
+		request->pointerField = data + offset; \
+		request->lengthField = (headerLength); \
+		offset += (headerLength); \
+	} while (0)
+
+	PROXYLANE_ASSIGN_WIRE_FIELD(targetPath, targetPathBytes, header.targetPathBytes);
+	PROXYLANE_ASSIGN_WIRE_FIELD(commandLine, commandLineBytes, header.commandLineBytes);
+	PROXYLANE_ASSIGN_WIRE_FIELD(workingDirectory, workingDirectoryBytes, header.workingDirectoryBytes);
+	PROXYLANE_ASSIGN_WIRE_FIELD(pipeName, pipeNameBytes, header.pipeNameBytes);
+
+#undef PROXYLANE_ASSIGN_WIRE_FIELD
+	return offset == dataSize;
 }

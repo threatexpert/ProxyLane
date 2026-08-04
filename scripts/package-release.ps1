@@ -52,7 +52,8 @@ $versions = @($versions | Select-Object -Unique)
 if ($versions.Count -ne 1) {
     throw "Release binaries have different file versions: $($versions -join ', ')"
 }
-$version = $versions[0]
+$fileVersion = $versions[0]
+$version = ([Version]$fileVersion).ToString(3)
 
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $archivePath = Join-Path $OutputDirectory "ProxyLane-$version-Windows.zip"

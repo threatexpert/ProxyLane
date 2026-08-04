@@ -94,4 +94,4 @@ To use a custom output directory, add `-OutputDirectory D:\releases`.
 
 ## Version
 
-Current version: 1.1.0.0
+Current version: 1.2.0

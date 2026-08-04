@@ -74,7 +74,7 @@ CString AppVersion::FileVersion()
 CString AppVersion::DisplayTitle()
 {
 	CString title(_T("ProxyLane"));
-	const CString version = FileVersion();
+	const CString version = DisplayVersion();
 	if (!version.IsEmpty())
 	{
 		title += _T(" ");
@@ -86,4 +86,22 @@ CString AppVersion::DisplayTitle()
 #endif
 
 	return title;
+}
+
+CString AppVersion::DisplayVersion()
+{
+	CString version = FileVersion();
+	int dotCount = 0;
+	for (int index = 0; index < version.GetLength(); ++index)
+	{
+		if (version[index] == _T('.'))
+			++dotCount;
+	}
+	if (dotCount == 3)
+	{
+		const int lastDot = version.ReverseFind(_T('.'));
+		if (lastDot > 0)
+			version = version.Left(lastDot);
+	}
+	return version;
 }

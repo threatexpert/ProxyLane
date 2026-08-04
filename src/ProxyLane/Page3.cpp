@@ -936,28 +936,90 @@ static AppLaunchResult LaunchElevatedAndProxy(
 		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
 	}
 
-	ProxyLaneElevatedLaunchRequest request;
-	ZeroMemory(&request, sizeof(request));
-	request.magic = PROXYLANE_ELEVATED_REQUEST_MAGIC;
-	request.version = PROXYLANE_ELEVATED_REQUEST_VERSION;
-	request.structureSize = sizeof(request);
-	wcsncpy(request.targetPath, targetPath, _countof(request.targetPath) - 1);
-	wcsncpy(request.commandLine, commandLine, _countof(request.commandLine) - 1);
-	if (workingDirectory)
-		wcsncpy(request.workingDirectory, workingDirectory, _countof(request.workingDirectory) - 1);
-	strncpy(request.pipeName, pipeName, _countof(request.pipeName) - 1);
+	const WCHAR* wideFields[] =
+	{
+		targetPath,
+		commandLine,
+		workingDirectory ? workingDirectory : L""
+	};
+	std::vector<BYTE> utf8Fields[_countof(wideFields)];
+	for (size_t index = 0; index < _countof(wideFields); ++index)
+	{
+		const int wideLength = static_cast<int>(wcslen(wideFields[index]));
+		if (!wideLength)
+			continue;
+		const int utf8Length = WideCharToMultiByte(
+			CP_UTF8,
+			WC_ERR_INVALID_CHARS,
+			wideFields[index],
+			wideLength,
+			NULL,
+			0,
+			NULL,
+			NULL);
+		if (utf8Length <= 0)
+			return APP_LAUNCH_ELEVATED_HELPER_FAILED;
+		utf8Fields[index].resize(utf8Length);
+		if (WideCharToMultiByte(
+			CP_UTF8,
+			WC_ERR_INVALID_CHARS,
+			wideFields[index],
+			wideLength,
+			reinterpret_cast<char*>(&utf8Fields[index][0]),
+			utf8Length,
+			NULL,
+			NULL) != utf8Length)
+		{
+			return APP_LAUNCH_ELEVATED_HELPER_FAILED;
+		}
+	}
 
+	const size_t pipeNameLength = strlen(pipeName);
+	const size_t wireSize = sizeof(ProxyLaneElevatedLaunchWireHeader) +
+		utf8Fields[0].size() + utf8Fields[1].size() + utf8Fields[2].size() +
+		pipeNameLength;
+	if (wireSize > PROXYLANE_ELEVATED_MAX_WIRE_BYTES || wireSize > MAXDWORD)
+		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
+
+	ProxyLaneElevatedLaunchWireHeader header = { 0 };
+	header.magic = PROXYLANE_ELEVATED_REQUEST_MAGIC;
+	header.version = PROXYLANE_ELEVATED_REQUEST_VERSION;
+	header.headerSize = sizeof(header);
+	header.totalSize = static_cast<DWORD>(wireSize);
+	header.targetPathBytes = static_cast<DWORD>(utf8Fields[0].size());
+	header.commandLineBytes = static_cast<DWORD>(utf8Fields[1].size());
+	header.workingDirectoryBytes = static_cast<DWORD>(utf8Fields[2].size());
+	header.pipeNameBytes = static_cast<DWORD>(pipeNameLength);
+
+	std::vector<BYTE> wireRequest(wireSize);
+	size_t wireOffset = 0;
+	memcpy(&wireRequest[wireOffset], &header, sizeof(header));
+	wireOffset += sizeof(header);
+	for (size_t index = 0; index < _countof(utf8Fields); ++index)
+	{
+		if (!utf8Fields[index].empty())
+		{
+			memcpy(&wireRequest[wireOffset], &utf8Fields[index][0], utf8Fields[index].size());
+			wireOffset += utf8Fields[index].size();
+		}
+	}
+	memcpy(&wireRequest[wireOffset], pipeName, pipeNameLength);
+
+	const size_t encodedLength = ProxyLaneBase64UrlEncodedLength(wireRequest.size());
 	CStringA encodedRequest;
-	char* encodedBuffer = encodedRequest.GetBuffer(static_cast<int>(sizeof(request) * 2));
-	if (!ProxyLaneEncodeElevatedRequest(
-		request,
+	char* encodedBuffer = encodedRequest.GetBuffer(static_cast<int>(encodedLength));
+	size_t actualEncodedLength = 0;
+	if (!ProxyLaneBase64UrlEncode(
+		&wireRequest[0],
+		wireRequest.size(),
 		encodedBuffer,
-		sizeof(request) * 2 + 1))
+		encodedLength + 1,
+		&actualEncodedLength) || actualEncodedLength != encodedLength)
 	{
 		encodedRequest.ReleaseBuffer(0);
 		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
 	}
-	encodedRequest.ReleaseBuffer(static_cast<int>(sizeof(request) * 2));
+	encodedRequest.ReleaseBuffer(static_cast<int>(actualEncodedLength));
 
 #ifdef _WIN64
 	CString hookPath = GetProxyLaneHookModule64Path();
