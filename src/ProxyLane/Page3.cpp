@@ -31,6 +31,7 @@ using namespace std;
 #pragma comment(lib, "Dbghelp.lib")
 
 #include <vector>
+#include <algorithm>
 #include "Page1.h"
 
 // 由 Page1.cpp 定义的子进程注入过滤运行时快照
@@ -150,19 +151,132 @@ BOOL GetProcessFullPath(HANDLE hProc, LPTSTR buf, DWORD size)
 	}
 }
 
+// 保存进程创建时间，并同时生成列表中的本地时间文本。
+static BOOL SetProcessStartTime(ULONGLONG startTimeValue, _myPROCESSINFO& processInfo)
+{
+	ULARGE_INTEGER timeValue;
+	timeValue.QuadPart = startTimeValue;
+	FILETIME creationTime;
+	creationTime.dwLowDateTime = timeValue.LowPart;
+	creationTime.dwHighDateTime = timeValue.HighPart;
+
+	FILETIME localTime;
+	SYSTEMTIME systemTime;
+	if (!FileTimeToLocalFileTime(&creationTime, &localTime)
+		|| !FileTimeToSystemTime(&localTime, &systemTime))
+	{
+		return FALSE;
+	}
+
+	processInfo.hasStartTime = TRUE;
+	processInfo.startTimeValue = startTimeValue;
+	_sntprintf(processInfo.startTimeText, _countof(processInfo.startTimeText) - 1,
+		_T("%04u-%02u-%02u %02u:%02u:%02u"),
+		systemTime.wYear, systemTime.wMonth, systemTime.wDay,
+		systemTime.wHour, systemTime.wMinute, systemTime.wSecond);
+	processInfo.startTimeText[_countof(processInfo.startTimeText) - 1] = _T('\0');
+	return TRUE;
+}
+
+// 读取单个已打开进程的创建时间，作为旧系统和异常情况下的回退路径。
+static BOOL GetProcessStartTime(HANDLE hProcess, _myPROCESSINFO& processInfo)
+{
+	FILETIME creationTime;
+	FILETIME exitTime;
+	FILETIME kernelTime;
+	FILETIME userTime;
+	if (!GetProcessTimes(hProcess, &creationTime, &exitTime, &kernelTime, &userTime))
+		return FALSE;
+
+	ULARGE_INTEGER timeValue;
+	timeValue.LowPart = creationTime.dwLowDateTime;
+	timeValue.HighPart = creationTime.dwHighDateTime;
+	return SetProcessStartTime(timeValue.QuadPart, processInfo);
+}
+
+// SYSTEM_PROCESS_INFORMATION 的固定前缀。创建时间位于偏移 32，父 PID 紧随进程 PID。
+// 这里只读取 XP 至今保持稳定的字段，不依赖较新 SDK 中不断扩展的后续成员。
+struct ProcessSnapshotEntryPrefix
+{
+	ULONG nextEntryOffset;
+	BYTE reservedBeforeImageName[52];
+	PVOID reservedImageNameAndPriority[3];
+	HANDLE processId;
+	PVOID parentProcessId;
+};
+
+static BOOL GetSnapshotProcessStartTimes(std::map<DWORD, ULONGLONG>& startTimes)
+{
+	typedef LONG (WINAPI* NtQuerySystemInformationProc)(
+		ULONG systemInformationClass,
+		PVOID systemInformation,
+		ULONG systemInformationLength,
+		PULONG returnLength);
+
+	HMODULE ntdll = GetModuleHandle(_T("ntdll.dll"));
+	NtQuerySystemInformationProc querySystemInformation = ntdll
+		? reinterpret_cast<NtQuerySystemInformationProc>(
+			GetProcAddress(ntdll, "NtQuerySystemInformation"))
+		: NULL;
+	if (!querySystemInformation)
+		return FALSE;
+
+	const ULONG systemProcessInformation = 5;
+	const LONG statusInfoLengthMismatch = static_cast<LONG>(0xC0000004L);
+	ULONG bufferSize = 64 * 1024;
+	std::vector<BYTE> buffer;
+	LONG status = statusInfoLengthMismatch;
+	for (int attempt = 0; attempt < 8 && status == statusInfoLengthMismatch; ++attempt)
+	{
+		buffer.resize(bufferSize);
+		ULONG requiredSize = 0;
+		status = querySystemInformation(
+			systemProcessInformation,
+			&buffer[0],
+			bufferSize,
+			&requiredSize);
+		if (status == statusInfoLengthMismatch)
+		{
+			bufferSize = requiredSize > bufferSize
+				? requiredSize + 64 * 1024
+				: bufferSize * 2;
+		}
+	}
+	if (status < 0 || buffer.empty())
+		return FALSE;
+
+	BYTE* entryAddress = &buffer[0];
+	for (;;)
+	{
+		ProcessSnapshotEntryPrefix* entry =
+			reinterpret_cast<ProcessSnapshotEntryPrefix*>(entryAddress);
+		DWORD pid = static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(entry->processId));
+		LARGE_INTEGER* creationTime = reinterpret_cast<LARGE_INTEGER*>(entryAddress + 32);
+		if (pid != 0 && creationTime->QuadPart > 0)
+			startTimes[pid] = static_cast<ULONGLONG>(creationTime->QuadPart);
+
+		if (entry->nextEntryOffset == 0)
+			break;
+		entryAddress += entry->nextEntryOffset;
+	}
+	return !startTimes.empty();
+}
+
 int GetProcessList(list<_myPROCESSINFO> &ls)
 {
 	int nCount = 0;
 	PROCESSENTRY32 pe;
 	DWORD dwRet;
 	_myPROCESSINFO mypi;
+	std::map<DWORD, ULONGLONG> snapshotStartTimes;
+	GetSnapshotProcessStartTimes(snapshotStartTimes);
 
 	//
 	// 通过 TOOHLP32 函数枚举进程
 	//
 
 	HANDLE hSP = ::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-	if (hSP)
+	if (hSP != INVALID_HANDLE_VALUE)
 	{
 		pe.dwSize = sizeof(pe);
 
@@ -173,12 +287,30 @@ int GetProcessList(list<_myPROCESSINFO> &ls)
 			ZeroMemory(&mypi, sizeof(mypi));
 
 			mypi.pid = pe.th32ProcessID;
+			mypi.parentPid = pe.th32ParentProcessID;
+			// 保持原界面逐项插入到列表首行时形成的默认顺序。
+			mypi.defaultOrder = -nCount;
+			mypi.treeOrder = -1;
 			_tcsncpy(mypi.proname, pe.szExeFile, MAX_PATH);
+			mypi.proname[MAX_PATH - 1] = _T('\0');
+			std::map<DWORD, ULONGLONG>::const_iterator snapshotTime =
+				snapshotStartTimes.find(mypi.pid);
+			if (snapshotTime != snapshotStartTimes.end())
+				SetProcessStartTime(snapshotTime->second, mypi);
 
 			HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pe.th32ProcessID);
+			BOOL canReadPath = hProcess != NULL;
+			if (!hProcess)
+			{
+				// 某些进程不允许读取内存，但仍可能允许查询启动时间。
+				hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pe.th32ProcessID);
+			}
 			if (hProcess)
 			{
-				GetProcessFullPath(hProcess, mypi.propath, MAX_PATH);
+				if (canReadPath)
+					GetProcessFullPath(hProcess, mypi.propath, MAX_PATH);
+				if (!mypi.hasStartTime)
+					GetProcessStartTime(hProcess, mypi);
 				CloseHandle(hProcess);
 			}
 
@@ -581,6 +713,9 @@ IMPLEMENT_DYNAMIC(CPage3, CModernDialog)
 CPage3::CPage3(CWnd* pParent /*=NULL*/)
 	: CModernDialog(CPage3::IDD, pParent)
 	, m_evlock()
+	, m_sortColumn(-1)
+	, m_sortState(PROCESS_SORT_NONE)
+	, m_processNameSearchTick(0)
 {
 	//m_pEdit = NULL;
 	//m_pEdit = new CMyEdit;
@@ -609,10 +744,16 @@ BOOL CPage3::OnInitDialog()
 	m_ListCtrl.DragAcceptFiles(FALSE);
 	m_btnRefresh.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	m_btnInject.SetVisualStyle(CModernButton::STYLE_PRIMARY);
+	SetDlgItemText(
+		IDC_STATIC_PAGE_SUBTITLE,
+		_T("选择运行中的进程（按住 Ctrl 或 Shift 可多选），或拖入程序/快捷方式启动并代理"));
+	// 资源模板为兼容旧版本仍可能带有单选样式，初始化时统一启用多选。
+	m_ListCtrl.ModifyStyle(LVS_SINGLESEL, 0);
 
-	m_ListCtrl.InsertColumn(0, _T("Pid"), 0, 50);
-	m_ListCtrl.InsertColumn(1, _T("进程名"), 0, 100);
-	m_ListCtrl.InsertColumn(2, _T("路径"), 0, 200);
+	m_ListCtrl.InsertColumn(0, _T("PID"), 0, 50);
+	m_ListCtrl.InsertColumn(1, _T("进程名"), 0, 180);
+	m_ListCtrl.InsertColumn(2, _T("启动时间"), 0, 150);
+	m_ListCtrl.InsertColumn(3, _T("路径"), 0, 200);
 
 	DWORD dwStyle = m_ListCtrl.GetExtendedStyle();
 	dwStyle |= LVS_EX_FULLROWSELECT;
@@ -655,10 +796,101 @@ BOOL CPage3::OnInitDialog()
 	return TRUE;
 }
 
+BOOL CPage3::PreTranslateMessage(MSG* message)
+{
+	if (!message || !m_ListCtrl.GetSafeHwnd() || message->hwnd != m_ListCtrl.m_hWnd)
+		return CModernDialog::PreTranslateMessage(message);
+
+	if (message->message == WM_LBUTTONDOWN
+		|| message->message == WM_RBUTTONDOWN
+		|| message->message == WM_MBUTTONDOWN)
+	{
+		// 鼠标重新定位后，下一次字符输入应当开始新的搜索。
+		m_processNameSearchText.Empty();
+		m_processNameSearchTick = 0;
+		return CModernDialog::PreTranslateMessage(message);
+	}
+
+	if (message->message != WM_CHAR)
+		return CModernDialog::PreTranslateMessage(message);
+
+	TCHAR inputCharacter = static_cast<TCHAR>(message->wParam);
+	DWORD currentTick = GetTickCount();
+	const DWORD searchTimeout = 1500;
+	if (m_processNameSearchTick == 0
+		|| currentTick - m_processNameSearchTick > searchTimeout)
+	{
+		m_processNameSearchText.Empty();
+	}
+	m_processNameSearchTick = currentTick;
+
+	if (inputCharacter == VK_ESCAPE)
+	{
+		m_processNameSearchText.Empty();
+		m_processNameSearchTick = 0;
+		return TRUE;
+	}
+
+	if (inputCharacter == VK_BACK)
+	{
+		if (!m_processNameSearchText.IsEmpty())
+			m_processNameSearchText.Delete(m_processNameSearchText.GetLength() - 1);
+		if (!m_processNameSearchText.IsEmpty())
+			SelectFirstProcessByNamePrefix(m_processNameSearchText);
+		return TRUE;
+	}
+
+	if (inputCharacter < _T(' ')
+		|| (GetKeyState(VK_CONTROL) & 0x8000) != 0
+		|| (GetKeyState(VK_MENU) & 0x8000) != 0)
+	{
+		return CModernDialog::PreTranslateMessage(message);
+	}
+
+	m_processNameSearchText.AppendChar(inputCharacter);
+	SelectFirstProcessByNamePrefix(m_processNameSearchText);
+	// 阻止列表控件继续按第一列 PID 执行默认增量搜索。
+	return TRUE;
+}
+
+BOOL CPage3::SelectFirstProcessByNamePrefix(const CString& prefix)
+{
+	if (prefix.IsEmpty())
+		return FALSE;
+
+	for (int item = 0; item < m_ListCtrl.GetItemCount(); ++item)
+	{
+		DWORD pid = static_cast<DWORD>(m_ListCtrl.GetItemData(item));
+		std::map<DWORD, _myPROCESSINFO>::const_iterator process = m_processSortData.find(pid);
+		if (process == m_processSortData.end())
+			continue;
+
+		CString processName(process->second.proname);
+		if (processName.GetLength() < prefix.GetLength()
+			|| processName.Left(prefix.GetLength()).CompareNoCase(prefix) != 0)
+		{
+			continue;
+		}
+
+		// 键盘定位表示一次新的目标选择，不保留此前的多选状态。
+		m_ListCtrl.SetItemState(-1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+		m_ListCtrl.SetItemState(
+			item,
+			LVIS_SELECTED | LVIS_FOCUSED,
+			LVIS_SELECTED | LVIS_FOCUSED);
+		m_ListCtrl.SetSelectionMark(item);
+		m_ListCtrl.EnsureVisible(item, FALSE);
+		return TRUE;
+	}
+	return FALSE;
+}
+
 BEGIN_MESSAGE_MAP(CPage3, CModernDialog)
 	ON_WM_SIZE()
 	ON_BN_CLICKED(IDC_REFRESH, &CPage3::OnBnClickedRefresh)
 	ON_BN_CLICKED(IDC_INJECTDLL, &CPage3::OnBnClickedInjectdll)
+	ON_NOTIFY(LVN_COLUMNCLICK, IDC_PSLIST, &CPage3::OnLvnColumnClickProcessList)
+	ON_NOTIFY(NM_CUSTOMDRAW, IDC_PSLIST, &CPage3::OnNMCustomdrawProcessList)
 	ON_MESSAGE(WM_ON_REFRESHPS, &CPage3::OnRefreshPslist)
 	ON_WM_TIMER()
 END_MESSAGE_MAP()
@@ -681,9 +913,9 @@ void CPage3::OnSize(UINT nType, int cx, int cy)
 		int bottom = UiTheme::ScaleForWindow(m_hWnd, 8);
 		CRect rc(margin, top, rcClient.right - margin, rcClient.bottom - bottom);
 		m_ListCtrl.MoveWindow(&rc);
-		int pathWidth = rc.Width() - UiTheme::ScaleForWindow(m_hWnd, 215);
+		int pathWidth = rc.Width() - UiTheme::ScaleForWindow(m_hWnd, 445);
 		if (pathWidth > UiTheme::ScaleForWindow(m_hWnd, 140))
-			m_ListCtrl.SetColumnWidth(2, pathWidth);
+			m_ListCtrl.SetColumnWidth(3, pathWidth);
 	}
 
 	int margin = UiTheme::ScaleForWindow(m_hWnd, 8);
@@ -708,6 +940,12 @@ int CPage3::UpdatePslist(BOOL bRefresh)
 	//查询当前所有进程
 	int nPsCount = GetProcessList(psls);
 
+	// 保存本次快照，排序比较时直接使用原始数据，避免按显示文本错误排序。
+	m_processSortData.clear();
+	for (list<_myPROCESSINFO>::const_iterator it = psls.begin(); it != psls.end(); ++it)
+		m_processSortData[it->pid] = *it;
+	BuildProcessTree();
+
 	int nItemCount = m_ListCtrl.GetItemCount();
 	TCHAR szPath[MAX_PATH];
 
@@ -719,7 +957,7 @@ int CPage3::UpdatePslist(BOOL bRefresh)
 		lvitem.iItem = nItem;
 		lvitem.pszText = szPath;
 		lvitem.cchTextMax = MAX_PATH;
-		lvitem.iSubItem = 2;
+		lvitem.iSubItem = 3;
 
 		//
 		szPath[0] = 0;
@@ -733,20 +971,32 @@ int CPage3::UpdatePslist(BOOL bRefresh)
 			{
 				if(it->pid == dwPid)
 				{
+					BOOL sameProcess = TRUE;
+					std::map<DWORD, ULONGLONG>::const_iterator displayedTime =
+						m_displayedStartTimes.find(dwPid);
+					if (displayedTime != m_displayedStartTimes.end()
+						&& displayedTime->second != 0
+						&& it->hasStartTime
+						&& displayedTime->second != it->startTimeValue)
+					{
+						// PID 已被新进程复用，先删除旧行，再按新进程重新插入。
+						sameProcess = FALSE;
+					}
+
+					if (!sameProcess)
+						break;
+
+					m_ListCtrl.SetItemText(nItem, 1, it->proname);
+					m_ListCtrl.SetItemText(nItem, 2, it->startTimeText);
 					if (szPath[0] == 0)
 					{
-						HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, it->pid);
-						if (hProcess)
+						if (it->propath[0] != _T('\0'))
 						{
-							TCHAR propath[MAX_PATH];
-							if (GetProcessFullPath(hProcess, propath, MAX_PATH))
-							{
-								m_ListCtrl.SetItemText(nItem, 2, propath);
-							}
-							CloseHandle(hProcess);
+							m_ListCtrl.SetItemText(nItem, 3, it->propath);
 						}
 					}
 
+					m_displayedStartTimes[dwPid] = it->hasStartTime ? it->startTimeValue : 0;
 					psls.erase(it++);
 					bLive = TRUE;
 					break;
@@ -758,6 +1008,7 @@ int CPage3::UpdatePslist(BOOL bRefresh)
 
 			if(bLive == FALSE)
 			{
+				m_displayedStartTimes.erase(dwPid);
 				m_ListCtrl.DeleteItem(nItem--);
 				nItemCount--;
 			}
@@ -782,7 +1033,9 @@ int CPage3::UpdatePslist(BOOL bRefresh)
 
 		m_ListCtrl.InsertItem(&lvitem);
 		m_ListCtrl.SetItemText(0, 1, it->proname);
-		m_ListCtrl.SetItemText(0, 2, it->propath);
+		m_ListCtrl.SetItemText(0, 2, it->startTimeText);
+		m_ListCtrl.SetItemText(0, 3, it->propath);
+		m_displayedStartTimes[it->pid] = it->hasStartTime ? it->startTimeValue : 0;
 
 		//if(!bRefresh && m_btnAuto.GetCheck() == BST_CHECKED)
 		//{
@@ -791,24 +1044,436 @@ int CPage3::UpdatePslist(BOOL bRefresh)
 
 	}
 
+	// 自动刷新后继续保持用户选择的排序状态。
+	ApplyProcessSort();
+
 	m_evlock.SetEvent();
 	lc.Unlock();
 	return 0;
+}
+
+int CALLBACK CPage3::CompareProcessItems(LPARAM leftParam, LPARAM rightParam, LPARAM sortParam)
+{
+	CPage3* page = reinterpret_cast<CPage3*>(sortParam);
+	if (!page)
+		return 0;
+
+	DWORD leftPid = static_cast<DWORD>(leftParam);
+	DWORD rightPid = static_cast<DWORD>(rightParam);
+	std::map<DWORD, _myPROCESSINFO>::const_iterator leftIt =
+		page->m_processSortData.find(leftPid);
+	std::map<DWORD, _myPROCESSINFO>::const_iterator rightIt =
+		page->m_processSortData.find(rightPid);
+
+	// 快照中缺失的项目统一排在末尾，下一次刷新时会被移除。
+	if (leftIt == page->m_processSortData.end()
+		|| rightIt == page->m_processSortData.end())
+	{
+		if (leftIt == rightIt)
+			return 0;
+		return leftIt == page->m_processSortData.end() ? 1 : -1;
+	}
+
+	const _myPROCESSINFO& left = leftIt->second;
+	const _myPROCESSINFO& right = rightIt->second;
+	int result = 0;
+
+	if (page->m_sortState == PROCESS_SORT_NONE || page->m_sortColumn < 0)
+	{
+		if (left.treeOrder < right.treeOrder)
+			result = -1;
+		else if (left.treeOrder > right.treeOrder)
+			result = 1;
+	}
+	else
+	{
+		switch (page->m_sortColumn)
+		{
+		case 0:
+			if (left.pid < right.pid)
+				result = -1;
+			else if (left.pid > right.pid)
+				result = 1;
+			break;
+
+		case 1:
+			result = _tcsicmp(left.proname, right.proname);
+			break;
+
+		case 2:
+			// 无法读取启动时间的进程始终放在有时间的进程之后。
+			if (left.hasStartTime != right.hasStartTime)
+				return left.hasStartTime ? -1 : 1;
+			if (left.hasStartTime)
+			{
+				if (left.startTimeValue < right.startTimeValue)
+					result = -1;
+				else if (left.startTimeValue > right.startTimeValue)
+					result = 1;
+			}
+			break;
+
+		case 3:
+			result = _tcsicmp(left.propath, right.propath);
+			break;
+		}
+
+		if (page->m_sortState == PROCESS_SORT_DESCENDING)
+			result = -result;
+	}
+
+	// 主排序值相同时使用 PID 保持结果稳定。
+	if (result == 0)
+	{
+		if (left.pid < right.pid)
+			result = -1;
+		else if (left.pid > right.pid)
+			result = 1;
+	}
+	return result;
+}
+
+namespace
+{
+	// 父子树中的同级进程沿用原列表的默认顺序。
+	struct ProcessDefaultOrderLess
+	{
+		const std::map<DWORD, _myPROCESSINFO>* processData;
+
+		bool operator()(DWORD leftPid, DWORD rightPid) const
+		{
+			std::map<DWORD, _myPROCESSINFO>::const_iterator left = processData->find(leftPid);
+			std::map<DWORD, _myPROCESSINFO>::const_iterator right = processData->find(rightPid);
+			if (left == processData->end() || right == processData->end())
+				return leftPid < rightPid;
+			if (left->second.defaultOrder != right->second.defaultOrder)
+				return left->second.defaultOrder < right->second.defaultOrder;
+			return leftPid < rightPid;
+		}
+	};
+}
+
+void CPage3::BuildProcessTree()
+{
+	m_processTreePrefixes.clear();
+
+	std::map<DWORD, std::vector<DWORD> > children;
+	std::vector<DWORD> roots;
+	for (std::map<DWORD, _myPROCESSINFO>::iterator it = m_processSortData.begin();
+		it != m_processSortData.end(); ++it)
+	{
+		_myPROCESSINFO& process = it->second;
+		process.treeOrder = -1;
+
+		std::map<DWORD, _myPROCESSINFO>::const_iterator parent =
+			m_processSortData.find(process.parentPid);
+		BOOL validParent = process.parentPid != 0
+			&& process.parentPid != process.pid
+			&& parent != m_processSortData.end();
+
+		// PID 可能在父进程退出后被复用；能读取到时间时排除明显无效的父子关系。
+		if (validParent
+			&& parent->second.hasStartTime
+			&& process.hasStartTime
+			&& parent->second.startTimeValue > process.startTimeValue)
+		{
+			validParent = FALSE;
+		}
+
+		if (validParent)
+			children[process.parentPid].push_back(process.pid);
+		else
+			roots.push_back(process.pid);
+	}
+
+	ProcessDefaultOrderLess orderLess;
+	orderLess.processData = &m_processSortData;
+	std::sort(roots.begin(), roots.end(), orderLess);
+	for (std::map<DWORD, std::vector<DWORD> >::iterator it = children.begin();
+		it != children.end(); ++it)
+	{
+		std::sort(it->second.begin(), it->second.end(), orderLess);
+	}
+
+	std::set<DWORD> visited;
+	int nextTreeOrder = 0;
+	for (size_t rootIndex = 0; rootIndex < roots.size(); ++rootIndex)
+	{
+		AppendProcessTree(
+			roots[rootIndex], _T(""), _T(""), children, visited, nextTreeOrder);
+	}
+
+	// 极少数异常快照可能形成循环；将未访问进程作为新的根节点，保证每行都能显示。
+	std::vector<DWORD> remaining;
+	for (std::map<DWORD, _myPROCESSINFO>::const_iterator it = m_processSortData.begin();
+		it != m_processSortData.end(); ++it)
+	{
+		if (visited.find(it->first) == visited.end())
+			remaining.push_back(it->first);
+	}
+	std::sort(remaining.begin(), remaining.end(), orderLess);
+	for (size_t index = 0; index < remaining.size(); ++index)
+	{
+		if (visited.find(remaining[index]) == visited.end())
+			AppendProcessTree(
+				remaining[index], _T(""), _T(""), children, visited, nextTreeOrder);
+	}
+}
+
+void CPage3::AppendProcessTree(
+	DWORD pid,
+	const CString& displayPrefix,
+	const CString& childPrefix,
+	std::map<DWORD, std::vector<DWORD> >& children,
+	std::set<DWORD>& visited,
+	int& treeOrder)
+{
+	if (visited.find(pid) != visited.end())
+		return;
+
+	std::map<DWORD, _myPROCESSINFO>::iterator process = m_processSortData.find(pid);
+	if (process == m_processSortData.end())
+		return;
+
+	visited.insert(pid);
+	process->second.treeOrder = treeOrder++;
+	m_processTreePrefixes[pid] = displayPrefix;
+
+	std::map<DWORD, std::vector<DWORD> >::iterator childList = children.find(pid);
+	if (childList == children.end())
+		return;
+
+	for (size_t index = 0; index < childList->second.size(); ++index)
+	{
+		DWORD childPid = childList->second[index];
+		if (visited.find(childPid) != visited.end())
+			continue;
+
+		BOOL isLastChild = index + 1 == childList->second.size();
+		CString childDisplayPrefix = childPrefix
+			+ (isLastChild ? _T("└─ ") : _T("├─ "));
+		CString nextChildPrefix = childPrefix
+			+ (isLastChild ? _T("   ") : _T("│  "));
+		AppendProcessTree(
+			childPid,
+			childDisplayPrefix,
+			nextChildPrefix,
+			children,
+			visited,
+			treeOrder);
+	}
+}
+
+void CPage3::ApplyProcessSort()
+{
+	if (m_ListCtrl.GetSafeHwnd() && m_ListCtrl.GetItemCount() > 1)
+		m_ListCtrl.SortItems(CompareProcessItems, reinterpret_cast<LPARAM>(this));
+	UpdateProcessNameDisplay();
+	// 新进程的背景色会随时间衰减，定时刷新时强制重绘可及时切换颜色阶段。
+	if (m_ListCtrl.GetSafeHwnd())
+		m_ListCtrl.Invalidate(FALSE);
+}
+
+void CPage3::UpdateProcessNameDisplay()
+{
+	if (!m_ListCtrl.GetSafeHwnd())
+		return;
+
+	for (int item = 0; item < m_ListCtrl.GetItemCount(); ++item)
+	{
+		DWORD pid = static_cast<DWORD>(m_ListCtrl.GetItemData(item));
+		std::map<DWORD, _myPROCESSINFO>::const_iterator process = m_processSortData.find(pid);
+		if (process == m_processSortData.end())
+			continue;
+
+		CString displayName;
+		if (m_sortState == PROCESS_SORT_NONE)
+		{
+			std::map<DWORD, CString>::const_iterator prefix = m_processTreePrefixes.find(pid);
+			if (prefix != m_processTreePrefixes.end())
+				displayName = prefix->second;
+		}
+		displayName += process->second.proname;
+		m_ListCtrl.SetItemText(item, 1, displayName);
+	}
+}
+
+void CPage3::UpdateSortIndicator()
+{
+	CHeaderCtrl* header = m_ListCtrl.GetHeaderCtrl();
+	if (!header || !header->GetSafeHwnd())
+		return;
+
+	for (int column = 0; column < header->GetItemCount(); ++column)
+	{
+		HDITEM item;
+		ZeroMemory(&item, sizeof(item));
+		item.mask = HDI_FORMAT;
+		if (!header->GetItem(column, &item))
+			continue;
+
+		item.fmt &= ~(HDF_SORTUP | HDF_SORTDOWN);
+		if (column == m_sortColumn)
+		{
+			if (m_sortState == PROCESS_SORT_ASCENDING)
+				item.fmt |= HDF_SORTUP;
+			else if (m_sortState == PROCESS_SORT_DESCENDING)
+				item.fmt |= HDF_SORTDOWN;
+		}
+		header->SetItem(column, &item);
+	}
+}
+
+void CPage3::OnLvnColumnClickProcessList(NMHDR* notifyHeader, LRESULT* result)
+{
+	NM_LISTVIEW* listView = reinterpret_cast<NM_LISTVIEW*>(notifyHeader);
+	if (!listView || listView->iSubItem < 0 || listView->iSubItem > 3)
+	{
+		if (result)
+			*result = 0;
+		return;
+	}
+
+	const int clickedColumn = listView->iSubItem;
+	if (m_sortColumn != clickedColumn || m_sortState == PROCESS_SORT_NONE)
+	{
+		m_sortColumn = clickedColumn;
+		m_sortState = PROCESS_SORT_ASCENDING;
+	}
+	else if (m_sortState == PROCESS_SORT_ASCENDING)
+	{
+		m_sortState = PROCESS_SORT_DESCENDING;
+	}
+	else
+	{
+		m_sortColumn = -1;
+		m_sortState = PROCESS_SORT_NONE;
+	}
+
+	UpdateSortIndicator();
+	ApplyProcessSort();
+	if (result)
+		*result = 0;
+}
+
+void CPage3::OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result)
+{
+	if (!result)
+		return;
+
+	NMLVCUSTOMDRAW* customDraw = reinterpret_cast<NMLVCUSTOMDRAW*>(notifyHeader);
+	if (!customDraw)
+	{
+		*result = CDRF_DODEFAULT;
+		return;
+	}
+
+	if (customDraw->nmcd.dwDrawStage == CDDS_PREPAINT)
+	{
+		*result = CDRF_NOTIFYITEMDRAW;
+		return;
+	}
+
+	if (customDraw->nmcd.dwDrawStage != CDDS_ITEMPREPAINT
+		|| m_sortState != PROCESS_SORT_NONE)
+	{
+		*result = CDRF_DODEFAULT;
+		return;
+	}
+
+	int item = static_cast<int>(customDraw->nmcd.dwItemSpec);
+	if (item < 0
+		|| item >= m_ListCtrl.GetItemCount()
+		|| (m_ListCtrl.GetItemState(item, LVIS_SELECTED) & LVIS_SELECTED) != 0)
+	{
+		// 被选中的行继续使用系统高亮色，避免自定义背景掩盖选择状态。
+		*result = CDRF_DODEFAULT;
+		return;
+	}
+
+	DWORD pid = static_cast<DWORD>(m_ListCtrl.GetItemData(item));
+	std::map<DWORD, _myPROCESSINFO>::const_iterator process = m_processSortData.find(pid);
+	if (process == m_processSortData.end() || !process->second.hasStartTime)
+	{
+		*result = CDRF_DODEFAULT;
+		return;
+	}
+
+	FILETIME currentFileTime;
+	GetSystemTimeAsFileTime(&currentFileTime);
+	ULARGE_INTEGER currentTime;
+	currentTime.LowPart = currentFileTime.dwLowDateTime;
+	currentTime.HighPart = currentFileTime.dwHighDateTime;
+	if (currentTime.QuadPart < process->second.startTimeValue)
+	{
+		*result = CDRF_DODEFAULT;
+		return;
+	}
+
+	const ULONGLONG unitsPerSecond = 10000000ULL;
+	ULONGLONG age = currentTime.QuadPart - process->second.startTimeValue;
+	if (age < 5 * unitsPerSecond)
+		customDraw->clrTextBk = RGB(255, 236, 179); // 刚刚出现：浅金黄色
+	else if (age < 10 * unitsPerSecond)
+		customDraw->clrTextBk = RGB(220, 243, 228); // 新进程：浅绿色
+	else if (age < 20 * unitsPerSecond)
+		customDraw->clrTextBk = RGB(229, 240, 252); // 近期进程：浅蓝色
+
+	*result = CDRF_DODEFAULT;
 }
 
 void CPage3::OnBnClickedRefresh()
 {
 	// TODO: 在此添加控件通知处理程序代码
 	m_ListCtrl.DeleteAllItems();
+	m_displayedStartTimes.clear();
 	UpdatePslist(TRUE);
 }
 
 void CPage3::OnBnClickedInjectdll()
 {
-	// TODO: 在此添加控件通知处理程序代码
 	if(!m_ListCtrl.GetSelectedCount())
 	{
 		MessageBox(_T("请先在列表中选择一个进程。"), _T("未选择进程"), MB_ICONINFORMATION);
+		return;
+	}
+
+	// 先保存全部选中目标，防止处理期间列表刷新导致行号和选择状态变化。
+	struct SelectedProcessTarget
+	{
+		DWORD pid;
+		CString name;
+	};
+	std::vector<SelectedProcessTarget> targets;
+	int unreadableCount = 0;
+	POSITION pos = m_ListCtrl.GetFirstSelectedItemPosition();
+	while (pos)
+	{
+		int item = m_ListCtrl.GetNextSelectedItem(pos);
+		LVITEM listItem;
+		ZeroMemory(&listItem, sizeof(listItem));
+		listItem.mask = LVIF_PARAM;
+		listItem.iItem = item;
+		listItem.iSubItem = 0;
+		if (!m_ListCtrl.GetItem(&listItem))
+		{
+			++unreadableCount;
+			continue;
+		}
+
+		SelectedProcessTarget target;
+		target.pid = static_cast<DWORD>(listItem.lParam);
+		target.name = m_ListCtrl.GetItemText(item, 1);
+		std::map<DWORD, _myPROCESSINFO>::const_iterator process =
+			m_processSortData.find(target.pid);
+		if (process != m_processSortData.end())
+			target.name = process->second.proname;
+		targets.push_back(target);
+	}
+
+	if (targets.empty())
+	{
+		MessageBox(_T("无法读取所选进程，请刷新列表后重试。"), _T("进程不可用"), MB_ICONERROR);
 		return;
 	}
 
@@ -825,36 +1490,73 @@ void CPage3::OnBnClickedInjectdll()
 		return;
 	}
 
-	POSITION pos = m_ListCtrl.GetFirstSelectedItemPosition();
-
-	int nItem = m_ListCtrl.GetNextSelectedItem(pos);
-
-	LVITEM lvitem;
-	lvitem.mask = LVIF_PARAM;
-	lvitem.iItem = nItem;
-
-	if(!m_ListCtrl.GetItem(&lvitem))
+	int successCount = 0;
+	int failedCount = unreadableCount;
+	int skippedCount = 0;
+	std::vector<CString> failedProcesses;
+	DWORD currentPid = GetCurrentProcessId();
+	for (size_t index = 0; index < targets.size(); ++index)
 	{
-		MessageBox(_T("无法读取所选进程，请刷新列表后重试。"), _T("进程不可用"), MB_ICONERROR);
-		return;
+		const SelectedProcessTarget& target = targets[index];
+		if (target.pid == currentPid)
+		{
+			++skippedCount;
+			continue;
+		}
+
+		if (HookProcess(target.pid, szPipeName))
+		{
+			++successCount;
+		}
+		else
+		{
+			++failedCount;
+			CString failedProcess;
+			failedProcess.Format(_T("%s (%lu)"),
+				target.name.IsEmpty() ? _T("未知进程") : static_cast<LPCTSTR>(target.name),
+				target.pid);
+			failedProcesses.push_back(failedProcess);
+		}
 	}
 
-	DWORD dwPid = (DWORD)lvitem.lParam;
+	CString resultText;
+	int totalCount = static_cast<int>(targets.size()) + unreadableCount;
+	resultText.Format(
+		_T("已处理 %d 个进程：成功 %d 个，失败 %d 个，跳过 %d 个。"),
+		totalCount,
+		successCount,
+		failedCount,
+		skippedCount);
 
-	if (dwPid == GetCurrentProcessId())
+	if (failedCount > 0)
 	{
-		return;
+		resultText += _T("\r\n\r\n代理失败的进程：");
+		const size_t maxFailureDetails = 10;
+		for (size_t index = 0;
+			index < failedProcesses.size() && index < maxFailureDetails;
+			++index)
+		{
+			resultText += _T("\r\n");
+			resultText += failedProcesses[index];
+		}
+		if (failedProcesses.size() > maxFailureDetails)
+		{
+			CString remainingText;
+			remainingText.Format(
+				_T("\r\n以及另外 %u 个进程。"),
+				static_cast<unsigned int>(failedProcesses.size() - maxFailureDetails));
+			resultText += remainingText;
+		}
+		if (unreadableCount > 0)
+			resultText += _T("\r\n另有选中项无法从列表中读取。");
 	}
+	if (skippedCount > 0)
+		resultText += _T("\r\n\r\n已跳过 ProxyLane 自身进程。");
 
-	int ret = HookProcess(dwPid, szPipeName);
-
-	if(ret)
-	{
-		MessageBox(_T("已成功代理所选进程。"), _T("操作完成"), MB_ICONINFORMATION);
-	}else
-	{
-		MessageBox(_T("无法代理所选进程。请确认 ProxyLane 权限不低于目标进程。"), _T("代理进程失败"), MB_ICONERROR);
-	}
+	MessageBox(
+		resultText,
+		failedCount > 0 ? _T("部分进程代理失败") : _T("操作完成"),
+		failedCount > 0 ? MB_ICONWARNING : MB_ICONINFORMATION);
 }
 
 void CPage3::OnTimer(UINT_PTR nIDEvent)

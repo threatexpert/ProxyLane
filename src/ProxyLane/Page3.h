@@ -4,6 +4,8 @@
 #include "..\ProxyLaneHook\ProxyModule.h"
 #include "ListCtrlEx.h"
 #include "ModernUI.h"
+#include <map>
+#include <set>
 #include <vector>
 
 // CPage3 对话框
@@ -19,8 +21,14 @@ BOOL myWow64RevertWow64FsRedirection(  PVOID OldValue);
 struct _myPROCESSINFO
 {
 	DWORD pid;
+	DWORD parentPid;
 	TCHAR proname[MAX_PATH];
 	TCHAR propath[MAX_PATH];
+	BOOL hasStartTime;
+	ULONGLONG startTimeValue;
+	TCHAR startTimeText[32];
+	int defaultOrder;
+	int treeOrder;
 };
 
 enum AppLaunchResult
@@ -59,6 +67,37 @@ public:
 	CRect m_rcBtnInjectInit;
 	CRect m_rcHintInit;
 
+private:
+	// 进程列表排序状态：不排序、升序、降序。
+	enum ProcessSortState
+	{
+		PROCESS_SORT_NONE = 0,
+		PROCESS_SORT_ASCENDING,
+		PROCESS_SORT_DESCENDING
+	};
+
+	int m_sortColumn;
+	ProcessSortState m_sortState;
+	std::map<DWORD, _myPROCESSINFO> m_processSortData;
+	std::map<DWORD, ULONGLONG> m_displayedStartTimes;
+	std::map<DWORD, CString> m_processTreePrefixes;
+	CString m_processNameSearchText;
+	DWORD m_processNameSearchTick;
+
+	static int CALLBACK CompareProcessItems(LPARAM leftParam, LPARAM rightParam, LPARAM sortParam);
+	void BuildProcessTree();
+	void AppendProcessTree(
+		DWORD pid,
+		const CString& displayPrefix,
+		const CString& childPrefix,
+		std::map<DWORD, std::vector<DWORD> >& children,
+		std::set<DWORD>& visited,
+		int& treeOrder);
+	void ApplyProcessSort();
+	void UpdateProcessNameDisplay();
+	void UpdateSortIndicator();
+	BOOL SelectFirstProcessByNamePrefix(const CString& prefix);
+
 public:
 
 	int UpdatePslist(BOOL bRefresh);
@@ -85,6 +124,7 @@ public:
 protected:
 	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV 支持
 	virtual BOOL OnInitDialog();
+	virtual BOOL PreTranslateMessage(MSG* message);
 
 
 
@@ -99,4 +139,6 @@ public:
 	afx_msg void OnBnClickedRefresh();
 	afx_msg void OnBnClickedInjectdll();
 	afx_msg void OnTimer(UINT_PTR nIDEvent);
+	afx_msg void OnLvnColumnClickProcessList(NMHDR* notifyHeader, LRESULT* result);
+	afx_msg void OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result);
 };
