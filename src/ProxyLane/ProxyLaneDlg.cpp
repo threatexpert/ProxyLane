@@ -371,7 +371,7 @@ CProxyLaneDlg::OnShellIconNotify(
 		switch(lParam)
 		{
 		case WM_LBUTTONDBLCLK:
-			ShowWindow(IsWindowVisible()?SW_HIDE:SW_SHOWNORMAL);
+			ShowAndActivate();
 			break;
 		default:
 			break;
@@ -380,6 +380,21 @@ CProxyLaneDlg::OnShellIconNotify(
 
 	return 1;
 }
+
+void CProxyLaneDlg::ShowAndActivate()
+{
+	ShowWindow(IsIconic() ? SW_RESTORE : SW_SHOW);
+
+	// Raise the window without leaving it permanently topmost.
+	const UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW;
+	SetWindowPos(&wndTopMost, 0, 0, 0, 0, flags);
+	SetWindowPos(&wndNoTopMost, 0, 0, 0, 0, flags);
+
+	BringWindowToTop();
+	SetForegroundWindow();
+	SetActiveWindow();
+}
+
 void CProxyLaneDlg::OnSize(UINT nType, int cx, int cy)
 {
 	CModernDialog::OnSize(nType, cx, cy);

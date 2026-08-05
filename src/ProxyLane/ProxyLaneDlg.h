@@ -31,6 +31,7 @@ protected:
 	BOOL AddTaskbarIcons();
 	CString BuildTaskbarTooltip() const;
 	void UpdateTaskbarTooltip();
+	void ShowAndActivate();
 	void FailAutomation(int exitCode);
 
 	// 生成的消息映射函数
