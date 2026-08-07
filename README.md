@@ -91,4 +91,4 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 
 ## 版本
 
-当前版本：1.2.2
+当前版本：1.2.3

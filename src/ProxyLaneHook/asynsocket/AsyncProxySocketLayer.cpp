@@ -118,6 +118,7 @@ Version history
 */
 
 #include "stdafx.h"
+#include "..\Socks5UdpCodec.h"
 #include "types.h"
 #include "AsyncProxySocketLayer.h"
 //#include "atlconv.h" //Unicode<->Ascii conversion macros declared here
@@ -565,8 +566,20 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 			    || m_nProxyOpState == 4) // Response (2nd) to bind request
 		{
 			if (!m_pRecvBuffer)
-				m_pRecvBuffer = new char[10];
-			int numread = ReceiveNext(m_pRecvBuffer + m_nRecvBufferPos, 10 - m_nRecvBufferPos);
+				m_pRecvBuffer = new char[CSocks5UdpCodec::MAX_HEADER_SIZE];
+
+			int responseLength = 10;
+			if (m_nProxyOpID == PROXYOP_UDPASSOCIATE)
+			{
+				if (m_nRecvBufferPos < 4)
+					responseLength = 4;
+				else if ((BYTE)m_pRecvBuffer[3] == 3)
+					responseLength = m_nRecvBufferPos < 5 ? 5 : 7 + (BYTE)m_pRecvBuffer[4];
+				else if ((BYTE)m_pRecvBuffer[3] == 4)
+					responseLength = 22;
+			}
+			int numread = ReceiveNext(m_pRecvBuffer + m_nRecvBufferPos,
+				responseLength - m_nRecvBufferPos);
 			if (numread == SOCKET_ERROR) {
 				int nErrorCode = WSAGetLastError();
 				if (nErrorCode != WSAEWOULDBLOCK) {
@@ -581,9 +594,28 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 			}
 			m_nRecvBufferPos += numread;
 
-			if (m_nRecvBufferPos == 10)
+			// responseLength above is the amount that was safe to request with
+			// the bytes available before ReceiveNext. Recalculate it after the
+			// read before deciding that the SOCKS5 reply is complete. Otherwise
+			// the first four bytes of a UDP ASSOCIATE reply are mistaken for the
+			// entire reply and the relay address is read from uninitialized data.
+			if (m_nProxyOpID == PROXYOP_UDPASSOCIATE)
 			{
-				TRACE("SOCKS5 response: VER=%u  REP=%u  RSV=%u  ATYP=%u  BND.ADDR=%s  BND.PORT=%u\n", (BYTE)m_pRecvBuffer[0], (BYTE)m_pRecvBuffer[1], (BYTE)m_pRecvBuffer[2], (BYTE)m_pRecvBuffer[3], ipstrA(*(u_long*)&m_pRecvBuffer[4]), ntohs(*(u_short*)&m_pRecvBuffer[8]));
+				if (m_nRecvBufferPos < 4)
+					responseLength = 4;
+				else if ((BYTE)m_pRecvBuffer[3] == 1)
+					responseLength = 10;
+				else if ((BYTE)m_pRecvBuffer[3] == 3)
+					responseLength = m_nRecvBufferPos < 5
+						? 5 : 7 + (BYTE)m_pRecvBuffer[4];
+				else if ((BYTE)m_pRecvBuffer[3] == 4)
+					responseLength = 22;
+				else
+					responseLength = 4;
+			}
+
+			if (m_nRecvBufferPos == responseLength && responseLength >= 4)
+			{
 				if (m_pRecvBuffer[0] != 5 || m_pRecvBuffer[1] != 0) {
 					DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, PROXYERROR_REQUESTFAILED, 0, (LPARAM)(LPCSTR)GetSocks5Error(m_pRecvBuffer[1]));
 					if (m_nProxyOpID == PROXYOP_CONNECT)
@@ -629,10 +661,49 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 				}
 				else if(m_nProxyOpID == PROXYOP_UDPASSOCIATE && m_nProxyOpState == 3)
 				{
+					if (m_pRecvBuffer[3] != 1 && m_pRecvBuffer[3] != 3)
+					{
+						DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC,
+							PROXYERROR_REQUESTFAILED, WSAEAFNOSUPPORT,
+							(LPARAM)"UDP ASSOCIATE returned a non-IPv4 relay");
+						TriggerEvent(FD_CONNECT, WSAEAFNOSUPPORT, TRUE);
+						Reset();
+						ClearBuffer();
+						return;
+					}
 					memset(&m_udpsrvAddr, 0, sizeof(m_udpsrvAddr));
 					m_udpsrvAddr.sin_family = AF_INET;
-					m_udpsrvAddr.sin_port = *(u_short*)&m_pRecvBuffer[8];
-					m_udpsrvAddr.sin_addr.s_addr = *(u_long*)&m_pRecvBuffer[4];
+					if (m_pRecvBuffer[3] == 1)
+					{
+						m_udpsrvAddr.sin_port = *(u_short*)&m_pRecvBuffer[8];
+						m_udpsrvAddr.sin_addr.s_addr = *(u_long*)&m_pRecvBuffer[4];
+					}
+					else
+					{
+						const int domainLength = (BYTE)m_pRecvBuffer[4];
+						char relayHost[256];
+						memcpy(relayHost, m_pRecvBuffer + 5, domainLength);
+						relayHost[domainLength] = '\0';
+						m_udpsrvAddr.sin_port = *(u_short*)&m_pRecvBuffer[5 + domainLength];
+						hostent *relay = gethostbyname(relayHost);
+						if (!relay || relay->h_addrtype != AF_INET || relay->h_length != 4)
+						{
+							TriggerEvent(FD_CONNECT, WSAHOST_NOT_FOUND, TRUE);
+							Reset();
+							ClearBuffer();
+							return;
+						}
+						memcpy(&m_udpsrvAddr.sin_addr.s_addr, relay->h_addr, 4);
+					}
+					// RFC 1928 servers commonly return 0.0.0.0 to mean the same
+					// address as the TCP control connection.
+					if (m_udpsrvAddr.sin_addr.s_addr == INADDR_ANY)
+					{
+						SOCKADDR_IN proxyPeer;
+						int proxyPeerLength = sizeof(proxyPeer);
+						if (GetPeerNameNext((SOCKADDR*)&proxyPeer, &proxyPeerLength))
+							m_udpsrvAddr.sin_addr = proxyPeer.sin_addr;
+					}
 					Reset();
 					ClearBuffer();
 					//����FD_CONNECT ֪ͨUDPASSOCIATE �����Ѿ�׼���� 
@@ -1400,26 +1471,28 @@ int CAsyncProxySocketLayer::SendTo(const void* lpBuf, int nBufLen, const SOCKADD
 		return SOCKET_ERROR;
 	}
 
-	if(!m_udpBuffer.checkBufferSize(nBufLen+10, false))
+	if (!lpSockAddr || nSockAddrLen < sizeof(SOCKADDR_IN) || lpSockAddr->sa_family != AF_INET)
+	{
+		WSASetLastError(WSAEAFNOSUPPORT);
+		return SOCKET_ERROR;
+	}
+
+	if(!m_udpBuffer.checkBufferSize(nBufLen+CSocks5UdpCodec::MAX_HEADER_SIZE, false))
 	{
 		WSASetLastError(ERROR_NOT_ENOUGH_MEMORY);
 		return SOCKET_ERROR;
 	}
 
-	LPBYTE lphdr = m_udpBuffer;
-	memset(lphdr, 0, 10);
+	int packetLength = CSocks5UdpCodec::EncodeIPv4(m_udpBuffer,
+		nBufLen + CSocks5UdpCodec::MAX_HEADER_SIZE,
+		(const SOCKADDR_IN*)lpSockAddr, lpBuf, nBufLen);
+	if (packetLength == SOCKET_ERROR)
+	{
+		WSASetLastError(WSAEINVAL);
+		return SOCKET_ERROR;
+	}
 
-	//ATYP
-	lphdr[3] = 0x01;
-	//DST.ADDR
-	*(DWORD*)&lphdr[4] = ((LPSOCKADDR_IN)lpSockAddr)->sin_addr.S_un.S_addr;
-	//DST.PORT
-	*(WORD*)&lphdr[8] = ((LPSOCKADDR_IN)lpSockAddr)->sin_port;
-
-	//
-	memcpy(m_udpBuffer+10, lpBuf, nBufLen);
-
-	int nBytesSent = SendToNext(lphdr, nBufLen+10, (SOCKADDR*)&m_udpsrvAddr, sizeof(SOCKADDR));
+	int nBytesSent = SendToNext((LPBYTE)m_udpBuffer, packetLength, (SOCKADDR*)&m_udpsrvAddr, sizeof(SOCKADDR));
 	if(nBytesSent >= 10)
 	{
 		nBytesSent -= 10;
@@ -1451,29 +1524,23 @@ int CAsyncProxySocketLayer::SendTo(const void* lpBuf, int nBufLen, UINT nHostPor
 		return SendTo(lpBuf, nBufLen, &dstAddr, sizeof(dstAddr));
 	}
 
-	if(!m_udpBuffer.checkBufferSize(nBufLen+0xFF, false))
+	if(!m_udpBuffer.checkBufferSize(nBufLen+CSocks5UdpCodec::MAX_HEADER_SIZE, false))
 	{
 		WSASetLastError(ERROR_NOT_ENOUGH_MEMORY);
 		return SOCKET_ERROR;
 	}
 
 
-	LPBYTE lphdr = m_udpBuffer;
-	memset(lphdr, 0, 10);
-
-	//ATYP
-	lphdr[3] = 0x03;
-	//DST.ADDR
-	int nHdrLen = 4;
-	lphdr[nHdrLen++] = (char)iLenAsciiProxyPeerHost;
-	memcpy(&lphdr[nHdrLen], pszAsciiProxyPeerHost, iLenAsciiProxyPeerHost);
-	nHdrLen += iLenAsciiProxyPeerHost;
-	//DST.PORT
-	*(WORD*)&lphdr[nHdrLen] = (WORD)htons((u_short)nHostPort);
-	nHdrLen += 2;
-
-	memcpy(m_udpBuffer+nHdrLen, lpBuf, nBufLen);
-	int nBytesSent = SendToNext(lphdr, nBufLen+nHdrLen, (SOCKADDR*)&m_udpsrvAddr, sizeof(SOCKADDR));
+	int packetLength = CSocks5UdpCodec::EncodeDomain(m_udpBuffer,
+		nBufLen + CSocks5UdpCodec::MAX_HEADER_SIZE,
+		pszAsciiProxyPeerHost, (USHORT)nHostPort, lpBuf, nBufLen);
+	if (packetLength == SOCKET_ERROR)
+	{
+		WSASetLastError(WSAEINVAL);
+		return SOCKET_ERROR;
+	}
+	int nHdrLen = packetLength - nBufLen;
+	int nBytesSent = SendToNext((LPBYTE)m_udpBuffer, packetLength, (SOCKADDR*)&m_udpsrvAddr, sizeof(SOCKADDR));
 	if(nBytesSent >= nHdrLen)
 	{
 		nBytesSent -= nHdrLen;
@@ -1489,25 +1556,43 @@ int CAsyncProxySocketLayer::ReceiveFrom(void* lpBuf, int nBufLen, SOCKADDR* lpSo
 		return SOCKET_ERROR;
 	}
 
-	if(!m_udpBuffer.checkBufferSize(nBufLen+10, false))
+	if(!m_udpBuffer.checkBufferSize(nBufLen+CSocks5UdpCodec::MAX_HEADER_SIZE, false))
 	{
 		WSASetLastError(ERROR_NOT_ENOUGH_MEMORY);
 		return SOCKET_ERROR;
 	}
 
-	int ret = ReceiveFromNext(m_udpBuffer+0, nBufLen, lpSockAddr, lpSockAddrLen, nFlags);
-	if(ret >= 10)
-	{
-		memcpy(lpBuf, m_udpBuffer+10, ret-10);
-		ret -= 10;
-		memset(lpSockAddr, 0, sizeof(SOCKADDR));
-		((LPSOCKADDR_IN)lpSockAddr)->sin_family = AF_INET;
-		((LPSOCKADDR_IN)lpSockAddr)->sin_addr.s_addr = *(DWORD*)(m_udpBuffer+4);
-		((LPSOCKADDR_IN)lpSockAddr)->sin_port = *(WORD*)(m_udpBuffer+8);
-		*lpSockAddrLen = sizeof(SOCKADDR);
-	}
+	SOCKADDR_IN relayAddress;
+	int relayAddressLength = sizeof(relayAddress);
+	int ret = ReceiveFromNext((LPBYTE)m_udpBuffer, nBufLen + CSocks5UdpCodec::MAX_HEADER_SIZE,
+		(SOCKADDR*)&relayAddress, &relayAddressLength, nFlags);
+	if (ret == SOCKET_ERROR)
+		return ret;
 
-	return ret;
+	CSocks5UdpCodec::DecodedPacket decoded;
+	if (!CSocks5UdpCodec::Decode(m_udpBuffer, ret, &decoded))
+	{
+		WSASetLastError(WSAEPROTONOSUPPORT);
+		return SOCKET_ERROR;
+	}
+	if (decoded.payloadLength > nBufLen)
+	{
+		WSASetLastError(WSAEMSGSIZE);
+		return SOCKET_ERROR;
+	}
+	if (decoded.payloadLength)
+		memcpy(lpBuf, decoded.payload, decoded.payloadLength);
+	if (lpSockAddr && lpSockAddrLen)
+	{
+		if (*lpSockAddrLen < sizeof(SOCKADDR_IN))
+		{
+			WSASetLastError(WSAEFAULT);
+			return SOCKET_ERROR;
+		}
+		memcpy(lpSockAddr, &decoded.source, sizeof(decoded.source));
+		*lpSockAddrLen = sizeof(decoded.source);
+	}
+	return decoded.payloadLength;
 }
 
 //////////////////////////////////////////////////////////////////////////

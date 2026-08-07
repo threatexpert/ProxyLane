@@ -524,6 +524,15 @@ int
 WSAAPI
 CHookWinsock::inhook_connect(SOCKET s, const struct sockaddr FAR * name, int namelen)
 {
+	int socketType = 0;
+	int socketTypeLength = sizeof(socketType);
+	if (m_psi.bBlockUDP &&
+		getsockopt(s, SOL_SOCKET, SO_TYPE, (char*)&socketType, &socketTypeLength) == 0 &&
+		socketType == SOCK_DGRAM)
+	{
+		WSASetLastError(WSAEACCES);
+		return SOCKET_ERROR;
+	}
 	_SockAddr addrname;
 
 	addrname = *name;
@@ -546,6 +555,15 @@ int
 WSAAPI
 CHookWinsock::inhook_WSAConnect(SOCKET s, const struct sockaddr* name, int namelen, LPWSABUF lpCallerData, LPWSABUF lpCalleeData, LPQOS lpSQOS, LPQOS lpGQOS)
 {
+	int socketType = 0;
+	int socketTypeLength = sizeof(socketType);
+	if (m_psi.bBlockUDP &&
+		getsockopt(s, SOL_SOCKET, SO_TYPE, (char*)&socketType, &socketTypeLength) == 0 &&
+		socketType == SOCK_DGRAM)
+	{
+		WSASetLastError(WSAEACCES);
+		return SOCKET_ERROR;
+	}
 	_SockAddr addrname;
 
 	addrname = *name;
@@ -606,9 +624,6 @@ BOOL PASCAL CHookWinsock::inhook_ConnectEx(
 
 BOOL CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 {
-	if (!m_psi.bHookTCP)
-		return FALSE;
-
 	if (*(DWORD*)&addrname.sa_data[6] == 'pass' && *(DWORD*)&addrname.sa_data[10] == 'port')
 	{
 		*(DWORD*)&addrname.sa_data[6] = 0;
@@ -625,6 +640,10 @@ BOOL CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 	ATLTRACE("HackConnect.getsockopt:SO_TYPE = %d\r\n", nSockType);
 
 	if (nSockType != SOCK_DGRAM && nSockType != SOCK_STREAM)
+		return FALSE;
+	if (nSockType == SOCK_DGRAM && !m_psi.bHookUDP)
+		return FALSE;
+	if (nSockType == SOCK_STREAM && !m_psi.bHookTCP)
 		return FALSE;
 
 	if (addrname.GetdwIP() == 0x0100007f)
@@ -753,7 +772,7 @@ int WSAAPI CHookWinsock::inhook_getpeername(SOCKET s, struct sockaddr* name, int
 	比如之前connect的原目的是aa.aa.aa.aa， 然后被HackConnect修改为PRC的服务地址, 为了避免getpeername得到PRC的地址，这里要做处理
 	*/
 	PRCClient prcc;
-	if (m_HackedSocket.GetInfo(s, &prcc))
+	if (m_HackedSocket.GetInfo(s, &prcc) && prcc.sType == SOCK_STREAM)
 	{
 		if (*namelen < sizeof(sockaddr))
 		{
@@ -916,114 +935,35 @@ int WSAAPI CHookWinsock::inhook_WSASendTo(
 		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped, lpCompletionRoutine);
 	}
 
-	if (lpOverlapped != NULL)
-	{
-		//OutputDebugStringA("WSASendTo dwBufferCount >= max_bufs || lpOverlapped != NULL");
-
-		CPRCPipeClient PRCPipeClient;
-		if (PRCPipeClient.Connect(m_szPRCPipeName))
-		{
-			PRCPipeClient.PRCLogtext(L"WSASendTo with Overlapped param, drop udp pkg");
-			PRCPipeClient.Disconnect();
-		}
-
-		//如果使用了lpOverlapped，比较麻烦，暂时放弃，丢弃
-		WSASetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-		return -1;
-	}
-
 	_SockAddr addrname;
-	int iLenAddrname = sizeof(addrname);
-	BOOL bErr = FALSE;
-
-	if (lpTo)
-		addrname = *lpTo;
-	else
+	if (!lpTo)
 	{
-		if (SOCKET_ERROR == getpeername(s, (struct sockaddr FAR *)&addrname, &iLenAddrname))
-		{
-			bErr = TRUE;
-		}
+		// A connected UDP socket was redirected once by connect/WSAConnect.
+		// Its subsequent send path must remain completely transparent,
+		// including Overlapped and IOCP operations.
+		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount,
+			lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped,
+			lpCompletionRoutine);
 	}
+	if (iToLen < sizeof(SOCKADDR_IN) || lpTo->sa_family != AF_INET)
+		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount,
+			lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped,
+			lpCompletionRoutine);
+	addrname = *lpTo;
 
 	PRCClient prcc;
 
-	if (bErr || !HackSendTo(s, addrname, &prcc))
+	if (!HackSendTo(s, addrname, &prcc))
 	{
 		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped, lpCompletionRoutine);
 	}
 
 
-	DWORD nBufLenAdded = 0;
-	char hdr[0xff + 8];
-	memset(hdr, 0, sizeof(hdr));
-	WSABUF wsabuf[32];
-	DWORD bufidx = 0;
-
-	if (prcc.IsDNValid())
-	{
-		const char* pszAsciiProxyPeerHost = prcc.szDomainName;
-		int iLenAsciiProxyPeerHost = strlen(pszAsciiProxyPeerHost);
-
-		//ATYP
-		hdr[3] = 0x03;
-		//DST.ADDR
-		int nHdrLen = 4;
-		hdr[nHdrLen++] = (char)iLenAsciiProxyPeerHost;
-		memcpy(&hdr[nHdrLen], pszAsciiProxyPeerHost, iLenAsciiProxyPeerHost);
-		nHdrLen += iLenAsciiProxyPeerHost;
-		//DST.PORT
-		*(WORD*)&hdr[nHdrLen] = (WORD)htons((u_short)prcc.dstAddr.GetPort());
-		nHdrLen += 2;
-
-		wsabuf[bufidx].buf = hdr;
-		wsabuf[bufidx].len = nHdrLen;
-		bufidx++;
-
-		nBufLenAdded = nHdrLen;
-
-		//
-		for (DWORD i = 0; bufidx<32 && i<dwBufferCount; bufidx++, i++)
-		{
-			wsabuf[bufidx].buf = lpBuffers[i].buf;
-			wsabuf[bufidx].len = lpBuffers[i].len;
-		}
-
-	}
-	else
-	{
-		//ATYP
-		hdr[3] = 0x01;
-		//DST.ADDR
-		int nHdrLen = 4;
-		*(DWORD*)&hdr[nHdrLen] = prcc.dstAddr.GetdwIP();
-		nHdrLen += 4;
-		//DST.PORT
-		*(WORD*)&hdr[nHdrLen] = (WORD)htons((u_short)prcc.dstAddr.GetPort());
-		nHdrLen += 2;
-
-		wsabuf[bufidx].buf = hdr;
-		wsabuf[bufidx].len = nHdrLen;
-		bufidx++;
-
-		nBufLenAdded = nHdrLen;
-
-		//
-		for (DWORD i = 0; bufidx<32 && i<dwBufferCount; bufidx++, i++)
-		{
-			wsabuf[bufidx].buf = lpBuffers[i].buf;
-			wsabuf[bufidx].len = lpBuffers[i].len;
-		}
-	}
-
-	int nRetVal = CallTrampoline(WSASendTo)(s, wsabuf, bufidx, lpNumberOfBytesSent, dwFlags, &addrname, iLenAddrname, lpOverlapped, lpCompletionRoutine);
-
-	if (nRetVal == 0 && nBufLenAdded > 0 && *lpNumberOfBytesSent > nBufLenAdded)
-	{
-		*lpNumberOfBytesSent -= nBufLenAdded;
-	}
-
-	return nRetVal;
+	// Only the destination is replaced. Application buffers and completion
+	// state remain owned by Winsock, so Overlapped/IOCP works naturally.
+	return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount,
+		lpNumberOfBytesSent, dwFlags, &addrname, sizeof(addrname),
+		lpOverlapped, lpCompletionRoutine);
 }
 
 int WSAAPI CHookWinsock::inhook_recvfrom(SOCKET s, char* buf, int len, int flags, struct sockaddr* from, int* fromlen)
@@ -1033,27 +973,7 @@ int WSAAPI CHookWinsock::inhook_recvfrom(SOCKET s, char* buf, int len, int flags
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
 	}
-	if (!m_psi.bHookUDP)
-	{
-		return CallTrampoline(recvfrom)(s, buf, len, flags, from, fromlen);
-	}
-
-	WSABUF bufs;
-
-	bufs.buf = (char FAR *)buf;
-	bufs.len = len;
-
-	int nRetVal;
-	DWORD dwNumberOfBytesRecvd = 0;
-
-	nRetVal = inhook_WSARecvFrom(s, &bufs, 1, &dwNumberOfBytesRecvd, (LPDWORD)&flags, from, fromlen, NULL, NULL);
-
-	if (nRetVal == 0)
-	{
-		return (int)dwNumberOfBytesRecvd;
-	}
-
-	return nRetVal;
+	return CallTrampoline(recvfrom)(s, buf, len, flags, from, fromlen);
 
 	//
 	//	int ret = pFunc(s, buf, len, flags, from, fromlen);
@@ -1095,95 +1015,9 @@ struct sockaddr* lpFrom,
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
 	}
-	if (!m_psi.bHookUDP)
-	{
-		return CallTrampoline(WSARecvFrom)(s, lpBuffers, dwBufferCount, lpNumberOfBytesRecvd, lpFlags, lpFrom, lpFromlen, lpOverlapped, lpCompletionRoutine);
-	}
-
-	enum {
-		max_bufs = 32,
-	};
-
-	WSABUF wsabuf[max_bufs]; //如果使用了lpOverlapped，这里不能用栈空间,并且需要GetOverlappedResult返回结果后替换返回数据
-	DWORD bufidx = 0;
-	DWORD i;
-
-	if (dwBufferCount >= max_bufs || lpOverlapped != NULL)
-	{
-		//OutputDebugStringA("WSARecvFrom dwBufferCount >= max_bufs || lpOverlapped != NULL");
-		CPRCPipeClient PRCPipeClient;
-		if (PRCPipeClient.Connect(m_szPRCPipeName))
-		{
-			if (dwBufferCount >= max_bufs)
-				PRCPipeClient.PRCLogtext(L"WSARecvFrom with dwBufferCount >= max_bufs, drop udp pkg");
-			else
-				PRCPipeClient.PRCLogtext(L"WSARecvFrom with Overlapped param, drop udp pkg");
-			PRCPipeClient.Disconnect();
-		}
-
-		//如果使用了lpOverlapped，比较麻烦，暂时放弃，丢弃
-		WSASetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-		return -1;
-	}
-
-	char hdr[10];
-	memset(hdr, 0, 10);
-	//
-	wsabuf[0].buf = hdr;
-	wsabuf[0].len = 10;
-
-	bufidx++;
-
-	for (i = 0; bufidx<32 && i<dwBufferCount; bufidx++, i++)
-	{
-		wsabuf[bufidx].buf = lpBuffers[i].buf;
-		wsabuf[bufidx].len = lpBuffers[i].len;
-	}
-
-	int nRetVal = CallTrampoline(WSARecvFrom)(s, wsabuf, bufidx, lpNumberOfBytesRecvd, lpFlags, lpFrom, lpFromlen, lpOverlapped, lpCompletionRoutine);
-
-	if (nRetVal == 0)
-	{
-		if (*lpNumberOfBytesRecvd > 10)
-		{
-			*lpNumberOfBytesRecvd -= 10;
-
-			bufidx = 1;
-			for (i = 0; bufidx<32 && i<dwBufferCount; bufidx++, i++)
-			{
-				lpBuffers[i].buf = wsabuf[bufidx].buf;
-				lpBuffers[i].len = wsabuf[bufidx].len;
-			}
-
-
-#ifdef _DEBUG
-			in_addr *pAddr = ((_SockAddr*)lpFrom)->GetAddr();
-			ATLTRACE("inhook_WSARecvFrom1: %u.%u.%u.%u:%d\r\n", pAddr->s_net, pAddr->s_host, pAddr->s_lh, pAddr->s_impno, ((_SockAddr*)lpFrom)->GetPort());
-#endif
-
-			if (!m_HackedSocket.ReplaceAddr(s, (_SockAddr *)lpFrom, *(DWORD*)&hdr[4], *(WORD*)&hdr[8]))
-			{
-				//可能包的来源不是PRC
-				//丢掉算了
-				ATLTRACE("m_HackedSocket.ReplaceAddr(%d, ...) == FALSE\r\n", s);
-				WSASetLastError(WSAEWOULDBLOCK);
-				return SOCKET_ERROR;
-			}
-#ifdef _DEBUG
-			pAddr = ((_SockAddr*)lpFrom)->GetAddr();
-			ATLTRACE("inhook_WSARecvFrom2: %u.%u.%u.%u:%d\r\n", pAddr->s_net, pAddr->s_host, pAddr->s_lh, pAddr->s_impno, ((_SockAddr*)lpFrom)->GetPort());
-#endif
-
-		}
-		else
-		{
-			//丢
-			WSASetLastError(WSAEWOULDBLOCK);
-			return SOCKET_ERROR;
-		}
-	}
-
-	return nRetVal;
+	return CallTrampoline(WSARecvFrom)(s, lpBuffers, dwBufferCount,
+		lpNumberOfBytesRecvd, lpFlags, lpFrom, lpFromlen, lpOverlapped,
+		lpCompletionRoutine);
 
 
 	//	int ret = pFunc(s, lpBuffers, dwBufferCount, lpNumberOfBytesRecvd, lpFlags, lpFrom, lpFromlen, lpOverlapped, lpCompletionRoutine);
@@ -1229,12 +1063,28 @@ BOOL CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname, LPPRCClient lpC)
 	if (nSockType != SOCK_DGRAM)
 		return FALSE;
 
+	// getpeername on a connected proxied UDP socket intentionally exposes
+	// the real PRC route. Some clients feed that address back into sendto.
+	// It is already the transport endpoint of an existing route and must not
+	// be registered as a new original destination.
+	if (m_HackedSocket.IsUDPRouteAddress(s, &addrname))
+		return FALSE;
+
 	_SockAddr srcAddr;
 	int srcaddrlen = sizeof(_SockAddr);
 	//查询该socket绑定的地址
 	if (getsockname(s, &srcAddr, &srcaddrlen) == SOCKET_ERROR)
 	{
-		return FALSE;
+		if (WSAGetLastError() != WSAEINVAL)
+			return FALSE;
+		srcAddr.sa_family = AF_INET;
+		srcAddr.SetIPLong(0);
+		srcAddr.SetPort(0);
+		if (bind(s, &srcAddr, sizeof(srcAddr)) == SOCKET_ERROR)
+			return FALSE;
+		srcaddrlen = sizeof(srcAddr);
+		if (getsockname(s, &srcAddr, &srcaddrlen) == SOCKET_ERROR)
+			return FALSE;
 	}
 
 	PRCClient prcc;

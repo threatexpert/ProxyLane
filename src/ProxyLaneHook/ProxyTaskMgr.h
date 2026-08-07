@@ -83,6 +83,6 @@ private:
 	CTSList<CUdpProxyTask*> m_tasklist;
 
 
-	UDPLocalProxyAddrInfo m_PortState[0xffff];
+	UDPLocalProxyAddrInfo m_PortState[0x10000];
 
 };

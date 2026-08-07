@@ -1,8 +1,35 @@
 ﻿#include "stdafx.h"
 #include "PRCUdpServer.h"
+#include "ProxyReceptionCentre.h"
 #include "GlobalProxy.h"
 #include "ProxyLog.h"
 #include "ProxySettings.h"
+#include <psapi.h>
+
+#pragma comment(lib, "psapi.lib")
+
+static LPWSTR GetUdpProcessName(CProxyReceptionCentre *receptionCentre,
+	DWORD processId, LPWSTR processPath, DWORD pathLength)
+{
+	if (!processPath || pathLength == 0)
+		return NULL;
+	processPath[0] = L'\0';
+
+	if (!receptionCentre->GetProcessIdentity(processId, processPath, pathLength))
+	{
+		HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+			FALSE, processId);
+		if (process)
+		{
+			GetModuleFileNameExW(process, NULL, processPath, pathLength);
+			processPath[pathLength - 1] = L'\0';
+			CloseHandle(process);
+		}
+	}
+
+	LPWSTR name = wcsrchr(processPath, L'\\');
+	return name ? name + 1 : processPath;
+}
 
 CPRCUdpServer::CPRCUdpServer(CProxyReceptionCentre *pPRC)
 	: CPRCXServer(pPRC)
@@ -114,6 +141,33 @@ BOOL CPRCUdpServer::OnLocalThreadRegister(LPPRCClient lpPRCClient)
 	}
 
 	LogNewProxyTask(lpPRCClient);
+
+	WCHAR processPath[MAX_PATH];
+	LPWSTR processName = GetUdpProcessName(m_pPRC, lpPRCClient->dwPid,
+		processPath, _countof(processPath));
+	LPCTSTR tag = pisetting.GetProxyType() == PROXYTYPE_NOPROXY
+		? _T("[Bypassed] ") : _T("[Hooked] ");
+	if (lpPRCClient->IsDNValid())
+	{
+#ifdef _UNICODE
+		PrintText(_T("%sUDP PID: %d(%s), send to: %S:%d\r\n"), tag,
+			lpPRCClient->dwPid, processName ? processName : L"",
+			lpPRCClient->szDomainName, lpPRCClient->dstAddr.GetPort());
+#else
+		PrintText(_T("%sUDP PID: %d(%s), send to: %s:%d\r\n"), tag,
+			lpPRCClient->dwPid, processName ? processName : L"",
+			lpPRCClient->szDomainName, lpPRCClient->dstAddr.GetPort());
+#endif
+	}
+	else
+	{
+		DWORD ip = lpPRCClient->dstAddr.GetdwIP();
+		const BYTE *bytes = (const BYTE*)&ip;
+		PrintText(_T("%sUDP PID: %d(%s), send to: %u.%u.%u.%u:%d\r\n"),
+			tag, lpPRCClient->dwPid, processName ? processName : L"",
+			bytes[0], bytes[1], bytes[2], bytes[3],
+			lpPRCClient->dstAddr.GetPort());
+	}
 	return TRUE;
 }
 

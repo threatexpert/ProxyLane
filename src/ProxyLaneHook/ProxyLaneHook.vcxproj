@@ -325,6 +325,9 @@
     <ClCompile Include="PRCTcpPeer.cpp" />
     <ClCompile Include="PRCTcpServer.cpp" />
     <ClCompile Include="PRCUdpPeer.cpp" />
+    <ClCompile Include="Socks5UdpCodec.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="PRCUdpServer.cpp" />
     <ClCompile Include="PRCXServer.cpp" />
     <ClCompile Include="ProxyLog.cpp" />
@@ -363,6 +366,7 @@
     <ClInclude Include="PRCTcpPeer.h" />
     <ClInclude Include="PRCTcpServer.h" />
     <ClInclude Include="PRCUdpPeer.h" />
+    <ClInclude Include="Socks5UdpCodec.h" />
     <ClInclude Include="PRCUdpServer.h" />
     <ClInclude Include="PRCXServer.h" />
     <ClInclude Include="ProxyDataHandle.h" />

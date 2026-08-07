@@ -48,6 +48,9 @@
     <ClCompile Include="PRCUdpPeer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Socks5UdpCodec.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="PRCUdpServer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -133,6 +136,9 @@
     </ClInclude>
     <ClInclude Include="PRCUdpPeer.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Socks5UdpCodec.h">
+      <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="PRCUdpServer.h">
       <Filter>Header Files</Filter>

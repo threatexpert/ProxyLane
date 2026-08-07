@@ -346,57 +346,51 @@ class CHookWinsock
 						)
 						continue;//当前节点信息不一致， 但不能确定没劫持过这个socket， 继续查找其他节点
 
-					//UDP可以在本地一个地址对外多个地址发包， 所以可以不用判断目的IP来确认该udp的socket是否劫持过
-					//但如果目的地址是域名的话， 为了能在收包的时候代替地址为dummyIP， 所以域名不一致的情况要单独开个本地代理udp端口
-					//都一致则表示该udp socket已经hijacked
+					// Each destination has a stable local PRC route. This lets the
+					// application send raw payloads while the PRC still knows which
+					// SOCKS5 destination header to add.
 					if (((LPPRCClient)pCI)->IsDNValid())
 					{
-						//if (it->dstAddr.GetPort() != ((LPPRCClient)pCI)->dstAddr.GetPort()
-						//	|| _stricmp(it->szDomainName, ((LPPRCClient)pCI)->szDomainName))
-						//	continue;
 						if (!it->IsDNValid())
 							continue;
-
-						if (_stricmp(it->szDomainName, ((LPPRCClient)pCI)->szDomainName) != 0)
+						if (_stricmp(it->szDomainName, ((LPPRCClient)pCI)->szDomainName) != 0 ||
+							it->dstAddr.GetPort() != ((LPPRCClient)pCI)->dstAddr.GetPort())
 							continue;
-
 					}
-
-					if (!m_PRCPipeClient.IsConnected())
+					else
 					{
-						ATLTRACE("CHackedSocket.m_PRCPipeClient is connecting.\r\n");
-						if (!m_PRCPipeClient.Connect(m_pHW->GetPRCPipeName()))
-						{
-							ATLTRACE("CHackedSocket.m_PRCPipeClient Failed to connect to PRCPipeServer.\r\n");
-							return FALSE;
-						}
-					}
-
-					UDPLocalProxyAddrInfo udpai;
-					udpai.clientip = it->srcAddr.GetdwIP();
-					udpai.clientport = it->srcAddr.GetPort();
-					udpai.proxyport = it->udpAddr.GetPort();
-
-					BOOL bState = m_PRCPipeClient.PRCGetUDPClientPortState(&udpai);
-
-					if (m_PRCPipeClient.GetLastError() != 0)
-					{
-						ATLTRACE("CHackedSocket.m_PRCPipeClient GetLastError == %d. state: %d\r\n", m_PRCPipeClient.GetLastError(), bState);
-						m_PRCPipeClient.Disconnect();
-						return FALSE;
-					}
-
-					if (!bState)
-					{
-						ATLTRACE("CHackedSocket.m_PRCPipeClient.PRCGetUDPClientPortState == FALSE\r\n");
-						m_ls.erase(it);
-						return FALSE;
+						if (it->IsDNValid() ||
+							it->dstAddr.GetdwIP() != ((LPPRCClient)pCI)->dstAddr.GetdwIP() ||
+							it->dstAddr.GetPort() != ((LPPRCClient)pCI)->dstAddr.GetPort())
+							continue;
 					}
 
 					((LPPRCClient)pCI)->udpAddr = it->udpAddr;
 
 					return TRUE;
 				}
+			}
+			return FALSE;
+		}
+
+		BOOL IsUDPRouteAddress(SOCKET s, _SockAddr *destination)
+		{
+			if (!destination || destination->sa_family != AF_INET)
+				return FALSE;
+
+			CTSList<CONNINFO>::critical lc = m_ls;
+			for (CTSList<CONNINFO>::iterator it = m_ls.begin();
+				it != m_ls.end(); ++it)
+			{
+				if (it->s != s || it->sType != SOCK_DGRAM ||
+					it->udpAddr.GetPort() != destination->GetPort())
+					continue;
+
+				DWORD routeIP = it->udpAddr.GetdwIP();
+				DWORD destinationIP = destination->GetdwIP();
+				if (routeIP == destinationIP ||
+					(routeIP == INADDR_ANY && destinationIP == inet_addr("127.0.0.1")))
+					return TRUE;
 			}
 			return FALSE;
 		}

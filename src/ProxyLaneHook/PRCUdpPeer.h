@@ -7,21 +7,6 @@
 class CUdpProxyTask;
 class CProxyDataHandle;
 
-class CUDPRAWProxyLayer
-	: public CAsyncProxySocketLayer
-{
-
-protected:
-
-	virtual int SendTo(const void* lpBuf, int nBufLen,
-		const SOCKADDR* lpSockAddr, int nSockAddrLen, int nFlags = 0);
-	virtual int SendTo(const void* lpBuf, int nBufLen,
-		UINT nHostPort, LPCTSTR lpszHostAddress = NULL, int nFlags = 0);
-	virtual int ReceiveFrom(void* lpBuf, int nBufLen,
-		SOCKADDR* lpSockAddr, int* lpSockAddrLen, int nFlags = 0);
-
-};
-
 class CUDPClientSocketLayer
 	: public CAsyncSocketExLayer
 {
@@ -35,7 +20,7 @@ class CPRCUdpPeer
 	: public CAsyncSocketEx
 {
 
-#define MAXUDPBUFSIZE 1024*16
+#define MAXUDPBUFSIZE 65507
 
 #define CLIENT 1
 #define SERVER 2

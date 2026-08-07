@@ -13,70 +13,6 @@
 
 //////////////////////////////////////////////////////////////////////////
 
-int CUDPRAWProxyLayer::SendTo(const void* lpBuf, int nBufLen, const SOCKADDR* lpSockAddr, int nSockAddrLen, int nFlags /* = 0 */)
-{
-	if (GetProxyOpID())
-	{
-		WSASetLastError(WSAEWOULDBLOCK);
-		return SOCKET_ERROR;
-	}
-
-	//if(nFlags == 0x1308)
-	//{
-	//	return CAsyncProxySocketLayer::SendTo(lpBuf, nBufLen, lpSockAddr, nSockAddrLen);
-	//}else
-	//{
-		return SendToNext(lpBuf, nBufLen, (SOCKADDR*)&m_udpsrvAddr, sizeof(SOCKADDR));
-	//}
-}
-
-int CUDPRAWProxyLayer::SendTo(const void* lpBuf, int nBufLen, UINT nHostPort, LPCTSTR lpszHostAddress /* = NULL */, int nFlags /* = 0 */)
-{
-	if (GetProxyOpID())
-	{
-		WSASetLastError(WSAEWOULDBLOCK);
-		return SOCKET_ERROR;
-	}
-
-	//CStringA szIP;
-	//szIP = lpszHostAddress;
-	//const char* pszAsciiProxyPeerHost;
-	//int iLenAsciiProxyPeerHost;
-	//pszAsciiProxyPeerHost = szIP.GetBuffer();
-	//iLenAsciiProxyPeerHost = strlen(pszAsciiProxyPeerHost);
-
-	//if (inet_addr(pszAsciiProxyPeerHost) != INADDR_NONE)
-	//{
-	//	_SockAddr dstAddr;
-	//	dstAddr.sa_family = AF_INET;
-	//	dstAddr.SetIP(pszAsciiProxyPeerHost);
-	//	dstAddr.SetPort(nHostPort);
-	//	return SendTo(lpBuf, nBufLen, &dstAddr, sizeof(dstAddr));
-	//}
-
-	//if(nFlags == 0x1308)
-	//{
-	//	return CAsyncProxySocketLayer::SendTo(lpBuf, nBufLen, nHostPort, lpszHostAddress);
-	//}else
-	//{
-		return SendToNext(lpBuf, nBufLen, (SOCKADDR*)&m_udpsrvAddr, sizeof(SOCKADDR));
-	//}
-}
-
-int CUDPRAWProxyLayer::ReceiveFrom(void* lpBuf, int nBufLen, SOCKADDR* lpSockAddr, int* lpSockAddrLen, int nFlags /* = 0 */)
-{
-	if (GetProxyOpID())
-	{
-		WSASetLastError(WSAEWOULDBLOCK);
-		return SOCKET_ERROR;
-	}
-
-	return ReceiveFromNext(lpBuf, nBufLen, lpSockAddr, lpSockAddrLen, nFlags);
-}
-
-
-//////////////////////////////////////////////////////////////////////////
-
 void CUDPClientSocketLayer::OnClose(int nErrorCode)
 {
 	TriggerEvent(FD_READ, nErrorCode, TRUE);
@@ -219,7 +155,7 @@ BOOL CPRCUdpPeer::AddProxyLayer(LPProxyInfo lpProxyInfo)
 		if(nProxyType != PROXYTYPE_SOCKS5)
 			return FALSE;
 
-		CUDPRAWProxyLayer *pLayer = new CUDPRAWProxyLayer;
+		CAsyncProxySocketLayer *pLayer = new CAsyncProxySocketLayer;
 		if(pLayer == NULL)
 			return FALSE;
 
@@ -334,8 +270,6 @@ void CPRCUdpPeer::OnReceive(int nErrorCode)
 			}
 		}
 
-		ATLASSERT(nRetVal >= 10);
-
 		DWORD nIP = addrname.GetdwIP();
 		const BYTE* pucIP = (BYTE*)&nIP;
 
@@ -350,30 +284,14 @@ void CPRCUdpPeer::OnReceive(int nErrorCode)
 		m_ppi.pData = m_recvbuf;
 		m_ppi.datalen = m_recvbufpos;
 
-		//m_recvbuf[3] == ATYP
-		if (m_recvbuf[3] == 0x01 && nRetVal >= 10)
-		{
-			m_ppi.lpC->szDomainName[0] = '\0';
-			m_ppi.lpC->dstAddr.SetIPLong(*(DWORD*)&m_recvbuf[0x04]);
-			m_ppi.lpC->dstAddr.SetPort(ntohs(*(WORD*)&m_recvbuf[0x08]));
-		}else if (m_recvbuf[3] == 0x03 && nRetVal >= 10
-			&& nRetVal >= 2+1+1+1+(BYTE)m_recvbuf[4]+2 // |RSV:2 | FRAG:1 | ATYP:1| DST.ADDR:1+[N] | DST.PORT:2 |　　DATA:N　|
-			)
-		{
-			int nDN = m_recvbuf[4];
-			strncpy(m_ppi.lpC->szDomainName, &m_recvbuf[5], nDN);
-			m_ppi.lpC->dstAddr.SetIPLong(0);
-			m_ppi.lpC->dstAddr.SetPort(ntohs(*(WORD*)&m_recvbuf[2+1+1+1+nDN]));
-		}else
-		{
-			//??
-			ASSERT(0);
-			m_ppi.lpC->szDomainName[0] = '\0';
-			m_ppi.lpC->dstAddr.SetIPLong(0);
-			m_ppi.lpC->dstAddr.SetPort(0);
-		}
-
 		m_pProxyDataHandle->OnEachPacket(&m_ppi);
+
+		if (m_Identity == CLIENT)
+		{
+			m_pNotify->ForwardClientDatagram(m_CSAddrInfo, m_recvbuf, m_recvbufpos);
+			ClearBuffer();
+			break;
+		}
 
 		int nValidLen = m_recvbufpos;
 		nRetVal = TransferSend();
@@ -430,9 +348,19 @@ int CPRCUdpPeer::TransferSend()
 
 		if (m_Identity == CLIENT)
 		{
-			//udp报头已经在hook的时候加上了
-			//直接发到代理服务器
-			nRetVal	= m_pPartner->SendTo(m_recvbuf+nBytesSent, nBytesLeft, 0, 0);
+			// The application sends a raw datagram to this local route. The
+			// server-side proxy layer owns SOCKS5 UDP encapsulation.
+			if (m_CSAddrInfo.IsDNValid())
+			{
+				CString destination(m_CSAddrInfo.szDomainName);
+				nRetVal = m_pPartner->SendTo(m_recvbuf+nBytesSent, nBytesLeft,
+					m_CSAddrInfo.dstAddr.GetPort(), destination);
+			}
+			else
+			{
+				nRetVal = m_pPartner->SendTo(m_recvbuf+nBytesSent, nBytesLeft,
+					&m_CSAddrInfo.dstAddr, sizeof(_SockAddr));
+			}
 		} 
 		else
 		{
@@ -478,7 +406,10 @@ void CPRCUdpPeer::OnSend(int nErrorCode)
 	}
 
 	if(m_Identity == SERVER)
+	{
 		ATLTRACE("Server::OnSend()\r\n");
+		m_pNotify->OnServerWritable();
+	}
 	else
 		ATLTRACE("Client::OnSend()\r\n");
 
@@ -536,12 +467,14 @@ void CPRCUdpPeer::OnClose(int nErrorCode)
 	AsyncSelect(0);
 	Close();
 
-	if(m_pPartner->GetSocketHandle() != INVALID_SOCKET)
-	{
-		m_pPartner->AsyncSelect(0);
-		m_pPartner->Close();
-	}
-	m_pNotify->OnPeerClosed(this);
+	// Do not close the partner here.  In particular, a SOCKS5 UDP
+	// association may fail asynchronously after the application-facing
+	// route has already been returned to the hook.  Closing that route
+	// makes the next loopback datagram hit an unbound port and Windows
+	// immediately answers with ICMP Port Unreachable.  The task owns the
+	// lifetime policy for both peers and can rebuild the server side while
+	// keeping the stable local route alive.
+	m_pNotify->OnPeerClosed(this, nErrorCode);
 }
 
 void CPRCUdpPeer::Close()

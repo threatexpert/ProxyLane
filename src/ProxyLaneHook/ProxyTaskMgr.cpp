@@ -217,6 +217,30 @@ CProxyUDPTaskMgr::~CProxyUDPTaskMgr(void)
 
 BOOL CProxyUDPTaskMgr::OnNewTask(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo)
 {
+	CTSList<CUdpProxyTask*>::critical lc = m_tasklist;
+	for(list<CUdpProxyTask*>::iterator it = m_tasklist.begin(); it != m_tasklist.end(); ++it)
+	{
+		CUdpProxyTask *existing = *it;
+		if (existing->MatchesAssociation(lpPRCClient, lpProxyInfo))
+		{
+			// A closed task may remain in the list until the maintenance timer.
+			// It must never return its stale route port to a new registration.
+			if (existing->IsClosed())
+			{
+				m_tasklist.erase(it);
+				RemoveTask(existing);
+				break;
+			}
+			if (!existing->AddRoute(lpPRCClient))
+				return FALSE;
+			WORD routePort = lpPRCClient->udpAddr.GetPort();
+			m_PortState[routePort].clientip = lpPRCClient->srcAddr.GetdwIP();
+			m_PortState[routePort].clientport = lpPRCClient->srcAddr.GetPort();
+			m_PortState[routePort].proxyport = routePort;
+			return TRUE;
+		}
+	}
+
 	CUdpProxyTask *pTask = new CUdpProxyTask(this);
 	if(pTask == NULL)
 		return FALSE;
@@ -231,10 +255,10 @@ BOOL CProxyUDPTaskMgr::OnNewTask(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInf
 	m_PortState[pTask->m_LocalProxyUdpPort].clientport = lpPRCClient->srcAddr.GetPort();
 	m_PortState[pTask->m_LocalProxyUdpPort].proxyport = lpPRCClient->udpAddr.GetPort();
 
-	CTSList<CUdpProxyTask*>::critical lc = m_tasklist;
 	OnAddTask(lpPRCClient, lpProxyInfo);
 	if(m_tasklist.size() == 0)
 	{
+		SetTimer(TIMER_TCPPERTASK, TIMER_TCPPERTASK_INTERVAL);
 		SetTimer(TIMER_IS_TASK_ALIVE, TIMER_IS_TASK_ALIVE_INTERVAL);
 	}
 
@@ -248,6 +272,7 @@ BOOL CProxyUDPTaskMgr::OnDeleteTask(CUdpProxyTask *pTask)
 	m_tasklist.remove(pTask);
 	if(m_tasklist.size() == 0)
 	{
+		KillTimer(TIMER_TCPPERTASK);
 		KillTimer(TIMER_IS_TASK_ALIVE);
 	}
 	RemoveTask(pTask);
@@ -284,6 +309,7 @@ VOID CProxyUDPTaskMgr::RemoveAllTasks()
 		RemoveTask(pObj);
 
 	}
+	KillTimer(TIMER_TCPPERTASK);
 	KillTimer(TIMER_IS_TASK_ALIVE);
 	m_tasklist.clear();
 }
@@ -299,6 +325,14 @@ VOID CProxyUDPTaskMgr::OnTimer(UINT_PTR nIDEvent)
 {
 	switch(nIDEvent)
 	{
+	case TIMER_TCPPERTASK:
+		{
+			CTSList<CUdpProxyTask*>::critical lc = m_tasklist;
+			for(list<CUdpProxyTask*>::iterator it = m_tasklist.begin();
+				it != m_tasklist.end(); ++it)
+				(*it)->OnServerWritable();
+		}
+		break;
 	case TIMER_IS_TASK_ALIVE:
 		{
 			CTSList<CUdpProxyTask*>::critical lc = m_tasklist;
@@ -349,5 +383,5 @@ BOOL CProxyUDPTaskMgr::GetTaskCount(DWORD *pCount)
 {
 	CTSList<CUdpProxyTask*>::critical lc = m_tasklist;
 	*pCount = (DWORD)m_tasklist.size();
-	return FALSE;
+	return TRUE;
 }
