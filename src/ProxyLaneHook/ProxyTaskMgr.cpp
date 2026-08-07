@@ -62,7 +62,7 @@ BOOL CProxyXTaskMgr::GetTaskCount(DWORD *pCount)
 	return FALSE;
 }
 
-BOOL CProxyXTaskMgr::TestTaskByPid(DWORD dwPid)
+BOOL CProxyXTaskMgr::TestTaskByPid(DWORD dwPid, ULONGLONG processCreateTime)
 {
 	HANDLE hProcess = OpenProcess( PROCESS_QUERY_INFORMATION|PROCESS_VM_READ, FALSE, dwPid);
 
@@ -73,9 +73,13 @@ BOOL CProxyXTaskMgr::TestTaskByPid(DWORD dwPid)
 
 		return FALSE;
 	}
+	FILETIME created, exited, kernel, user;
+	BOOL queried = GetProcessTimes(hProcess, &created, &exited, &kernel, &user);
 	CloseHandle(hProcess);
-
-	return TRUE;
+	if (!queried)
+		return FALSE;
+	ULONGLONG actual = ((ULONGLONG)created.dwHighDateTime << 32) | created.dwLowDateTime;
+	return processCreateTime == 0 || actual == processCreateTime;
 }
 
 
@@ -150,13 +154,28 @@ VOID CProxyTCPTaskMgr::OnTimer(UINT_PTR nIDEvent)
 	case TIMER_TCPPERTASK:
 		{
 			CTSList<CTcpProxyTask*>::critical lc = m_tasklist;
-			for(list<CTcpProxyTask*>::iterator it = m_tasklist.begin(); it!=m_tasklist.end(); it++)
+			for(list<CTcpProxyTask*>::iterator it = m_tasklist.begin(); it!=m_tasklist.end(); )
 			{
 				CTcpProxyTask *pObj = *it;
 				if(pObj->m_pClient && pObj->m_pClient->GetSocketHandle() != INVALID_SOCKET)
 					pObj->m_pClient->OnTimer();
 				if(pObj->m_pServer && pObj->m_pServer->GetSocketHandle() != INVALID_SOCKET)
 					pObj->m_pServer->OnTimer();
+				if (pObj->IsDeletePending())
+				{
+					OnDelTask(&pObj->m_PRCClient);
+					it = m_tasklist.erase(it);
+					delete pObj;
+				}
+				else
+				{
+					++it;
+				}
+			}
+			if (m_tasklist.empty())
+			{
+				KillTimer(TIMER_TCPPERTASK);
+				KillTimer(TIMER_IS_TASK_ALIVE);
 			}
 
 			ATLTRACE("tasklist.size() = %d\r\n", (INT)m_tasklist.size());
@@ -169,7 +188,8 @@ VOID CProxyTCPTaskMgr::OnTimer(UINT_PTR nIDEvent)
 			for(list<CTcpProxyTask*>::iterator it = m_tasklist.begin(); it!=m_tasklist.end(); )
 			{
 				CTcpProxyTask *pObj = *it;
-				if (!TestTaskByPid(pObj->m_PRCClient.dwPid))
+				if (!TestTaskByPid(pObj->m_PRCClient.dwPid,
+					pObj->m_PRCClient.processCreateTime))
 				{
 					pObj->EndTask();
 					OnDelTask(&pObj->m_PRCClient);
@@ -287,7 +307,10 @@ INT  CProxyUDPTaskMgr::KillTasks(LPPRCClient lpPRCClient)
 	{
 		CUdpProxyTask *pObj = *it;
 
-		if (pObj->m_PRCClient.dwPid == lpPRCClient->dwPid && pObj->m_PRCClient.s == lpPRCClient->s)
+		if (pObj->m_PRCClient.dwPid == lpPRCClient->dwPid &&
+			pObj->m_PRCClient.processCreateTime == lpPRCClient->processCreateTime &&
+			pObj->m_PRCClient.socketGeneration == lpPRCClient->socketGeneration &&
+			pObj->m_PRCClient.s == lpPRCClient->s)
 		{
 			pObj->CloseTask();
 			m_PortState[pObj->m_LocalProxyUdpPort].proxyport = 0;
@@ -340,7 +363,8 @@ VOID CProxyUDPTaskMgr::OnTimer(UINT_PTR nIDEvent)
 			{
 				CUdpProxyTask *pObj = *it;
 
-				if (!TestTaskByPid(pObj->m_PRCClient.dwPid))
+				if (!TestTaskByPid(pObj->m_PRCClient.dwPid,
+					pObj->m_PRCClient.processCreateTime))
 				{
 					pObj->EndTask();
 					RemoveTask(pObj);

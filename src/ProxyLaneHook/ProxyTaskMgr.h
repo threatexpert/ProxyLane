@@ -26,7 +26,7 @@ public:
 	virtual BOOL GetTaskCount(DWORD *pCount);
 	//
 
-	BOOL TestTaskByPid(DWORD dwPid);
+	BOOL TestTaskByPid(DWORD dwPid, ULONGLONG processCreateTime);
 
 public:
 	CProxyReceptionCentre *m_pPRC;

@@ -40,6 +40,13 @@ typedef enum
 	HOOKAPI_COUNT
 }eHOOKFUN; 
 
+enum HookDecision
+{
+	HOOK_BYPASS = 0,
+	HOOK_REDIRECTED,
+	HOOK_FAILED
+};
+
 
 class CGlobalProxy;
 
@@ -205,6 +212,7 @@ class CHookWinsock
 		CHackedSocket(CHookWinsock *pHW)
 		{
 			m_pHW = pHW;
+			m_nextSocketGeneration = 0;
 		}
 		~CHackedSocket()
 		{
@@ -212,31 +220,80 @@ class CHookWinsock
 		}
 
 		typedef PRCClient CONNINFO;
+		struct SOCKETGEN
+		{
+			SOCKET s;
+			int sType;
+			ULONGLONG generation;
+		};
+
+		ULONGLONG GetSocketGeneration(SOCKET s, int sType)
+		{
+			CTSList<SOCKETGEN>::critical lc = m_socketGenerations;
+			for (CTSList<SOCKETGEN>::iterator it = m_socketGenerations.begin();
+				it != m_socketGenerations.end(); ++it)
+			{
+				if (it->s == s && it->sType == sType)
+					return it->generation;
+			}
+			SOCKETGEN item;
+			item.s = s;
+			item.sType = sType;
+			item.generation = ++m_nextSocketGeneration;
+			if (!item.generation)
+				item.generation = ++m_nextSocketGeneration;
+			m_socketGenerations.push_back(item);
+			return item.generation;
+		}
 
 		void push(CONNINFO *pCI)
 		{
 			CTSList<CONNINFO>::critical lc = m_ls;
-
+			for (CTSList<CONNINFO>::iterator it = m_ls.begin(); it != m_ls.end(); ++it)
+			{
+				if (it->s == pCI->s && it->sType == pCI->sType &&
+					it->srcAddr.GetPort() == pCI->srcAddr.GetPort() &&
+					it->dstAddr.GetdwIP() == pCI->dstAddr.GetdwIP() &&
+					it->dstAddr.GetPort() == pCI->dstAddr.GetPort() &&
+					_stricmp(it->szDomainName, pCI->szDomainName) == 0)
+				{
+					*it = *pCI;
+					return;
+				}
+			}
 			m_ls.push_front(*pCI);
 		}
 
-		int remove(SOCKET s)
+		int remove(SOCKET s, CONNINFO *removedInfo = NULL)
 		{
 			int nCount = 0;
-			CTSList<CONNINFO>::critical lc = m_ls;
-
-			for(CTSList<CONNINFO>::iterator it=m_ls.begin(); it!=m_ls.end();)
 			{
-				if(it->s == s)
+				CTSList<CONNINFO>::critical lc = m_ls;
+				for(CTSList<CONNINFO>::iterator it=m_ls.begin(); it!=m_ls.end();)
 				{
-					m_ls.erase(it++);
-					nCount++;
-				}else
-				{
-					it++;
+					if(it->s == s)
+					{
+						if (!nCount && removedInfo)
+							*removedInfo = *it;
+						m_ls.erase(it++);
+						nCount++;
+					}else
+					{
+						it++;
+					}
 				}
 			}
-			
+			{
+				CTSList<SOCKETGEN>::critical lc = m_socketGenerations;
+				for (CTSList<SOCKETGEN>::iterator it = m_socketGenerations.begin();
+					it != m_socketGenerations.end(); )
+				{
+					if (it->s == s)
+						m_socketGenerations.erase(it++);
+					else
+						++it;
+				}
+			}
 			return nCount;
 		}
 
@@ -255,37 +312,14 @@ class CHookWinsock
 			return FALSE;
 		}
 
-		BOOL CanHackIt(const LPPRCClient pCI)
+		HookDecision CanHackIt(const LPPRCClient pCI, CPRCPipeClient& pipeClient)
 		{
-			CTSList<CONNINFO>::critical lc = m_ls;
-
-			if (!m_PRCPipeClient.IsConnected())
-			{
-				ATLTRACE("CHackedSocket.m_PRCPipeClient is connecting.\r\n");
-				if (!m_PRCPipeClient.Connect(m_pHW->GetPRCPipeName()))
-				{
-					ATLTRACE("CHackedSocket.m_PRCPipeClient Failed to connect to PRCPipeServer.\r\n");
-					return FALSE;
-				}
-			}
-
 			ProxyInfo pi;
-			if (!m_PRCPipeClient.PRCGetProxyInfo((LPPRCClient)pCI, &pi))
-			{
-				return FALSE;
-			}
-
-			if (m_PRCPipeClient.GetLastError() != 0)
-			{
-				ATLTRACE("CHackedSocket.m_PRCPipeClient GetLastError == %d\r\n", m_PRCPipeClient.GetLastError());
-				m_PRCPipeClient.Disconnect();
-				return FALSE;
-			}
+			if (!pipeClient.PRCGetProxyInfo((LPPRCClient)pCI, &pi))
+				return HOOK_FAILED;
 
 			if (pCI->IsDNValid())
-			{
-				return TRUE;
-			}
+				return HOOK_REDIRECTED;
 
 			//如果程序要访问本地局域网络，但是代理服务器是公网的，则不劫持这个socket
 			in_addr dstaddr;
@@ -294,41 +328,41 @@ class CHookWinsock
 			dstaddr.s_addr = pCI->dstAddr.GetdwIP();
 			proxyaddr.s_addr = inet_addr(pi.strProxyHost);
 
-			if (!dstaddr.s_addr || dstaddr.s_addr == INADDR_NONE || !proxyaddr.s_addr|| dstaddr.s_addr == INADDR_NONE )
-			{
-				return FALSE;
-			}
+			if (!dstaddr.s_addr || dstaddr.s_addr == INADDR_NONE)
+				return HOOK_BYPASS;
+			if (!proxyaddr.s_addr || proxyaddr.s_addr == INADDR_NONE)
+				return HOOK_REDIRECTED;
 
 			if (m_pHW->m_psi.bHookLanIP)
-				return TRUE;
+				return HOOK_REDIRECTED;
 
 			if (dstaddr.s_net == 127)
 			{
 				if (proxyaddr.s_net != 127)
 				{
-					return FALSE;
+					return HOOK_BYPASS;
 				}
 			}else if (dstaddr.s_net == 192 && dstaddr.s_host == 168)
 			{
 				if (proxyaddr.s_net != dstaddr.s_net || proxyaddr.s_host != dstaddr.s_host || proxyaddr.s_lh != dstaddr.s_lh)
 				{
-					return FALSE;
+					return HOOK_BYPASS;
 				}
 			}else if (dstaddr.s_net == 172 && dstaddr.s_host >= 16 && dstaddr.s_host <= 131)
 			{
 				if (proxyaddr.s_net != dstaddr.s_net || proxyaddr.s_host != dstaddr.s_host || proxyaddr.s_lh != dstaddr.s_lh)
 				{
-					return FALSE;
+					return HOOK_BYPASS;
 				}
 			}else if (dstaddr.s_net == 10)
 			{
 				if (proxyaddr.s_net != dstaddr.s_net || proxyaddr.s_host != dstaddr.s_host || proxyaddr.s_lh != dstaddr.s_lh)
 				{
-					return FALSE;
+					return HOOK_BYPASS;
 				}
 			}
 
-			return TRUE;
+			return HOOK_REDIRECTED;
 		}
 
 		BOOL IsUDPReqHacked(const CONNINFO *pCI)
@@ -456,7 +490,8 @@ class CHookWinsock
 
 	private:
 		CTSList<CONNINFO> m_ls;
-		CPRCPipeClient m_PRCPipeClient;
+		CTSList<SOCKETGEN> m_socketGenerations;
+		ULONGLONG m_nextSocketGeneration;
 		CHookWinsock *m_pHW;
 
 	};
@@ -500,7 +535,7 @@ public:
 	int WSAAPI inhook_WSAConnect(SOCKET s, const struct sockaddr* name, int namelen, LPWSABUF lpCallerData, LPWSABUF lpCalleeData, LPQOS lpSQOS, LPQOS lpGQOS);
 
 	//处理拦截下来的连接
-	BOOL HackConnect(SOCKET s, _SockAddr &addrname);
+	HookDecision HackConnect(SOCKET s, _SockAddr &addrname);
 
 	//
 	BOOL HackDNS(const char *name);
@@ -537,7 +572,7 @@ public:
 		LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
 		);
 
-	BOOL HackSendTo(SOCKET s, _SockAddr &addrname, LPPRCClient lpC);
+	HookDecision HackSendTo(SOCKET s, _SockAddr &addrname, LPPRCClient lpC);
 
 	int
 		WSAAPI
@@ -562,6 +597,9 @@ public:
 		LPDWORD lpdwBytesSent,
 		LPOVERLAPPED lpOverlapped
 		);
+	INT PASCAL inhook_WSASendMsg(SOCKET s, LPWSAMSG lpMsg, DWORD dwFlags,
+		LPDWORD lpNumberOfBytesSent, LPWSAOVERLAPPED lpOverlapped,
+		LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
 
 		INT
 			WSAAPI
@@ -615,8 +653,12 @@ private:
 	void *m_mem4bakcode[HOOKMODULE_COUNT];
 
 	__CONNECTEX m_pConnectEx;
+	__WSASENDMSG m_pWSASendMsg;
 
 	CString m_szLastError;
 	CString m_szPRCPipeName;
+	CPRCPipeClient m_RequestPipe;
+	CRITICAL_SECTION m_RequestPipeLock;
+	BOOL EnsureRequestPipe();
 
 };

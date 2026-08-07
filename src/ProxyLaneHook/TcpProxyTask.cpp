@@ -14,6 +14,7 @@ CTcpProxyTask::CTcpProxyTask(CProxyTCPTaskMgr *pTaskmgr)
 
 	m_pClient = NULL;
 	m_pServer = NULL;
+	m_bDeletePending = FALSE;
 }
 
 CTcpProxyTask::~CTcpProxyTask(void)
@@ -82,9 +83,13 @@ BOOL CTcpProxyTask::SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxy
 VOID CTcpProxyTask::OnPeerClosed(CPRCTcpPeer *pPeer)
 {
 
-	if(m_pClient->GetSocketHandle() == INVALID_SOCKET && m_pServer->GetSocketHandle() == INVALID_SOCKET)
+	if(m_pClient && m_pServer &&
+		m_pClient->GetSocketHandle() == INVALID_SOCKET &&
+		m_pServer->GetSocketHandle() == INVALID_SOCKET)
 	{
-		m_pTaskmgr->OnDeleteTask(this);
+		// This callback runs inside CPRCTcpPeer::OnClose. Defer destruction so
+		// the peer is not deleted while its member function is still executing.
+		m_bDeletePending = TRUE;
 	}
 
 }

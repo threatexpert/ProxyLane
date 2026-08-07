@@ -29,7 +29,7 @@ public:
 	struct _CSAddrInfo 
 	{
 		_SockAddr srcAddr;
-		char szDomainName[50];
+		char szDomainName[256];
 		_SockAddr dstAddr;
 		BOOL IsDNValid(){ return szDomainName[0] != '\0';}
 		void zero(){ ZeroMemory(this, sizeof(*this));}
@@ -44,6 +44,7 @@ public:
 		LPCSTR lpszSocketAddress = NULL, BOOL bReuseAddr = FALSE);
 	void OnReceive(int nErrorCode);
 	void OnSend(int nErrorCode);
+	void OnConnect(int nErrorCode);
 	void OnClose(int nErrorCode);
 
 	virtual void Close();

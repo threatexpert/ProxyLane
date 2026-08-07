@@ -2,6 +2,8 @@
 
 #include <cassert>
 #include <iostream>
+#include <thread>
+#include <vector>
 
 static void TestSingleNotificationAndResetAfterDrain()
 {
@@ -87,12 +89,42 @@ static void TestContinuationKeepsNotificationPending()
 	assert(!third.hasMore);
 }
 
+static void TestConcurrentProducersDuringUiStall()
+{
+	CBoundedLogQueue<int> queue(1000, 100);
+	std::vector<std::thread> producers;
+	for (int producer = 0; producer < 8; ++producer)
+	{
+		producers.push_back(std::thread([producer, &queue]() {
+			for (int item = 0; item < 1000; ++item)
+				queue.Push(producer * 1000 + item);
+		}));
+	}
+	for (size_t index = 0; index < producers.size(); ++index)
+		producers[index].join();
+	assert(queue.Size() == 1000);
+
+	size_t drained = 0;
+	size_t dropped = 0;
+	bool more = true;
+	while (more)
+	{
+		CBoundedLogQueue<int>::Batch batch = queue.TakeBatch();
+		drained += batch.entries.size();
+		dropped += batch.dropped;
+		more = batch.hasMore;
+	}
+	assert(drained == 1000);
+	assert(dropped == 7000);
+}
+
 int main()
 {
 	TestSingleNotificationAndResetAfterDrain();
 	TestDropOldestAndDrainInFifoBatches();
 	TestPostFailureAllowsAnotherNotification();
 	TestContinuationKeepsNotificationPending();
+	TestConcurrentProducersDuringUiStall();
 
 	std::cout << "BoundedLogQueue tests passed" << std::endl;
 	return 0;

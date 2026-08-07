@@ -41,6 +41,8 @@ public:
 	//void PostSocketEvent(long lEvent, int nErrorCode);
 
 	void ClearBuffer();
+	void PropagateHalfClose();
+	void TryFinishConnection();
 
 	int OnLayerCallback(const CAsyncSocketExLayer *pLayer, int nType, int nCode, WPARAM wParam, LPARAM lParam);
 
@@ -49,6 +51,9 @@ public:
 private:
 
 	BOOL m_bConnShutted;
+	BOOL m_bReadClosed;
+	BOOL m_bWriteShutdown;
+	BOOL m_bFullyClosing;
 	em_TMTimeOut m_SocketStatus;
 	CTimeoutMonitor m_TimeoutMonitor[TM_COUNT];
 

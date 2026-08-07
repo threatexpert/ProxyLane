@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstddef>
 #include <list>
+#include <mutex>
 
 template <typename T>
 class CBoundedLogQueue
@@ -33,6 +34,7 @@ public:
 
 	bool Push(const T& value)
 	{
+		std::lock_guard<std::mutex> guard(m_lock);
 		if (m_entries.size() >= m_capacity)
 		{
 			m_entries.pop_front();
@@ -49,6 +51,7 @@ public:
 
 	Batch TakeBatch()
 	{
+		std::lock_guard<std::mutex> guard(m_lock);
 		Batch batch;
 		batch.dropped = m_dropped;
 		m_dropped = 0;
@@ -69,11 +72,13 @@ public:
 
 	void OnNotificationPostFailed()
 	{
+		std::lock_guard<std::mutex> guard(m_lock);
 		m_notificationPending = false;
 	}
 
 	size_t Size() const
 	{
+		std::lock_guard<std::mutex> guard(m_lock);
 		return m_entries.size();
 	}
 
@@ -83,4 +88,5 @@ private:
 	size_t m_batchSize;
 	size_t m_dropped;
 	bool m_notificationPending;
+	mutable std::mutex m_lock;
 };

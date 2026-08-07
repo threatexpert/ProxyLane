@@ -288,7 +288,15 @@ void CPRCUdpPeer::OnReceive(int nErrorCode)
 
 		if (m_Identity == CLIENT)
 		{
-			m_pNotify->ForwardClientDatagram(m_CSAddrInfo, m_recvbuf, m_recvbufpos);
+			m_pNotify->ForwardClientDatagram(this, m_CSAddrInfo, addrname,
+				m_recvbuf, m_recvbufpos);
+			ClearBuffer();
+			break;
+		}
+
+		if (m_Identity == SERVER)
+		{
+			m_pNotify->ForwardServerDatagram(addrname, m_recvbuf, m_recvbufpos);
 			ClearBuffer();
 			break;
 		}
@@ -411,7 +419,11 @@ void CPRCUdpPeer::OnSend(int nErrorCode)
 		m_pNotify->OnServerWritable();
 	}
 	else
+	{
 		ATLTRACE("Client::OnSend()\r\n");
+		m_pNotify->OnRouteWritable(this);
+		return;
+	}
 
 	//当前套接字可写， 则将Partner的m_recvbuf中的有效数据转发出去
 	int nRetVal;
@@ -454,6 +466,20 @@ void CPRCUdpPeer::OnSend(int nErrorCode)
 
 	}
 
+}
+
+void CPRCUdpPeer::OnConnect(int nErrorCode)
+{
+	if (m_Identity != SERVER)
+		return;
+	if (nErrorCode == 0)
+	{
+		m_pNotify->OnServerReady(this);
+		return;
+	}
+	AsyncSelect(0);
+	Close();
+	m_pNotify->OnPeerClosed(this, nErrorCode);
 }
 
 void CPRCUdpPeer::OnClose(int nErrorCode)

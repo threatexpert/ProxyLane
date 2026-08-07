@@ -230,6 +230,9 @@ protected:
 private:
 	void Reset();
 	void ClearBuffer();		//Clears the receive buffer
+	void ClearSendBuffer();
+	BOOL QueueProxyRequest(const void *data, int length);
+	BOOL FlushProxyRequest();
 
 	char *m_pRecvBuffer;	//The receive buffer
 	int m_nRecvBufferLen;	//Length of the RecvBuffer
@@ -237,6 +240,12 @@ private:
 
 	char *m_pStrBuffer;		//Recvbuffer needed by HTTP1.1 proxy
 	int m_iStrBuffSize;
+	char *m_pSendBuffer;
+	int m_nSendBufferLen;
+	int m_nSendBufferPos;
+	char *m_pAppRecvBuffer;
+	int m_nAppRecvBufferLen;
+	int m_nAppRecvBufferPos;
 
 	int m_nProxyOpState;	//State of an operation
 	int m_nProxyOpID;		//Currently active operation (0 if none)

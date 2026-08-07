@@ -26,6 +26,9 @@ CPRCTcpPeer::CPRCTcpPeer(CTcpProxyTask *pNotify)
 	m_DataLenRecvd = 0;
 	m_SocketStatus = TM_0;
 	m_bConnShutted = 0;
+	m_bReadClosed = FALSE;
+	m_bWriteShutdown = FALSE;
+	m_bFullyClosing = FALSE;
 
 	m_TimeoutMonitor[TM_CONN].SetTimeoutVal(15*1000);
 	m_TimeoutMonitor[TM_SEND].SetTimeoutVal(30*1000);
@@ -228,16 +231,10 @@ void CPRCTcpPeer::OnReceive(int nErrorCode)
 			break;
 		}else if(nRetVal == 0)
 		{
-			//connection has a graceful closing
-			//continue transferring if there are any available data existing.
-			if(m_recvbufpos == 0)
-			{
-				ATLTRACE("m_recvbufpos == 0. connection closed\r\n");
-				bOK = FALSE;
-				break;
-			}
-
-			ATLTRACE("%d.Receive == 0. m_recvbufpos > 0\r\n", GetSocketHandle());
+			m_bConnShutted = TRUE;
+			m_bReadClosed = TRUE;
+			ATLTRACE("%d.Receive == 0; preserving opposite direction.\r\n",
+				GetSocketHandle());
 			break;
 		}
 
@@ -284,6 +281,8 @@ void CPRCTcpPeer::OnReceive(int nErrorCode)
 		TriggerEvent(FD_CLOSE, nErrorCode);
 		return;
 	}
+	PropagateHalfClose();
+	TryFinishConnection();
 
 }
 
@@ -408,9 +407,8 @@ void CPRCTcpPeer::OnSend(int nErrorCode)
 	{
 
 	}
-
-
-
+	m_pPartner->PropagateHalfClose();
+	m_pPartner->TryFinishConnection();
 
 }
 
@@ -448,6 +446,7 @@ void CPRCTcpPeer::OnClose(int nErrorCode)
 	m_bConnShutted = TRUE;
 	if( nErrorCode == 0 )
 	{
+		m_bReadClosed = TRUE;
 		//正常关闭，但 还有数据没转发?
 		//if(GetValidDataLen() > 0)
 		//{
@@ -484,6 +483,14 @@ void CPRCTcpPeer::OnClose(int nErrorCode)
 			TriggerEvent(FD_READ);
 			return;
 		}
+
+		// FIN is directional. Stop reading this side, propagate FIN only after
+		// its buffered bytes have reached the partner, and keep reverse traffic.
+		m_bReadClosed = TRUE;
+		AsyncSelect(FD_WRITE | FD_CLOSE);
+		PropagateHalfClose();
+		TryFinishConnection();
+		return;
 	}
 
 	ATLTRACE("OnClose! All.sent: %I64d/%I64d, recvd: %I64d/%I64d \r\n", m_DataLenSent, m_pPartner->m_DataLenSent, m_DataLenRecvd, m_pPartner->m_DataLenRecvd);
@@ -508,6 +515,35 @@ void CPRCTcpPeer::OnClose(int nErrorCode)
 		m_pPartner->AsyncSelect(0);
 		m_pPartner->Close();
 	}
+	m_pNotify->OnPeerClosed(this);
+}
+
+void CPRCTcpPeer::PropagateHalfClose()
+{
+	if (!m_bReadClosed || GetValidDataLen() != 0 || !m_pPartner ||
+		m_pPartner->GetSocketHandle() == INVALID_SOCKET ||
+		m_pPartner->m_bWriteShutdown)
+		return;
+
+	m_pPartner->ShutDown(SD_SEND);
+	m_pPartner->m_bWriteShutdown = TRUE;
+}
+
+void CPRCTcpPeer::TryFinishConnection()
+{
+	if (m_bFullyClosing || !m_pPartner || !m_bReadClosed ||
+		!m_pPartner->m_bReadClosed || GetValidDataLen() != 0 ||
+		m_pPartner->GetValidDataLen() != 0)
+		return;
+
+	m_bFullyClosing = TRUE;
+	m_pPartner->m_bFullyClosing = TRUE;
+	AsyncSelect(0);
+	m_pPartner->AsyncSelect(0);
+	CAsyncSocketEx::Close();
+	m_pPartner->CAsyncSocketEx::Close();
+	m_SocketStatus = TM_CLOSE;
+	m_pPartner->m_SocketStatus = TM_CLOSE;
 	m_pNotify->OnPeerClosed(this);
 }
 

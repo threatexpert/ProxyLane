@@ -160,6 +160,12 @@ CAsyncProxySocketLayer::CAsyncProxySocketLayer()
 	m_pProxyPeerHost = NULL;
 	m_pStrBuffer = NULL;
 	m_iStrBuffSize = 0;
+	m_pSendBuffer = NULL;
+	m_nSendBufferLen = 0;
+	m_nSendBufferPos = 0;
+	m_pAppRecvBuffer = NULL;
+	m_nAppRecvBufferLen = 0;
+	m_nAppRecvBufferPos = 0;
 	m_ProxyData.nProxyType = PROXYTYPE_NOPROXY;
 	m_pS5UC = NULL;
 }
@@ -169,6 +175,8 @@ CAsyncProxySocketLayer::~CAsyncProxySocketLayer()
 	delete[] m_pProxyPeerHost;
 	delete m_pS5UC;
 	ClearBuffer();
+	ClearSendBuffer();
+	delete[] m_pAppRecvBuffer;
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -280,6 +288,23 @@ void CAsyncProxySocketLayer::OnAccept(int nErrorCode)
 
 void CAsyncProxySocketLayer::OnSend(int nErrorCode)
 {
+	if (m_pSendBuffer)
+	{
+		if (nErrorCode || !FlushProxyRequest())
+		{
+			int errorCode = nErrorCode ? nErrorCode : WSAGetLastError();
+			DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC,
+				PROXYERROR_REQUESTFAILED, errorCode);
+			TriggerEvent(m_nProxyOpID == PROXYOP_CONNECT ||
+				m_nProxyOpID == PROXYOP_UDPASSOCIATE ? FD_CONNECT : FD_ACCEPT,
+				errorCode ? errorCode : WSAECONNABORTED, TRUE);
+			Reset();
+			ClearBuffer();
+		}
+		return;
+	}
+	if (m_nProxyOpID)
+		return;
 	// We must route that event with the same functionality (PostMessage) which is used by
 	// the 'OnReceive' and 'OnConnect' event handlers. Otherwise the socket event queue of
 	// the underlying 'CAsyncSocketEx' may get out of sync.
@@ -483,7 +508,7 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 						m_ProxyData.strProxyUser.GetLength(), m_ProxyData.strProxyUser, 
 						m_ProxyData.strProxyPass.GetLength(), m_ProxyData.strProxyPass);
 
-					int res = SendNext(cBuff, iLen);
+					int res = QueueProxyRequest(cBuff, iLen) ? iLen : SOCKET_ERROR;
 					if (res == SOCKET_ERROR || res < iLen)
 					{
 						int nErrorCode = WSAGetLastError();
@@ -544,7 +569,7 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 				}
 
 
-				int res = SendNext(pcReq, iReqLen);
+				int res = QueueProxyRequest(pcReq, iReqLen) ? iReqLen : SOCKET_ERROR;
 				if (res == SOCKET_ERROR || res < iReqLen)
 				{
 					int nErrorCode = WSAGetLastError();
@@ -720,6 +745,7 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 		// Read everything which is currently available at the socket
 		//
 		bool bFoundEOH = false;
+		int iHeaderEnd = 0;
 		while (!bFoundEOH)
 		{
 			char cBuff[4096];
@@ -757,6 +783,7 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 			for (int i = 0; i <= iMaxOff; i++) {
 				if (*(DWORD*)(pc++) == 0x0A0D0A0D) { // VC-BUG?: '\r\n\r\n' results in 0x0A0D0A0D too, although it should not!
 					bFoundEOH = true;
+					iHeaderEnd = i + sizeof(DWORD);
 					break;
 				}
 			}
@@ -795,6 +822,15 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 		}
 
 		TRACE("%hs\n", CStringA(m_pStrBuffer, m_iStrBuffSize).TrimRight("\r\n"));
+		const int surplusLength = m_iStrBuffSize - iHeaderEnd;
+		if (surplusLength > 0)
+		{
+			delete[] m_pAppRecvBuffer;
+			m_pAppRecvBuffer = new char[surplusLength];
+			memcpy(m_pAppRecvBuffer, m_pStrBuffer + iHeaderEnd, surplusLength);
+			m_nAppRecvBufferLen = surplusLength;
+			m_nAppRecvBufferPos = 0;
+		}
 		Reset();
 		ClearBuffer();
 		TriggerEvent(FD_CONNECT, 0, TRUE);
@@ -992,7 +1028,7 @@ void CAsyncProxySocketLayer::OnConnect(int nErrorCode)
 				pcReq[8] = 0;							// Terminating NUL-byte for USERID
 			}
 
-			int res = SendNext(pcReq, iReqLen);
+			int res = QueueProxyRequest(pcReq, iReqLen) ? iReqLen : SOCKET_ERROR;
 			if (res == SOCKET_ERROR) {
 				int nErrorCode = WSAGetLastError();
 				DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, PROXYERROR_REQUESTFAILED, nErrorCode);
@@ -1050,7 +1086,7 @@ void CAsyncProxySocketLayer::OnConnect(int nErrorCode)
 				iReqLen = 3;
 			}
 
-			int res = SendNext(acReq, iReqLen);
+			int res = QueueProxyRequest(acReq, iReqLen) ? iReqLen : SOCKET_ERROR;
 			if (res == SOCKET_ERROR) {
 				int nErrorCode = WSAGetLastError();
 				DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, PROXYERROR_REQUESTFAILED, nErrorCode);
@@ -1146,7 +1182,7 @@ void CAsyncProxySocketLayer::OnConnect(int nErrorCode)
 				}
 			}
 
-			int iSent = SendNext(szHttpReq, iHttpReqLen);
+			int iSent = QueueProxyRequest(szHttpReq, iHttpReqLen) ? iHttpReqLen : SOCKET_ERROR;
 			if (iSent == SOCKET_ERROR) {
 				int nErrorCode = WSAGetLastError();
 				DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, PROXYERROR_REQUESTFAILED, nErrorCode);
@@ -1292,6 +1328,10 @@ void CAsyncProxySocketLayer::Close()
 	delete[] m_pProxyPeerHost;
 	m_pProxyPeerHost = NULL;
 	ClearBuffer();
+	ClearSendBuffer();
+	delete[] m_pAppRecvBuffer;
+	m_pAppRecvBuffer = NULL;
+	m_nAppRecvBufferLen = m_nAppRecvBufferPos = 0;
 	Reset();
 	CloseNext();
 }
@@ -1315,13 +1355,87 @@ int CAsyncProxySocketLayer::Send(const void* lpBuf, int nBufLen, int nFlags)
 
 int CAsyncProxySocketLayer::Receive(void* lpBuf, int nBufLen, int nFlags)
 {
+	if (nBufLen < 0 || (nBufLen > 0 && !lpBuf))
+	{
+		WSASetLastError(WSAEFAULT);
+		return SOCKET_ERROR;
+	}
+	if (nBufLen == 0)
+		return 0;
 	if (m_nProxyOpID)
 	{
 		WSASetLastError(WSAEWOULDBLOCK);
 		return SOCKET_ERROR;
 	}
 
+	if (m_pAppRecvBuffer && m_nAppRecvBufferPos < m_nAppRecvBufferLen)
+	{
+		int available = m_nAppRecvBufferLen - m_nAppRecvBufferPos;
+		int copied = min(nBufLen, available);
+		memcpy(lpBuf, m_pAppRecvBuffer + m_nAppRecvBufferPos, copied);
+		m_nAppRecvBufferPos += copied;
+		if (m_nAppRecvBufferPos == m_nAppRecvBufferLen)
+		{
+			delete[] m_pAppRecvBuffer;
+			m_pAppRecvBuffer = NULL;
+			m_nAppRecvBufferLen = m_nAppRecvBufferPos = 0;
+		}
+		return copied;
+	}
+
 	return ReceiveNext(lpBuf, nBufLen, nFlags);
+}
+
+void CAsyncProxySocketLayer::ClearSendBuffer()
+{
+	delete[] m_pSendBuffer;
+	m_pSendBuffer = NULL;
+	m_nSendBufferLen = m_nSendBufferPos = 0;
+}
+
+BOOL CAsyncProxySocketLayer::QueueProxyRequest(const void *data, int length)
+{
+	if (!data || length <= 0 || m_pSendBuffer)
+	{
+		WSASetLastError(WSAEINVAL);
+		return FALSE;
+	}
+	m_pSendBuffer = new(std::nothrow) char[length];
+	if (!m_pSendBuffer)
+	{
+		WSASetLastError(WSAENOBUFS);
+		return FALSE;
+	}
+	memcpy(m_pSendBuffer, data, length);
+	m_nSendBufferLen = length;
+	m_nSendBufferPos = 0;
+	return FlushProxyRequest();
+}
+
+BOOL CAsyncProxySocketLayer::FlushProxyRequest()
+{
+	while (m_pSendBuffer && m_nSendBufferPos < m_nSendBufferLen)
+	{
+		int sent = SendNext(m_pSendBuffer + m_nSendBufferPos,
+			m_nSendBufferLen - m_nSendBufferPos);
+		if (sent == SOCKET_ERROR)
+		{
+			if (WSAGetLastError() == WSAEWOULDBLOCK)
+				return TRUE;
+			ClearSendBuffer();
+			return FALSE;
+		}
+		if (sent <= 0)
+		{
+			WSASetLastError(WSAECONNRESET);
+			ClearSendBuffer();
+			return FALSE;
+		}
+		m_nSendBufferPos += sent;
+	}
+	if (m_pSendBuffer && m_nSendBufferPos == m_nSendBufferLen)
+		ClearSendBuffer();
+	return TRUE;
 }
 
 BOOL CAsyncProxySocketLayer::PrepareListen(unsigned long ip)
@@ -1476,6 +1590,11 @@ int CAsyncProxySocketLayer::SendTo(const void* lpBuf, int nBufLen, const SOCKADD
 		WSASetLastError(WSAEAFNOSUPPORT);
 		return SOCKET_ERROR;
 	}
+	if (nBufLen < 0 || nBufLen > 65507 - 10)
+	{
+		WSASetLastError(WSAEMSGSIZE);
+		return SOCKET_ERROR;
+	}
 
 	if(!m_udpBuffer.checkBufferSize(nBufLen+CSocks5UdpCodec::MAX_HEADER_SIZE, false))
 	{
@@ -1523,6 +1642,12 @@ int CAsyncProxySocketLayer::SendTo(const void* lpBuf, int nBufLen, UINT nHostPor
 		dstAddr.SetPort(nHostPort);
 		return SendTo(lpBuf, nBufLen, &dstAddr, sizeof(dstAddr));
 	}
+	if (iLenAsciiProxyPeerHost <= 0 || iLenAsciiProxyPeerHost > 255 ||
+		nBufLen < 0 || nBufLen > 65507 - (7 + iLenAsciiProxyPeerHost))
+	{
+		WSASetLastError(WSAEMSGSIZE);
+		return SOCKET_ERROR;
+	}
 
 	if(!m_udpBuffer.checkBufferSize(nBufLen+CSocks5UdpCodec::MAX_HEADER_SIZE, false))
 	{
@@ -1568,6 +1693,13 @@ int CAsyncProxySocketLayer::ReceiveFrom(void* lpBuf, int nBufLen, SOCKADDR* lpSo
 		(SOCKADDR*)&relayAddress, &relayAddressLength, nFlags);
 	if (ret == SOCKET_ERROR)
 		return ret;
+	if (relayAddress.sin_family != AF_INET ||
+		relayAddress.sin_addr.s_addr != m_udpsrvAddr.sin_addr.s_addr ||
+		relayAddress.sin_port != m_udpsrvAddr.sin_port)
+	{
+		WSASetLastError(WSAEACCES);
+		return SOCKET_ERROR;
+	}
 
 	CSocks5UdpCodec::DecodedPacket decoded;
 	if (!CSocks5UdpCodec::Decode(m_udpBuffer, ret, &decoded))

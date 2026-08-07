@@ -1,0 +1,14 @@
+name: Windows tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  win32-x64:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run Win32/x64 tests
+        shell: powershell
+        run: .\tests\run-tests.ps1

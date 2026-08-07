@@ -285,6 +285,14 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 {
 	BOOL bRet;
 	PRCPipeDataHead hdr;
+	ULONG pipeClientPid = 0;
+	typedef BOOL (WINAPI *PFN_GET_NAMED_PIPE_CLIENT_PROCESS_ID)(HANDLE, PULONG);
+	HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+	PFN_GET_NAMED_PIPE_CLIENT_PROCESS_ID getClientProcessId = kernel32
+		? (PFN_GET_NAMED_PIPE_CLIENT_PROCESS_ID)GetProcAddress(kernel32,
+			"GetNamedPipeClientProcessId") : NULL;
+	if (getClientProcessId && !getClientProcessId(hPipe, &pipeClientPid))
+		goto SEC_ERROR;
 	
 	for(; !m_bExitThread ;)
 	{
@@ -342,6 +350,8 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 
 				if (! ReadPipe(hPipe, &client, hdr.dataSize))
 					goto SEC_ERROR;
+				if (pipeClientPid && client.dwPid != pipeClientPid)
+					goto SEC_ERROR;
 
 				//将数据注册到PRC
 				if (! m_pPRC->RegisterClient(&client))
@@ -379,6 +389,8 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 
 				if (! ReadPipe(hPipe, &client, hdr.dataSize))
 					goto SEC_ERROR;
+				if (pipeClientPid && client.dwPid != pipeClientPid)
+					goto SEC_ERROR;
 
 				if (! m_pPRC->UnregisterClient(&client))
 					goto SEC_ERROR;
@@ -402,6 +414,8 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 					goto SEC_ERROR;
 
 				if(! ReadPipe(hPipe, &clientinfo, hdr.dataSize))
+					goto SEC_ERROR;
+				if (pipeClientPid && clientinfo.dwPid != pipeClientPid)
 					goto SEC_ERROR;
 
 				//查询PRC
@@ -493,6 +507,8 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 
 				if (!ReadPipe(hPipe, &identity, hdr.dataSize))
 					goto SEC_ERROR;
+				if (pipeClientPid && identity.dwProcessId != pipeClientPid)
+					goto SEC_ERROR;
 
 				identity.szAppPath[_countof(identity.szAppPath) - 1] = L'\0';
 				m_pPRC->RegisterProcessIdentity(&identity);
@@ -532,6 +548,8 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 
 				if (! ReadPipe(hPipe, &client, hdr.dataSize))
 					goto SEC_ERROR;
+				if (pipeClientPid && client.dwPid != pipeClientPid)
+					goto SEC_ERROR;
 
 				bRet = m_pPRC->GetProxyInfo(&client, &pi);
 
@@ -563,6 +581,8 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 
 					if (!ReadPipe(hPipe, &res, hdr.dataSize))
 						goto SEC_ERROR;
+					if (pipeClientPid && res.dwProcessId != pipeClientPid)
+						goto SEC_ERROR;
 
 					m_pPRC->m_pGlobalProxy->GetLogInstance()->OnHookWsock(&res);
 		}
@@ -570,30 +590,38 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 
 		case PRCPD_Logtext:
 		{
-			WCHAR textbuf[sizeof(HookLogtext)+2048];
-			HookLogtext *textinfo = (HookLogtext*)&textbuf[0];
-			void *pAlloc = NULL;
+			const DWORD fixedSize = FIELD_OFFSET(HookLogtext, str);
+			const DWORD maxLogBytes = 64 * 1024;
+			if (hdr.dataSize < fixedSize || hdr.dataSize > maxLogBytes ||
+				hdr.dataSize > MAXDWORD - sizeof(WCHAR))
+				goto SEC_ERROR;
 
-			if (hdr.dataSize > sizeof(textbuf)-2)
-			{
-				pAlloc = malloc(hdr.dataSize+2);
-				if (!pAlloc)
-					goto SEC_ERROR;
-				textinfo = (HookLogtext*)pAlloc;
-			}
-
+			HookLogtext *textinfo = (HookLogtext*)malloc(hdr.dataSize + sizeof(WCHAR));
+			if (!textinfo)
+				goto SEC_ERROR;
 			if (!ReadPipeExactly(hPipe, textinfo, hdr.dataSize))
 			{
-				if (pAlloc)
-					free(pAlloc);
+				free(textinfo);
 				goto SEC_ERROR;
 			}
-			textinfo->len /= 2;
-			textinfo->str[textinfo->len] = 0;
+			if (pipeClientPid && textinfo->dwProcessId != pipeClientPid)
+			{
+				free(textinfo);
+				goto SEC_ERROR;
+			}
+
+			const DWORD payloadBytes = hdr.dataSize - fixedSize;
+			if (textinfo->len < 0 || (textinfo->len & 1) != 0 ||
+				(DWORD)textinfo->len > payloadBytes)
+			{
+				free(textinfo);
+				goto SEC_ERROR;
+			}
+			textinfo->str[textinfo->len / sizeof(WCHAR)] = L'\0';
+			textinfo->len /= sizeof(WCHAR);
 
 			m_pPRC->m_pGlobalProxy->GetLogInstance()->OnHookLogtext(textinfo);
-			if (pAlloc)
-				free(pAlloc);
+			free(textinfo);
 
 		}
 		break;

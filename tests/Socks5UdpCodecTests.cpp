@@ -1,5 +1,7 @@
 #include <assert.h>
 #include <string.h>
+#include <thread>
+#include <vector>
 #include "Socks5UdpCodec.h"
 
 static void TestIPv4RoundTrip()
@@ -50,10 +52,65 @@ static void TestMalformedPackets()
 	assert(!CSocks5UdpCodec::Decode(truncatedDomain, sizeof(truncatedDomain), &decoded));
 }
 
+static void TestPayloadBoundaries()
+{
+	const int sizes[] = { 0, 1, 512, 1200, 1472, 16384, 65497 };
+	SOCKADDR_IN destination = {};
+	destination.sin_family = AF_INET;
+	destination.sin_addr.s_addr = inet_addr("1.2.3.4");
+	destination.sin_port = htons(443);
+	for (int index = 0; index < (int)(sizeof(sizes) / sizeof(sizes[0])); ++index)
+	{
+		std::vector<BYTE> payload(sizes[index], (BYTE)index);
+		std::vector<BYTE> packet(sizes[index] + 10);
+		int encoded = CSocks5UdpCodec::EncodeIPv4(packet.data(),
+			(int)packet.size(), &destination,
+			payload.empty() ? NULL : payload.data(), (int)payload.size());
+		assert(encoded == sizes[index] + 10);
+		CSocks5UdpCodec::DecodedPacket decoded;
+		assert(CSocks5UdpCodec::Decode(packet.data(), encoded, &decoded));
+		assert(decoded.payloadLength == sizes[index]);
+	}
+}
+
+static void TestMaximumDomainAndConcurrentUse()
+{
+	char domain[256];
+	memset(domain, 'a', 255);
+	domain[255] = '\0';
+	BYTE packet[300];
+	assert(CSocks5UdpCodec::EncodeDomain(packet, sizeof(packet), domain, 53,
+		NULL, 0) == 262);
+
+	std::vector<std::thread> workers;
+	for (int worker = 0; worker < 16; ++worker)
+	{
+		workers.push_back(std::thread([worker]() {
+			for (int iteration = 0; iteration < 1000; ++iteration)
+			{
+				BYTE localPacket[64];
+				SOCKADDR_IN target = {};
+				target.sin_family = AF_INET;
+				target.sin_addr.s_addr = htonl(0x0A000001 + worker);
+				target.sin_port = htons((USHORT)(1000 + worker));
+				int encoded = CSocks5UdpCodec::EncodeIPv4(localPacket,
+					sizeof(localPacket), &target, &iteration, sizeof(iteration));
+				CSocks5UdpCodec::DecodedPacket decoded;
+				assert(CSocks5UdpCodec::Decode(localPacket, encoded, &decoded));
+				assert(decoded.source.sin_port == target.sin_port);
+			}
+		}));
+	}
+	for (size_t index = 0; index < workers.size(); ++index)
+		workers[index].join();
+}
+
 int main()
 {
 	TestIPv4RoundTrip();
 	TestDomainRoundTrip();
 	TestMalformedPackets();
+	TestPayloadBoundaries();
+	TestMaximumDomainAndConcurrentUse();
 	return 0;
 }

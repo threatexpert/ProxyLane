@@ -11,6 +11,21 @@
 #define TIMER_CHECK_REGISTERED_CLIENT 0x100
 #define TIMER_CHECK_REGISTERED_CLIENT_INTERVAL 30*1000
 
+static BOOL QueryProcessCreateTime(DWORD processId, ULONGLONG *value)
+{
+	if (!value)
+		return FALSE;
+	HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, processId);
+	if (!process)
+		return FALSE;
+	FILETIME created, exited, kernel, user;
+	BOOL ok = GetProcessTimes(process, &created, &exited, &kernel, &user);
+	CloseHandle(process);
+	if (ok)
+		*value = ((ULONGLONG)created.dwHighDateTime << 32) | created.dwLowDateTime;
+	return ok;
+}
+
 CProxyReceptionCentre::CProxyReceptionCentre(CGlobalProxy *pGlobalProxy)
 {
 	InitializeCriticalSection(&m_ProcessIdentityLock);
@@ -346,7 +361,8 @@ IProxyDataHandle* CProxyReceptionCentre::GetPDHInstance()
 BOOL CProxyReceptionCentre::RegisterProcessIdentity(
 	LPHookProcessIdentityInfo identity)
 {
-	if (!identity || !identity->dwProcessId || !identity->szAppPath[0])
+	if (!identity || !identity->dwProcessId || !identity->processCreateTime ||
+		!identity->szAppPath[0])
 		return FALSE;
 
 	HookProcessIdentityInfo safeIdentity = *identity;
@@ -373,9 +389,14 @@ BOOL CProxyReceptionCentre::GetProcessIdentity(
 		m_ProcessIdentities.find(processId);
 	if (it != m_ProcessIdentities.end())
 	{
-		wcsncpy(appPath, it->second.szAppPath, appPathCount - 1);
-		appPath[appPathCount - 1] = L'\0';
-		found = appPath[0] != L'\0';
+		ULONGLONG actual = 0;
+		if (!QueryProcessCreateTime(processId, &actual) ||
+			actual == it->second.processCreateTime)
+		{
+			wcsncpy(appPath, it->second.szAppPath, appPathCount - 1);
+			appPath[appPathCount - 1] = L'\0';
+			found = appPath[0] != L'\0';
+		}
 	}
 	LeaveCriticalSection(&m_ProcessIdentityLock);
 	return found;
@@ -414,6 +435,13 @@ BOOL CProxyReceptionCentre::IsFiltered(LPPRCClientInfo lpClientInfo)
 
 BOOL CProxyReceptionCentre::RegisterClient(LPPRCClient lpClientInfo)
 {
+	if (!lpClientInfo || !lpClientInfo->dwPid ||
+		!lpClientInfo->processCreateTime || !lpClientInfo->socketGeneration)
+		return FALSE;
+	ULONGLONG actual = 0;
+	if (QueryProcessCreateTime(lpClientInfo->dwPid, &actual) &&
+		actual != lpClientInfo->processCreateTime)
+		return FALSE;
 	if(lpClientInfo->sType == SOCK_STREAM)
 		return RegisterTCPClient(lpClientInfo);
 	else if(lpClientInfo->sType == SOCK_DGRAM)
@@ -432,7 +460,10 @@ BOOL CProxyReceptionCentre::RegisterTCPClient(LPPRCClient lpClientInfo)
 	for(list<PRCClient>::iterator it=m_RegisteredClient.begin(); it!=m_RegisteredClient.end(); it++)
 	{
 		//may be?
-		if(lpClientInfo->dwPid == it->dwPid && lpClientInfo->s == it->s)
+		if(lpClientInfo->dwPid == it->dwPid &&
+			lpClientInfo->processCreateTime == it->processCreateTime &&
+			lpClientInfo->socketGeneration == it->socketGeneration &&
+			lpClientInfo->s == it->s)
 		{
 			*it = *lpClientInfo;
 			return TRUE;
@@ -461,7 +492,9 @@ BOOL CProxyReceptionCentre::UnregisterClient(LPPRCClient lpClientInfo)
 		CTSList<PRCClient>::critical lc = m_RegisteredClient;
 		for(list<PRCClient>::iterator it=m_RegisteredClient.begin(); it!=m_RegisteredClient.end(); )
 		{
-			if(lpClientInfo->s == it->s && lpClientInfo->dwPid == it->dwPid)
+			if(lpClientInfo->s == it->s && lpClientInfo->dwPid == it->dwPid &&
+				lpClientInfo->processCreateTime == it->processCreateTime &&
+				lpClientInfo->socketGeneration == it->socketGeneration)
 			{
 				m_RegisteredClient.erase(it++);
 			}else

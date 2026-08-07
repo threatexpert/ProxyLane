@@ -23,13 +23,21 @@ public:
 	BOOL MatchesAssociation(const LPPRCClient lpPRCClient, const LPProxyInfo lpProxyInfo);
 
 	VOID OnPeerClosed(CPRCUdpPeer *pPeer, int errorCode);
+	VOID OnServerReady(CPRCUdpPeer *pPeer);
 	VOID OnServerWritable();
-	BOOL ForwardClientDatagram(CPRCUdpPeer::_CSAddrInfo target,
+	VOID OnRouteWritable(CPRCUdpPeer *routePeer);
+	BOOL ForwardClientDatagram(CPRCUdpPeer *routePeer,
+		CPRCUdpPeer::_CSAddrInfo target, _SockAddr application,
+		const char *data, int length);
+	BOOL ForwardServerDatagram(_SockAddr source,
 		const char *data, int length);
 	BOOL CreateServerPeer();
 	VOID ScheduleServerReconnect(int errorCode);
 	BOOL QueueDatagram(CPRCUdpPeer::_CSAddrInfo target,
 		const char *data, int length);
+	BOOL QueueReply(CPRCUdpPeer *routePeer, _SockAddr application,
+		const char *data, int length);
+	VOID FlushPendingReplies(CPRCUdpPeer *routePeer = NULL);
 
 public:
 	PRCClient m_PRCClient;
@@ -41,6 +49,8 @@ private:
 	{
 		PRCClient client;
 		CPRCUdpPeer *peer;
+		_SockAddr applicationEndpoint;
+		BOOL hasApplicationEndpoint;
 	};
 	typedef std::list<UdpRoute> UdpRouteList;
 	UdpRouteList m_routes;
@@ -53,8 +63,19 @@ private:
 	typedef std::list<PendingDatagram> PendingDatagramList;
 	PendingDatagramList m_pending;
 	DWORD m_pendingBytes;
+	struct PendingReply
+	{
+		CPRCUdpPeer *routePeer;
+		_SockAddr application;
+		std::vector<char> data;
+		DWORD queuedAt;
+	};
+	typedef std::list<PendingReply> PendingReplyList;
+	PendingReplyList m_pendingReplies;
+	DWORD m_pendingReplyBytes;
 	CPRCUdpPeer *m_pServer;
 	BOOL m_serverReconnectPending;
+	BOOL m_serverReady;
 	DWORD m_nextServerReconnect;
 	DWORD m_serverReconnectDelay;
 	int m_lastServerError;

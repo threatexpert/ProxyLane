@@ -17,6 +17,7 @@ public:
 	BOOL SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo);
 
 	VOID OnPeerClosed(CPRCTcpPeer *pPeer);
+	BOOL IsDeletePending() const { return m_bDeletePending; }
 
 public:
 	PRCClient m_PRCClient;
@@ -25,6 +26,7 @@ public:
 private:
 	CPRCTcpPeer *m_pClient;
 	CPRCTcpPeer *m_pServer;
+	BOOL m_bDeletePending;
 
 public:
 	CProxyTCPTaskMgr *m_pTaskmgr;

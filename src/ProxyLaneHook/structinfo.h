@@ -177,6 +177,8 @@ typedef struct _tagPRCClient
 	//
 	DWORD dwPid;
 	DWORD dwTid;
+	ULONGLONG processCreateTime;
+	ULONGLONG socketGeneration;
 	int sType;//SOCK_DGRAM SOCK_STREAM
 	unsigned __int64 s;
 	unsigned __int64 sAccept;
@@ -242,6 +244,7 @@ typedef struct _HookNewProcessInfo
 typedef struct _HookProcessIdentityInfo
 {
 	DWORD dwProcessId;
+	ULONGLONG processCreateTime;
 	WCHAR szAppPath[MAX_PATH];
 }HookProcessIdentityInfo, *LPHookProcessIdentityInfo;
 
@@ -425,6 +428,14 @@ BOOL
 							   OUT LPDWORD lpdwBytesSent,
 							   IN LPOVERLAPPED lpOverlapped
 							   );
+
+typedef INT (PASCAL FAR * __WSASENDMSG)(
+	SOCKET s,
+	LPWSAMSG lpMsg,
+	DWORD dwFlags,
+	LPDWORD lpNumberOfBytesSent,
+	LPWSAOVERLAPPED lpOverlapped,
+	LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
 
 typedef
 INT

@@ -15,7 +15,9 @@ CUdpProxyTask::CUdpProxyTask(CProxyUDPTaskMgr *pTaskmgr)
 
 	m_pServer = NULL;
 	m_pendingBytes = 0;
+	m_pendingReplyBytes = 0;
 	m_serverReconnectPending = FALSE;
+	m_serverReady = FALSE;
 	m_nextServerReconnect = 0;
 	m_serverReconnectDelay = 250;
 	m_lastServerError = 0;
@@ -87,6 +89,7 @@ BOOL CUdpProxyTask::CreateServerPeer()
 	}
 
 	m_pServer = server;
+	m_serverReady = m_ProxyInfo.GetProxyType() == PROXYTYPE_NOPROXY;
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
 	{
 		if (it->peer && it->peer->GetSocketHandle() != INVALID_SOCKET)
@@ -97,8 +100,11 @@ BOOL CUdpProxyTask::CreateServerPeer()
 		}
 	}
 	m_serverReconnectPending = FALSE;
-	m_serverReconnectDelay = 250;
-	m_lastServerError = 0;
+	if (m_serverReady)
+	{
+		m_serverReconnectDelay = 250;
+		m_lastServerError = 0;
+	}
 	return TRUE;
 }
 
@@ -119,7 +125,10 @@ BOOL CUdpProxyTask::AddRoute(LPPRCClient lpPRCClient)
 		{
 			if (it->peer && it->peer->GetSocketHandle() != INVALID_SOCKET)
 			{
-				lpPRCClient->udpAddr = it->client.udpAddr;
+				_SockAddr routeAddress = it->client.udpAddr;
+				it->client = *lpPRCClient;
+				it->client.udpAddr = routeAddress;
+				lpPRCClient->udpAddr = routeAddress;
 				PrintText(_T("UDP route reused: PID %d, socket %Iu, route 127.0.0.1:%d.\r\n"),
 					lpPRCClient->dwPid, (ULONG_PTR)lpPRCClient->s,
 					lpPRCClient->udpAddr.GetPort());
@@ -150,7 +159,9 @@ BOOL CUdpProxyTask::AddRoute(LPPRCClient lpPRCClient)
 
 	_SockAddr routeAddress;
 	int routeAddressLength = sizeof(routeAddress);
-	if (!peer->CreateUDPSocket(&routeAddress, &routeAddressLength))
+	if (!peer->CreateUDPSocket(&routeAddress, &routeAddressLength, 0,
+		FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE,
+		"127.0.0.1"))
 	{
 		delete peer;
 		return FALSE;
@@ -160,6 +171,8 @@ BOOL CUdpProxyTask::AddRoute(LPPRCClient lpPRCClient)
 	UdpRoute route;
 	route.client = *lpPRCClient;
 	route.peer = peer;
+	ZeroMemory(&route.applicationEndpoint, sizeof(route.applicationEndpoint));
+	route.hasApplicationEndpoint = FALSE;
 	m_routes.push_back(route);
 	if (m_routes.size() == 1)
 	{
@@ -176,6 +189,8 @@ BOOL CUdpProxyTask::MatchesAssociation(const LPPRCClient lpPRCClient,
 {
 	return lpPRCClient && lpProxyInfo &&
 		m_PRCClient.dwPid == lpPRCClient->dwPid &&
+		m_PRCClient.processCreateTime == lpPRCClient->processCreateTime &&
+		m_PRCClient.socketGeneration == lpPRCClient->socketGeneration &&
 		m_PRCClient.s == lpPRCClient->s &&
 		m_ProxyInfo.GetProxyType() == lpProxyInfo->GetProxyType() &&
 		m_ProxyInfo.nProxyPort == lpProxyInfo->nProxyPort &&
@@ -186,6 +201,7 @@ VOID CUdpProxyTask::OnPeerClosed(CPRCUdpPeer *pPeer, int errorCode)
 {
 	if (pPeer == m_pServer)
 	{
+		m_serverReady = FALSE;
 		if (m_taskClosing)
 			return;
 		// Keep every application-facing route bound.  Deletion/recreation of
@@ -200,12 +216,26 @@ VOID CUdpProxyTask::OnPeerClosed(CPRCUdpPeer *pPeer, int errorCode)
 	CloseTask();
 }
 
+VOID CUdpProxyTask::OnServerReady(CPRCUdpPeer *pPeer)
+{
+	if (m_taskClosing || pPeer != m_pServer)
+		return;
+	m_serverReady = TRUE;
+	m_serverReconnectPending = FALSE;
+	m_serverReconnectDelay = 250;
+	m_lastServerError = 0;
+	PrintText(_T("UDP SOCKS5 association ready; local route %d.\r\n"),
+		m_LocalProxyUdpPort);
+	OnServerWritable();
+}
+
 VOID CUdpProxyTask::ScheduleServerReconnect(int errorCode)
 {
 	if (m_taskClosing)
 		return;
 	if (!m_serverReconnectPending)
 	{
+		m_serverReady = FALSE;
 		m_serverReconnectPending = TRUE;
 		m_nextServerReconnect = GetTickCount() + m_serverReconnectDelay;
 		m_lastServerError = errorCode;
@@ -246,7 +276,8 @@ VOID CUdpProxyTask::OnServerWritable()
 			m_LocalProxyUdpPort);
 	}
 
-	if (!m_pServer || m_pServer->GetSocketHandle() == INVALID_SOCKET)
+	if (!m_serverReady || !m_pServer ||
+		m_pServer->GetSocketHandle() == INVALID_SOCKET)
 		return;
 
 	while (!m_pending.empty())
@@ -288,15 +319,32 @@ VOID CUdpProxyTask::OnServerWritable()
 		if (it->peer && it->peer->GetValidDataLen() > 0)
 			it->peer->TransferSend();
 	}
+	FlushPendingReplies();
 }
 
-BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer::_CSAddrInfo target,
+VOID CUdpProxyTask::OnRouteWritable(CPRCUdpPeer *routePeer)
+{
+	FlushPendingReplies(routePeer);
+}
+
+BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer *routePeer,
+	CPRCUdpPeer::_CSAddrInfo target, _SockAddr application,
 	const char *data, int length)
 {
 	if (!data || length < 0)
 		return FALSE;
 
-	if (!m_serverReconnectPending && m_pServer &&
+	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
+	{
+		if (it->peer == routePeer)
+		{
+			it->applicationEndpoint = application;
+			it->hasApplicationEndpoint = TRUE;
+			break;
+		}
+	}
+
+	if (m_serverReady && !m_serverReconnectPending && m_pServer &&
 		m_pServer->GetSocketHandle() != INVALID_SOCKET && m_pending.empty())
 	{
 		int sent;
@@ -316,6 +364,105 @@ BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer::_CSAddrInfo target,
 	}
 
 	return QueueDatagram(target, data, length);
+}
+
+BOOL CUdpProxyTask::ForwardServerDatagram(_SockAddr source,
+	const char *data, int length)
+{
+	if (!data || length < 0)
+		return FALSE;
+	UdpRoute *selected = NULL;
+	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
+	{
+		if (!it->peer || it->peer->GetSocketHandle() == INVALID_SOCKET ||
+			it->client.dstAddr.GetPort() != source.GetPort())
+			continue;
+		if (!it->client.IsDNValid() &&
+			it->client.dstAddr.GetdwIP() == source.GetdwIP())
+		{
+			selected = &*it;
+			break;
+		}
+		// Domain replies normally carry their resolved IPv4 address. The
+		// destination port remains a stable discriminator.
+		if (it->client.IsDNValid())
+		{
+			if (selected)
+				selected = NULL; // ambiguous same-port domains
+			else
+				selected = &*it;
+		}
+	}
+	if (!selected && m_routes.size() == 1)
+		selected = &m_routes.front();
+	if (!selected)
+		return FALSE;
+
+	_SockAddr application = selected->hasApplicationEndpoint ?
+		selected->applicationEndpoint : selected->client.srcAddr;
+	if (application.GetdwIP() == INADDR_ANY)
+		application.SetIP("127.0.0.1");
+	int sent = selected->peer->SendTo(data, length, &application, sizeof(application));
+	if (sent == length)
+		return TRUE;
+	return QueueReply(selected->peer, application, data, length);
+}
+
+BOOL CUdpProxyTask::QueueReply(CPRCUdpPeer *routePeer,
+	_SockAddr application, const char *data, int length)
+{
+	if (!routePeer || !data || length < 0)
+		return FALSE;
+	const DWORD maxPackets = 128;
+	const DWORD maxBytes = 1024 * 1024;
+	while (!m_pendingReplies.empty() &&
+		(m_pendingReplies.size() >= maxPackets ||
+		m_pendingReplyBytes + length > maxBytes))
+	{
+		m_pendingReplyBytes -= (DWORD)m_pendingReplies.front().data.size();
+		m_pendingReplies.pop_front();
+	}
+	if ((DWORD)length > maxBytes)
+		return FALSE;
+	PendingReply reply;
+	reply.routePeer = routePeer;
+	reply.application = application;
+	reply.data.assign(data, data + length);
+	reply.queuedAt = GetTickCount();
+	m_pendingReplyBytes += (DWORD)reply.data.size();
+	m_pendingReplies.push_back(reply);
+	return TRUE;
+}
+
+VOID CUdpProxyTask::FlushPendingReplies(CPRCUdpPeer *routePeer)
+{
+	DWORD now = GetTickCount();
+	for (PendingReplyList::iterator it = m_pendingReplies.begin();
+		it != m_pendingReplies.end(); )
+	{
+		if (now - it->queuedAt > 5000 || !it->routePeer ||
+			it->routePeer->GetSocketHandle() == INVALID_SOCKET)
+		{
+			m_pendingReplyBytes -= (DWORD)it->data.size();
+			it = m_pendingReplies.erase(it);
+			continue;
+		}
+		if (routePeer && it->routePeer != routePeer)
+		{
+			++it;
+			continue;
+		}
+		const char *packetData = it->data.empty() ? "" : &it->data[0];
+		int sent = it->routePeer->SendTo(packetData, (int)it->data.size(),
+			&it->application, sizeof(it->application));
+		if (sent != (int)it->data.size())
+		{
+			++it;
+			continue;
+		}
+		m_pendingReplyBytes -= (DWORD)it->data.size();
+		it = m_pendingReplies.erase(it);
+	}
 }
 
 BOOL CUdpProxyTask::QueueDatagram(CPRCUdpPeer::_CSAddrInfo target,
@@ -345,6 +492,7 @@ VOID CUdpProxyTask::EndTask()
 {
 	m_taskClosing = TRUE;
 	m_serverReconnectPending = FALSE;
+	m_serverReady = FALSE;
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
 	{
 		if (it->peer)
@@ -357,6 +505,8 @@ VOID CUdpProxyTask::EndTask()
 	m_routes.clear();
 	m_pending.clear();
 	m_pendingBytes = 0;
+	m_pendingReplies.clear();
+	m_pendingReplyBytes = 0;
 	if(m_pServer)
 	{
 		m_pServer->Close();
@@ -369,6 +519,9 @@ VOID CUdpProxyTask::CloseTask()
 {
 	m_taskClosing = TRUE;
 	m_serverReconnectPending = FALSE;
+	m_serverReady = FALSE;
+	m_pendingReplies.clear();
+	m_pendingReplyBytes = 0;
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
 		if (it->peer)
 			it->peer->Close();

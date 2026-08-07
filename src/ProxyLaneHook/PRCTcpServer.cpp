@@ -75,6 +75,15 @@ static BOOL ResolveProcPath(
 
 		HookProcessIdentityInfo identity = { 0 };
 		identity.dwProcessId = dwPid;
+		HANDLE identityProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, dwPid);
+		if (identityProcess)
+		{
+			FILETIME created, exited, kernel, user;
+			if (GetProcessTimes(identityProcess, &created, &exited, &kernel, &user))
+				identity.processCreateTime =
+					((ULONGLONG)created.dwHighDateTime << 32) | created.dwLowDateTime;
+			CloseHandle(identityProcess);
+		}
 		wcsncpy(identity.szAppPath, szOut, _countof(identity.szAppPath) - 1);
 		receptionCentre->RegisterProcessIdentity(&identity);
 	}
@@ -101,7 +110,9 @@ BOOL CPRCTcpServer::StartupServer()
 #ifdef _DEBUG
 	//nSocketPort = 248;
 #endif
-	if(!Create(nSocketPort))
+	if(!Create(nSocketPort, SOCK_STREAM,
+		FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE,
+		"127.0.0.1"))
 		return FALSE;
 
 	int socketbufsize=1024*16;
