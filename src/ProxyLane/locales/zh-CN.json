@@ -19,6 +19,7 @@
   "action.refresh": "刷新",
   "action.proxy_selected": "代理所选",
   "status.proxy_stopped": "代理未启动",
+  "status.test_not_run": "尚未测试",
   "status.proxy_running": "代理运行中",
   "status.changes_unsaved": "更改未保存",
   "status.start_failed": "启动失败",

@@ -557,12 +557,7 @@ void CPage1::SetProfileDirty(BOOL dirty)
 		m_btnDeleteProfile.EnableWindow(m_cfgls.GetCurSel() != CB_ERR);
 
 	if (!m_bIsTesting && m_staticTestProxy.GetSafeHwnd())
-	{
-		if (dirty)
-			m_staticTestProxy.SetStatus(Localization::Get(_T("status.changes_unsaved")), CStatusLabel::TONE_WARNING);
-		else
-			UpdateProxyStateUi();
-	}
+		UpdateProxyTestStatus();
 }
 
 void CPage1::OnProfileFieldChanged()
@@ -726,7 +721,6 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 		return TRUE;
 	}
 
-	m_staticTestProxy.SetStatus(Localization::Get(_T("status.start_failed")), CStatusLabel::TONE_DANGER);
 	return FALSE;
 }
 
@@ -790,7 +784,7 @@ void CPage1::OnBnClickedTestproxy()
 		m_pProxyTester = NULL;
 		m_bIsTesting = FALSE;
 		m_btnTest.SetWindowText(Localization::Get(_T("action.test_current")));
-		UpdateProxyStateUi();
+		UpdateProxyTestStatus();
 		return;
 	}
 
@@ -1202,16 +1196,21 @@ void CPage1::OnCbnSelchangeComboCfgs()
 	}
 }
 
+void CPage1::UpdateProxyTestStatus()
+{
+	if (m_bIsTesting || !m_staticTestProxy.GetSafeHwnd())
+		return;
+
+	if (m_profileDirty)
+		m_staticTestProxy.SetStatus(Localization::Get(_T("status.changes_unsaved")), CStatusLabel::TONE_WARNING);
+	else
+		m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_not_run")), CStatusLabel::TONE_NEUTRAL);
+}
+
 void CPage1::UpdateProxyStateUi()
 {
 	BOOL running = m_proxyController.IsRunning();
 	m_OK.EnableWindow(!running);
 	m_Cancel.EnableWindow(running);
-	if (m_profileDirty)
-		m_staticTestProxy.SetStatus(Localization::Get(_T("status.changes_unsaved")), CStatusLabel::TONE_WARNING);
-	else if (running)
-		m_staticTestProxy.SetStatus(Localization::Get(_T("status.proxy_running")), CStatusLabel::TONE_SUCCESS);
-	else
-		m_staticTestProxy.SetStatus(Localization::Get(_T("status.proxy_stopped")), CStatusLabel::TONE_NEUTRAL);
 	UpdateWorkflowCard();
 }

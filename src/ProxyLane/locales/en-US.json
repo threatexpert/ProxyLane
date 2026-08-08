@@ -19,6 +19,7 @@
   "action.refresh": "Refresh",
   "action.proxy_selected": "Proxy Selected",
   "status.proxy_stopped": "Proxy stopped",
+  "status.test_not_run": "Not tested",
   "status.proxy_running": "Proxy running",
   "status.changes_unsaved": "Unsaved changes",
   "status.start_failed": "Start failed",

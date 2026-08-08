@@ -133,5 +133,6 @@ public:
 	afx_msg void OnBnClickedTabTarget();
 	afx_msg void OnBnClickedWorkflowNext();
 	void ShowTab(int nTab);
+	void UpdateProxyTestStatus();
 	void UpdateProxyStateUi();
 };
