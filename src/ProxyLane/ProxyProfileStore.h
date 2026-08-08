@@ -18,6 +18,8 @@ struct CfgProxyItem
 	BOOL bBlockUDP;
 	BOOL bHookChildProcess;
 	int dnsOpt;
+	BOOL bRedirectPrivateDNS;
+	CString strRedirectDNS;
 	CString strChildFilter;
 	int nChildFilterMode;
 	CString strTargetFilter;

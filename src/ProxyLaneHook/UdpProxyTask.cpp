@@ -33,14 +33,11 @@ CUdpProxyTask::CUdpProxyTask(CProxyUDPTaskMgr *pTaskmgr)
 	m_pServer = NULL;
 	m_pendingBytes = 0;
 	m_pendingReplyBytes = 0;
-	m_serverReconnectPending = FALSE;
-	m_serverReady = FALSE;
-	m_serverDormant = FALSE;
+	m_upstreamState = UdpAssociationPolicy::UPSTREAM_ROUTE_RESERVED;
 	m_lastActivity = GetTickCount();
 	m_nextServerReconnect = 0;
 	m_serverReconnectDelay = 250;
 	m_lastServerError = 0;
-	m_taskClosing = FALSE;
 
 	m_LocalProxyUdpPort = 0;
 }
@@ -73,10 +70,13 @@ BOOL CUdpProxyTask::SetTaskInfo(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo
 	{
 		m_PRCClient = *lpPRCClient;
 		m_ProxyInfo = *lpProxyInfo;
-		if(!CreateServerPeer())
-			break;
 		if (!AddRoute(lpPRCClient))
 			break;
+		// A connected UDP socket may never send a datagram (Go uses such
+		// sockets for RFC 6724 source-address selection).  The application-
+		// facing loopback route must exist before connect returns, but the
+		// remote SOCKS5 association is activated only by the first datagram.
+		m_upstreamState = UdpAssociationPolicy::UPSTREAM_ROUTE_RESERVED;
 		return TRUE;
 
 	} while(FALSE);
@@ -97,7 +97,7 @@ BOOL CUdpProxyTask::CreateServerPeer()
 
 	CPRCUdpPeer::_CSAddrInfo csai;
 	csai.zero();
-	csai.srcAddr = m_PRCClient.dstAddr;
+	csai.srcAddr = m_PRCClient.GetProxyDestination();
 	csai.dstAddr = m_PRCClient.srcAddr;
 	server->SetAddrInfo(&csai);
 
@@ -108,8 +108,9 @@ BOOL CUdpProxyTask::CreateServerPeer()
 	}
 
 	m_pServer = server;
-	m_serverReady = m_ProxyInfo.GetProxyType() == PROXYTYPE_NOPROXY;
-	m_serverDormant = FALSE;
+	m_upstreamState = m_ProxyInfo.GetProxyType() == PROXYTYPE_NOPROXY
+		? UdpAssociationPolicy::UPSTREAM_READY
+		: UdpAssociationPolicy::UPSTREAM_ASSOCIATING;
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
 	{
 		if (it->peer && it->peer->GetSocketHandle() != INVALID_SOCKET)
@@ -119,8 +120,7 @@ BOOL CUdpProxyTask::CreateServerPeer()
 				m_pServer->SetPartner(it->peer);
 		}
 	}
-	m_serverReconnectPending = FALSE;
-	if (m_serverReady)
+	if (m_upstreamState == UdpAssociationPolicy::UPSTREAM_READY)
 	{
 		m_serverReconnectDelay = 250;
 		m_lastServerError = 0;
@@ -168,9 +168,12 @@ BOOL CUdpProxyTask::AddRoute(LPPRCClient lpPRCClient)
 	CPRCUdpPeer::_CSAddrInfo csai;
 	csai.zero();
 	csai.srcAddr = lpPRCClient->srcAddr;
-	csai.dstAddr = lpPRCClient->dstAddr;
-	strncpy(csai.szDomainName, lpPRCClient->szDomainName,
-		sizeof(csai.szDomainName) - 1);
+	csai.dstAddr = lpPRCClient->GetProxyDestination();
+	if (!lpPRCClient->HasProxyDestination())
+	{
+		strncpy(csai.szDomainName, lpPRCClient->szDomainName,
+			sizeof(csai.szDomainName) - 1);
+	}
 	peer->SetAddrInfo(&csai);
 
 	_SockAddr routeAddress;
@@ -190,6 +193,7 @@ BOOL CUdpProxyTask::AddRoute(LPPRCClient lpPRCClient)
 	route.peer = peer;
 	ZeroMemory(&route.applicationEndpoint, sizeof(route.applicationEndpoint));
 	route.hasApplicationEndpoint = FALSE;
+	route.firstDatagramLogged = FALSE;
 	m_routes.push_back(route);
 	if (m_routes.size() == 1)
 	{
@@ -197,7 +201,7 @@ BOOL CUdpProxyTask::AddRoute(LPPRCClient lpPRCClient)
 			m_pServer->SetPartner(peer);
 		m_LocalProxyUdpPort = routeAddress.GetPort();
 	}
-	PrintText(_T("UDP route created: PID %d, socket %Iu, route %s:%d.\r\n"),
+	PrintText(_T("UDP route reserved: PID %d, socket %Iu, route %s:%d.\r\n"),
 		lpPRCClient->dwPid, (ULONG_PTR)lpPRCClient->s,
 		routeAddress.IsIPv6() ? _T("[::1]") : _T("127.0.0.1"),
 		routeAddress.GetPort());
@@ -225,6 +229,13 @@ BOOL CUdpProxyTask::CanAcceptRoute(const LPPRCClient lpPRCClient)
 	UdpAssociationPolicy::Destination requested = GetUdpDestination(*lpPRCClient);
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
 	{
+		// Redirected DNS routes deliberately keep independent associations.
+		// Several original private resolvers all become the same public :53
+		// endpoint, so a shared association could not identify the local route
+		// for a reply.
+		if (it->client.HasProxyDestination() ||
+			lpPRCClient->HasProxyDestination())
+			return FALSE;
 		if (!UdpAssociationPolicy::CanShareAssociation(
 			GetUdpDestination(it->client), requested))
 			return FALSE;
@@ -249,8 +260,9 @@ VOID CUdpProxyTask::OnPeerClosed(CPRCUdpPeer *pPeer, int errorCode)
 {
 	if (pPeer == m_pServer)
 	{
-		m_serverReady = FALSE;
-		if (m_taskClosing || m_serverDormant)
+		if (m_upstreamState == UdpAssociationPolicy::UPSTREAM_CLOSING ||
+			m_upstreamState == UdpAssociationPolicy::UPSTREAM_DORMANT ||
+			m_upstreamState == UdpAssociationPolicy::UPSTREAM_ROUTE_RESERVED)
 			return;
 		// Keep every application-facing route bound.  Deletion/recreation of
 		// the closed server peer is deferred to the task timer so this callback
@@ -266,10 +278,10 @@ VOID CUdpProxyTask::OnPeerClosed(CPRCUdpPeer *pPeer, int errorCode)
 
 VOID CUdpProxyTask::OnServerReady(CPRCUdpPeer *pPeer)
 {
-	if (m_taskClosing || m_serverDormant || pPeer != m_pServer)
+	if (m_upstreamState != UdpAssociationPolicy::UPSTREAM_ASSOCIATING ||
+		pPeer != m_pServer)
 		return;
-	m_serverReady = TRUE;
-	m_serverReconnectPending = FALSE;
+	m_upstreamState = UdpAssociationPolicy::UPSTREAM_READY;
 	m_serverReconnectDelay = 250;
 	m_lastServerError = 0;
 	PrintText(_T("UDP SOCKS5 association ready; local route %d.\r\n"),
@@ -279,13 +291,11 @@ VOID CUdpProxyTask::OnServerReady(CPRCUdpPeer *pPeer)
 
 VOID CUdpProxyTask::ScheduleServerReconnect(int errorCode)
 {
-	if (m_taskClosing)
+	if (m_upstreamState == UdpAssociationPolicy::UPSTREAM_CLOSING)
 		return;
-	m_serverDormant = FALSE;
-	if (!m_serverReconnectPending)
+	if (m_upstreamState != UdpAssociationPolicy::UPSTREAM_RECONNECT_WAIT)
 	{
-		m_serverReady = FALSE;
-		m_serverReconnectPending = TRUE;
+		m_upstreamState = UdpAssociationPolicy::UPSTREAM_RECONNECT_WAIT;
 		m_nextServerReconnect = GetTickCount() + m_serverReconnectDelay;
 		m_lastServerError = errorCode;
 		PrintText(_T("UDP SOCKS5 association closed (error: %d); local route %d remains open, reconnecting.\r\n"),
@@ -300,13 +310,13 @@ VOID CUdpProxyTask::ScheduleServerReconnect(int errorCode)
 
 VOID CUdpProxyTask::OnServerWritable()
 {
-	if (m_taskClosing)
+	if (m_upstreamState == UdpAssociationPolicy::UPSTREAM_CLOSING)
 		return;
 	const DWORD now = GetTickCount();
 	ExpirePendingDatagrams(now);
 	FlushPendingReplies();
 
-	if (m_serverReconnectPending)
+	if (m_upstreamState == UdpAssociationPolicy::UPSTREAM_RECONNECT_WAIT)
 	{
 		if ((LONG)(now - m_nextServerReconnect) < 0)
 			return;
@@ -324,7 +334,7 @@ VOID CUdpProxyTask::OnServerWritable()
 
 		if (!CreateServerPeer())
 		{
-			m_serverReconnectPending = TRUE;
+			m_upstreamState = UdpAssociationPolicy::UPSTREAM_RECONNECT_WAIT;
 			m_serverReconnectDelay = min(m_serverReconnectDelay * 2, (DWORD)5000);
 			m_nextServerReconnect = now + m_serverReconnectDelay;
 			return;
@@ -334,7 +344,7 @@ VOID CUdpProxyTask::OnServerWritable()
 			m_LocalProxyUdpPort);
 	}
 
-	if (!m_serverReady || !m_pServer ||
+	if (m_upstreamState != UdpAssociationPolicy::UPSTREAM_READY || !m_pServer ||
 		m_pServer->GetSocketHandle() == INVALID_SOCKET)
 		return;
 
@@ -382,13 +392,14 @@ VOID CUdpProxyTask::OnServerWritable()
 
 VOID CUdpProxyTask::OnMaintenanceTimer()
 {
-	if (m_taskClosing)
+	if (m_upstreamState == UdpAssociationPolicy::UPSTREAM_CLOSING)
 		return;
 	const DWORD now = GetTickCount();
 	ExpirePendingDatagrams(now);
 	FlushPendingReplies();
 
-	if (m_serverDormant)
+	if (m_upstreamState == UdpAssociationPolicy::UPSTREAM_DORMANT ||
+		m_upstreamState == UdpAssociationPolicy::UPSTREAM_ROUTE_RESERVED)
 		return;
 
 	BOOL hasPendingWork = !m_pending.empty() || !m_pendingReplies.empty();
@@ -416,13 +427,14 @@ VOID CUdpProxyTask::ExpirePendingDatagrams(DWORD now)
 
 VOID CUdpProxyTask::EnterServerDormant()
 {
-	if (m_taskClosing || m_serverDormant || !m_pending.empty() ||
+	if (m_upstreamState == UdpAssociationPolicy::UPSTREAM_CLOSING ||
+		m_upstreamState == UdpAssociationPolicy::UPSTREAM_DORMANT ||
+		m_upstreamState == UdpAssociationPolicy::UPSTREAM_ROUTE_RESERVED ||
+		!m_pending.empty() ||
 		!m_pendingReplies.empty())
 		return;
 
-	m_serverDormant = TRUE;
-	m_serverReady = FALSE;
-	m_serverReconnectPending = FALSE;
+	m_upstreamState = UdpAssociationPolicy::UPSTREAM_DORMANT;
 	m_serverReconnectDelay = 250;
 	m_lastServerError = 0;
 
@@ -447,13 +459,17 @@ VOID CUdpProxyTask::EnterServerDormant()
 
 VOID CUdpProxyTask::WakeServerAssociation()
 {
-	if (m_taskClosing || !m_serverDormant)
+	if (m_upstreamState == UdpAssociationPolicy::UPSTREAM_CLOSING ||
+		!UdpAssociationPolicy::ShouldActivateUpstream(m_upstreamState))
 		return;
 
-	m_serverDormant = FALSE;
-	m_serverReconnectPending = FALSE;
+	const BOOL firstActivation =
+		m_upstreamState == UdpAssociationPolicy::UPSTREAM_ROUTE_RESERVED;
+	m_upstreamState = UdpAssociationPolicy::UPSTREAM_ASSOCIATING;
 	m_serverReconnectDelay = 250;
-	PrintText(_T("UDP association waking; local route %d was preserved.\r\n"),
+	PrintText(firstActivation
+		? _T("UDP upstream starting after first datagram; local route %d was ready.\r\n")
+		: _T("UDP association waking; local route %d was preserved.\r\n"),
 		m_LocalProxyUdpPort);
 
 	if (!CreateServerPeer())
@@ -465,7 +481,7 @@ VOID CUdpProxyTask::WakeServerAssociation()
 		return;
 	}
 
-	if (m_serverReady)
+	if (m_upstreamState == UdpAssociationPolicy::UPSTREAM_READY)
 		OnServerWritable();
 }
 
@@ -488,11 +504,17 @@ BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer *routePeer,
 		{
 			it->applicationEndpoint = application;
 			it->hasApplicationEndpoint = TRUE;
+			if (!it->firstDatagramLogged)
+			{
+				it->firstDatagramLogged = TRUE;
+				LogUdpFirstDatagram(m_pTaskmgr->m_pPRC, &it->client,
+					&m_ProxyInfo);
+			}
 			break;
 		}
 	}
 
-	if (m_serverDormant)
+	if (UdpAssociationPolicy::ShouldActivateUpstream(m_upstreamState))
 	{
 		BOOL queued = QueueDatagram(target, data, length);
 		if (queued)
@@ -500,7 +522,7 @@ BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer *routePeer,
 		return queued;
 	}
 
-	if (m_serverReady && !m_serverReconnectPending && m_pServer &&
+	if (m_upstreamState == UdpAssociationPolicy::UPSTREAM_READY && m_pServer &&
 		m_pServer->GetSocketHandle() != INVALID_SOCKET && m_pending.empty())
 	{
 		int sent;
@@ -533,11 +555,13 @@ BOOL CUdpProxyTask::ForwardServerDatagram(_SockAddr source,
 	DWORD domainCandidateCount = 0;
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
 	{
+		const _SockAddr& effectiveDestination =
+			it->client.GetProxyDestination();
 		if (!it->peer || it->peer->GetSocketHandle() == INVALID_SOCKET ||
-			it->client.dstAddr.GetPort() != source.GetPort())
+			effectiveDestination.GetPort() != source.GetPort())
 			continue;
 		if (!it->client.IsDNValid() &&
-			it->client.dstAddr.SameAddress(source))
+			effectiveDestination.SameAddress(source))
 		{
 			selected = &*it;
 			break;
@@ -653,10 +677,7 @@ BOOL CUdpProxyTask::QueueDatagram(CPRCUdpPeer::_CSAddrInfo target,
 
 VOID CUdpProxyTask::EndTask()
 {
-	m_taskClosing = TRUE;
-	m_serverReconnectPending = FALSE;
-	m_serverReady = FALSE;
-	m_serverDormant = FALSE;
+	m_upstreamState = UdpAssociationPolicy::UPSTREAM_CLOSING;
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
 	{
 		if (it->peer)
@@ -681,10 +702,7 @@ VOID CUdpProxyTask::EndTask()
 
 VOID CUdpProxyTask::CloseTask()
 {
-	m_taskClosing = TRUE;
-	m_serverReconnectPending = FALSE;
-	m_serverReady = FALSE;
-	m_serverDormant = FALSE;
+	m_upstreamState = UdpAssociationPolicy::UPSTREAM_CLOSING;
 	m_pendingReplies.clear();
 	m_pendingReplyBytes = 0;
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)

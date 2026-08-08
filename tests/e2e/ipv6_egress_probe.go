@@ -24,9 +24,9 @@ func tcpProbe(target, serverName string, timeout time.Duration) error {
 	return conn.Handshake()
 }
 
-func tcpDNSProbe(target string, timeout time.Duration) error {
+func tcpDNSProbe(network, target string, timeout time.Duration) error {
 	dialer := &net.Dialer{Timeout: timeout}
-	conn, err := dialer.Dial("tcp6", target)
+	conn, err := dialer.Dial(network, target)
 	if err != nil {
 		return err
 	}
@@ -70,12 +70,12 @@ func dnsQuery(id uint16) []byte {
 	return packet
 }
 
-func udpProbe(target string, timeout time.Duration) error {
-	address, err := net.ResolveUDPAddr("udp6", target)
+func udpProbe(network, target string, timeout time.Duration) error {
+	address, err := net.ResolveUDPAddr(network, target)
 	if err != nil {
 		return err
 	}
-	conn, err := net.DialUDP("udp6", nil, address)
+	conn, err := net.DialUDP(network, nil, address)
 	if err != nil {
 		return err
 	}
@@ -99,6 +99,7 @@ func udpProbe(target string, timeout time.Duration) error {
 
 func main() {
 	mode := flag.String("mode", "tcp", "tcp, tcp-tls, or udp")
+	network := flag.String("network", "", "tcp4/tcp6 or udp4/udp6; inferred when empty")
 	target := flag.String("target", "[2606:4700:4700::1001]:53", "IPv6 target")
 	serverName := flag.String("server-name", "cloudflare-dns.com", "TLS server name")
 	timeout := flag.Duration("timeout", 10*time.Second, "operation timeout")
@@ -106,11 +107,19 @@ func main() {
 	flag.Parse()
 	var err error
 	if *mode == "udp" {
-		err = udpProbe(*target, *timeout)
+		selectedNetwork := *network
+		if selectedNetwork == "" {
+			selectedNetwork = "udp6"
+		}
+		err = udpProbe(selectedNetwork, *target, *timeout)
 	} else if *mode == "tcp-tls" {
 		err = tcpProbe(*target, *serverName, *timeout)
 	} else {
-		err = tcpDNSProbe(*target, *timeout)
+		selectedNetwork := *network
+		if selectedNetwork == "" {
+			selectedNetwork = "tcp6"
+		}
+		err = tcpDNSProbe(selectedNetwork, *target, *timeout)
 	}
 	result := fmt.Sprintf("IPV6_EGRESS_%s_PASS target=%s\n", *mode, *target)
 	if err != nil {

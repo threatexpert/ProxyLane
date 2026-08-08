@@ -88,7 +88,3 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 - `tests`：单元测试
 - `examples`：样例配置
 - `scripts`：发行包生成脚本
-
-## 版本
-
-当前版本：1.2.3

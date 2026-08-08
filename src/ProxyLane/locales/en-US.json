@@ -1,4 +1,6 @@
 {
+  "page1.redirect_private_dns": "Redirect private DNS to:",
+  "profile.invalid_redirect_dns": "The replacement DNS server must be a public IPv4 or IPv6 address.",
   "common.config": "Profile",
   "common.save_profile": "Save",
   "common.delete": "Delete",

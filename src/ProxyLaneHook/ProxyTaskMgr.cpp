@@ -410,8 +410,25 @@ VOID CProxyUDPTaskMgr::OnTimer(UINT_PTR nIDEvent)
 		{
 			CTSList<CUdpProxyTask*>::critical lc = m_tasklist;
 			for(list<CUdpProxyTask*>::iterator it = m_tasklist.begin();
-				it != m_tasklist.end(); ++it)
-				(*it)->OnMaintenanceTimer();
+				it != m_tasklist.end(); )
+			{
+				CUdpProxyTask *pObj = *it;
+				pObj->OnMaintenanceTimer();
+				if (pObj->IsClosed())
+				{
+					it = m_tasklist.erase(it);
+					RemoveTask(pObj);
+				}
+				else
+				{
+					++it;
+				}
+			}
+			if (m_tasklist.empty())
+			{
+				KillTimer(TIMER_TCPPERTASK);
+				KillTimer(TIMER_IS_TASK_ALIVE);
+			}
 		}
 		break;
 	case TIMER_IS_TASK_ALIVE:

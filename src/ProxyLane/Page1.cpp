@@ -11,6 +11,7 @@
 #include "IniFile.h"
 #include "Base64.h"
 #include "Localization.h"
+#include "..\ProxyLaneHook\DnsRedirectPolicy.h"
 #include <vector>
 #include <shlwapi.h>
 #pragma comment(lib, "shlwapi.lib")
@@ -112,6 +113,8 @@ void CPage1::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_CHECK_BLOCKUDP, m_btnBlockUDP);
 	DDX_Control(pDX, IDC_RADIO_DNSLOCAL, m_btnDNSLocal);
 	DDX_Control(pDX, IDC_RADIO_DNSREMOTE, m_btnDNSRemote);
+	DDX_Control(pDX, IDC_CHECK_REDIRECT_PRIVATE_DNS, m_btnRedirectPrivateDNS);
+	DDX_Control(pDX, IDC_EDIT_REDIRECT_DNS, m_editRedirectDNS);
 	DDX_Control(pDX, IDC_CHECK_HOOKCHILDPROCESS, m_btnHookChildProcess);
 	DDX_Control(pDX, IDC_EDIT_CHILDFILTER, m_editChildFilter);
 	DDX_Control(pDX, IDC_RADIO_CHILDFILTER_EXCLUDE, m_radioChildFilterExclude);
@@ -148,8 +151,10 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_BN_CLICKED(IDC_CHECK_HOOKTCP, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_CHECK_HOOK_UDP, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_CHECK_BLOCKUDP, &CPage1::OnProfileFieldChanged)
-	ON_BN_CLICKED(IDC_RADIO_DNSLOCAL, &CPage1::OnProfileFieldChanged)
-	ON_BN_CLICKED(IDC_RADIO_DNSREMOTE, &CPage1::OnProfileFieldChanged)
+	ON_BN_CLICKED(IDC_RADIO_DNSLOCAL, &CPage1::OnDnsSettingsChanged)
+	ON_BN_CLICKED(IDC_RADIO_DNSREMOTE, &CPage1::OnDnsSettingsChanged)
+	ON_BN_CLICKED(IDC_CHECK_REDIRECT_PRIVATE_DNS, &CPage1::OnDnsSettingsChanged)
+	ON_EN_CHANGE(IDC_EDIT_REDIRECT_DNS, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_RADIO_CHILDFILTER_EXCLUDE, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_RADIO_CHILDFILTER_INCLUDE, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_RADIO_TARGETFILTER_BYPASS, &CPage1::OnProfileFieldChanged)
@@ -474,6 +479,18 @@ BOOL CPage1::GetProxySettings(LPProxySettingsInfo lpPSI)
 	psi.nDNSOption = m_btnDNSLocal.GetCheck() ? PSI_DNSOPT_LOCAL : PSI_DNSOPT_REMOTE;
 	psi.bHookLanIP = m_bHookLanIP;
 	psi.bDisableLLMNR = m_bDisableLLMNR;
+	psi.bRedirectPrivateDNS = m_btnDNSRemote.GetCheck() == BST_CHECKED &&
+		m_btnRedirectPrivateDNS.GetCheck() == BST_CHECKED;
+	psi.redirectDNSAddr.Clear();
+	CString redirectDNS;
+	m_editRedirectDNS.GetWindowText(redirectDNS);
+	CStringA redirectDNSA(redirectDNS);
+	if (!psi.redirectDNSAddr.SetIP(redirectDNSA) ||
+		!DnsRedirectPolicy::IsValidPublicResolver(psi.redirectDNSAddr))
+	{
+		psi.bRedirectPrivateDNS = FALSE;
+		psi.redirectDNSAddr.Clear();
+	}
 
 	*lpPSI = psi;
 	return TRUE;
@@ -554,6 +571,44 @@ void CPage1::OnProfileFieldChanged()
 		SetProfileDirty(TRUE);
 }
 
+void CPage1::OnDnsSettingsChanged()
+{
+	UpdateDnsRedirectEnable();
+	OnProfileFieldChanged();
+}
+
+void CPage1::UpdateDnsRedirectEnable()
+{
+	const BOOL remote = m_btnDNSRemote.GetCheck() == BST_CHECKED;
+	m_btnRedirectPrivateDNS.EnableWindow(remote);
+	m_editRedirectDNS.EnableWindow(remote &&
+		m_btnRedirectPrivateDNS.GetCheck() == BST_CHECKED);
+}
+
+BOOL CPage1::ValidateDnsRedirectSettings(BOOL showError)
+{
+	if (m_btnDNSRemote.GetCheck() != BST_CHECKED ||
+		m_btnRedirectPrivateDNS.GetCheck() != BST_CHECKED)
+		return TRUE;
+
+	CString resolver;
+	m_editRedirectDNS.GetWindowText(resolver);
+	resolver.Trim();
+	CStringA resolverA(resolver);
+	_SockAddr address;
+	address.Clear();
+	if (address.SetIP(resolverA) &&
+		DnsRedirectPolicy::IsValidPublicResolver(address))
+		return TRUE;
+
+	if (showError)
+	{
+		MessageBox(Localization::Get(_T("profile.invalid_redirect_dns")),
+			Localization::Get(_T("status.invalid_config")), MB_ICONERROR);
+	}
+	return FALSE;
+}
+
 void CPage1::OnCbnEditchangeComboCfgs()
 {
 	if (m_loadingProfile)
@@ -584,6 +639,8 @@ BOOL CPage1::SaveCurrentProfile(LPCTSTR profileName)
 			Localization::Get(_T("profile.save_failed_title")), MB_ICONERROR);
 		return FALSE;
 	}
+	if (!ValidateDnsRedirectSettings(TRUE))
+		return FALSE;
 
 	m_profileStore.SetLastSelected(item.strName);
 	UIGetCfg(&item);
@@ -640,6 +697,8 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 				Localization::Get(_T("proxy.start_failed_title")), MB_ICONERROR);
 		return FALSE;
 	}
+	if (!ValidateDnsRedirectSettings(showErrors))
+		return FALSE;
 
 	CMainTab *pParent = g_MainTab;
 	CPage2 *pPage2 = pParent->GetPage2();
@@ -962,6 +1021,9 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_btnHookUDP.SetCheck(BST_CHECKED);
 		m_btnBlockUDP.SetCheck(BST_UNCHECKED);
 		m_btnDNSLocal.SetCheck(BST_CHECKED);
+		m_btnDNSRemote.SetCheck(BST_UNCHECKED);
+		m_btnRedirectPrivateDNS.SetCheck(BST_CHECKED);
+		m_editRedirectDNS.SetWindowText(_T("8.8.8.8"));
 		m_btnHookChildProcess.SetCheck(BST_UNCHECKED);
 		m_editChildFilter.SetWindowText(_T(""));
 		m_radioChildFilterInclude.SetCheck(BST_CHECKED);
@@ -996,6 +1058,8 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_btnHookChildProcess.SetCheck(item->bHookChildProcess ? BST_CHECKED : BST_UNCHECKED);
 		m_btnDNSLocal.SetCheck(item->dnsOpt==PSI_DNSOPT_LOCAL ? BST_CHECKED : BST_UNCHECKED);
 		m_btnDNSRemote.SetCheck(!m_btnDNSLocal.GetCheck());
+		m_btnRedirectPrivateDNS.SetCheck(item->bRedirectPrivateDNS ? BST_CHECKED : BST_UNCHECKED);
+		m_editRedirectDNS.SetWindowText(item->strRedirectDNS);
 
 		m_editChildFilter.SetWindowText(item->strChildFilter);
 		BOOL bInclude = (item->nChildFilterMode == CHILDFILTER_MODE_INCLUDE);
@@ -1007,6 +1071,7 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_radioTargetFilterBypass.SetCheck(bTgtProxy ? BST_UNCHECKED : BST_CHECKED);
 		UpdateChildFilterEnable();
 	}
+	UpdateDnsRedirectEnable();
 	m_loadedProfileName = item ? item->strName : _T("");
 	m_draftProfileName = m_loadedProfileName;
 	m_loadingProfile = FALSE;
@@ -1023,6 +1088,10 @@ void CPage1::UIGetCfg( CfgProxyItem *item )
 	item->bBlockUDP = m_btnBlockUDP.GetCheck() == BST_CHECKED;
 	item->bHookChildProcess = m_btnHookChildProcess.GetCheck() == BST_CHECKED;
 	item->dnsOpt = m_btnDNSLocal.GetCheck() ? PSI_DNSOPT_LOCAL : PSI_DNSOPT_REMOTE;
+	item->bRedirectPrivateDNS =
+		m_btnRedirectPrivateDNS.GetCheck() == BST_CHECKED;
+	m_editRedirectDNS.GetWindowText(item->strRedirectDNS);
+	item->strRedirectDNS.Trim();
 
 	CString strFilter;
 	m_editChildFilter.GetWindowText(strFilter);
@@ -1086,7 +1155,8 @@ void CPage1::ShowTab(int nTab)
 {
 	static const int idsBasic[] = {
 		IDC_CHECK_HOOKTCP, IDC_CHECK_HOOK_UDP, IDC_CHECK_HOOKCHILDPROCESS, IDC_CHECK_BLOCKUDP,
-		IDC_RADIO_DNSLOCAL, IDC_RADIO_DNSREMOTE, IDC_STATIC_GROUP_OTHER, IDC_STATIC_DNS_LABEL };
+		IDC_RADIO_DNSLOCAL, IDC_RADIO_DNSREMOTE, IDC_STATIC_GROUP_OTHER, IDC_STATIC_DNS_LABEL,
+		IDC_CHECK_REDIRECT_PRIVATE_DNS, IDC_EDIT_REDIRECT_DNS };
 	static const int idsChild[] = {
 		IDC_EDIT_CHILDFILTER, IDC_RADIO_CHILDFILTER_EXCLUDE, IDC_RADIO_CHILDFILTER_INCLUDE,
 		IDC_STATIC_CHILDFILTER_HINT, IDC_STATIC_CHILDFILTER_GROUP };

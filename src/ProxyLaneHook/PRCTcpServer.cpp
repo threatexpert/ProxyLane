@@ -10,6 +10,7 @@
 #include "GlobalProxy.h"
 #include "ProxyLog.h"
 #include "ProxySettings.h"
+#include "DnsRedirectPolicy.h"
 #include <psapi.h>
 
 #pragma comment(lib, "psapi.lib")
@@ -227,6 +228,8 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 		return;
 	}
 
+	DnsRedirectPolicy::Apply(PRCC, psi, pisetting);
+
 	if (psi.bDisableLLMNR)
 	{
 		if (isLLMNR(PRCC.szDomainName))
@@ -284,9 +287,10 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 				szTag, PRCC.dwPid, ppszName ? ppszName : L"", addressText,
 				PRCC.dstAddr.GetPort());
 		}
-		else
+	else
 			PrintText(_T("%sPID: %d(%s), connect to: %u.%u.%u.%u:%d\r\n"), szTag, PRCC.dwPid, ppszName ? ppszName : L"", pucIP[0], pucIP[1], pucIP[2], pucIP[3], PRCC.dstAddr.GetPort());
 	}
+	LogDnsRedirect(&PRCC);
 
 
 }

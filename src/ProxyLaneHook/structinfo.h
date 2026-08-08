@@ -270,6 +270,8 @@ typedef struct  _tagProxySettingsInfo
 	BOOL bHookLanIP;
 	BOOL bDisableLLMNR;
 	BOOL bBlockUDP;            // 禁止 UDP；优先于 bHookUDP，命中则 sendto/recvfrom 系列直接失败
+	BOOL bRedirectPrivateDNS;  // 服务器解析时将内网 :53 替换为公共 DNS
+	_SockAddr redirectDNSAddr;
 }ProxySettingsInfo, *LPProxySettingsInfo;
 
 #define PSI_DNSOPT_LOCAL 0
@@ -284,6 +286,8 @@ typedef struct _tagPRCINFO
 	_SockAddr udpaddr;
 }PRCINFO, *LPPRCINFO;
 
+#define PRC_CLIENT_FLAG_DNS_REDIRECT 0x00000001
+
 typedef struct _tagPRCClient
 {
 	//
@@ -297,6 +301,11 @@ typedef struct _tagPRCClient
 	char szDomainName[256];
 	_SockAddr srcAddr;
 	_SockAddr dstAddr;
+	// dstAddr is always the application's original destination.  When a
+	// transport policy changes only the upstream endpoint, proxyDstAddr keeps
+	// that effective destination without corrupting logs or route identity.
+	_SockAddr proxyDstAddr;
+	DWORD routingFlags;
 
 	DWORD uaFlag; //UDP Address Flag, 默认0
 	//根据标志位在请求代理服务器UDP地址的时候，本地socket的地址将在udpAddr中取得
@@ -304,6 +313,14 @@ typedef struct _tagPRCClient
 
 	DWORD reserved;
 	BOOL IsDNValid(){ return szDomainName[0] != '\0';}
+	BOOL HasProxyDestination() const
+	{
+		return (routingFlags & PRC_CLIENT_FLAG_DNS_REDIRECT) != 0;
+	}
+	const _SockAddr& GetProxyDestination() const
+	{
+		return HasProxyDestination() ? proxyDstAddr : dstAddr;
+	}
 	void zero(){ ZeroMemory(this, sizeof(*this));}
 }PRCClient, *LPPRCClient;
 

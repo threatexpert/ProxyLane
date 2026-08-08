@@ -77,10 +77,11 @@ BOOL CPRCTcpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo)
 	m_pProxyLayer->BypassHook(TRUE);
 
 	BOOL bConnect = FALSE;
+	const _SockAddr& destination = lpPRCClient->GetProxyDestination();
 
 	int transportFamily = lpProxyInfo &&
 		lpProxyInfo->GetProxyType() == PROXYTYPE_NOPROXY &&
-		lpPRCClient->dstAddr.IsIPv6() ? AF_INET6 : AF_INET;
+		destination.IsIPv6() ? AF_INET6 : AF_INET;
 	if (!CAsyncSocketEx::Create(0, SOCK_STREAM,
 		FD_READ | FD_WRITE | FD_CONNECT | FD_CLOSE, NULL, FALSE,
 		transportFamily))
@@ -88,10 +89,10 @@ BOOL CPRCTcpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo)
 	CAsyncSocketEx::AsyncSelect(FD_READ | FD_WRITE | FD_CONNECT | FD_CLOSE);
 
 	//Is domain name valid?
-	if(lpPRCClient->IsDNValid())
+	if(lpPRCClient->IsDNValid() && !lpPRCClient->HasProxyDestination())
 		bConnect = CAsyncSocketEx::Connect(lpPRCClient->szDomainName, lpPRCClient->dstAddr.GetPort());
 	else
-		bConnect = CAsyncSocketEx::Connect(&lpPRCClient->dstAddr, sizeof(lpPRCClient->dstAddr));
+		bConnect = CAsyncSocketEx::Connect(&destination, destination.Size());
 
 	if(!bConnect)
 	{

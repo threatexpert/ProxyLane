@@ -2,6 +2,7 @@
 
 #include "structinfo.h"
 #include "PRCUdpPeer.h"
+#include "UdpAssociationPolicy.h"
 #include <list>
 #include <vector>
 
@@ -58,6 +59,7 @@ private:
 		CPRCUdpPeer *peer;
 		_SockAddr applicationEndpoint;
 		BOOL hasApplicationEndpoint;
+		BOOL firstDatagramLogged;
 	};
 	typedef std::list<UdpRoute> UdpRouteList;
 	UdpRouteList m_routes;
@@ -81,14 +83,11 @@ private:
 	PendingReplyList m_pendingReplies;
 	DWORD m_pendingReplyBytes;
 	CPRCUdpPeer *m_pServer;
-	BOOL m_serverReconnectPending;
-	BOOL m_serverReady;
-	BOOL m_serverDormant;
+	UdpAssociationPolicy::UpstreamState m_upstreamState;
 	DWORD m_lastActivity;
 	DWORD m_nextServerReconnect;
 	DWORD m_serverReconnectDelay;
 	int m_lastServerError;
-	BOOL m_taskClosing;
 
 public:
 	CProxyUDPTaskMgr *m_pTaskmgr;

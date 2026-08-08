@@ -54,6 +54,11 @@ BOOL CProxyProfileStore::Load(CfgProxyItem& item) const
 	item.bHookUDP = !!m_ini.GetDWORD(section, _T("HookUDP"), TRUE);
 	item.bBlockUDP = !!m_ini.GetDWORD(section, _T("BlockUDP"), FALSE);
 	item.dnsOpt = m_ini.GetDWORD(section, _T("dnsOpt"), PSI_DNSOPT_REMOTE);
+	item.bRedirectPrivateDNS = !!m_ini.GetDWORD(section,
+		_T("RedirectPrivateDNS"), TRUE);
+	item.strRedirectDNS = m_ini.GetString(section, _T("RedirectDNS"));
+	if (item.strRedirectDNS.IsEmpty())
+		item.strRedirectDNS = _T("8.8.8.8");
 	item.strChildFilter = DecodeFilter(m_ini.GetString(section, _T("ChildFilter")));
 	item.nChildFilterMode = (int)m_ini.GetDWORD(section, _T("ChildFilterMode"), CHILDFILTER_MODE_INCLUDE);
 	item.strTargetFilter = DecodeFilter(m_ini.GetString(section, _T("TargetFilter")));
@@ -110,6 +115,8 @@ void CProxyProfileStore::Save(CfgProxyItem& item)
 	m_ini.SetDWORD(section, _T("BlockUDP"), item.bBlockUDP);
 	m_ini.DeleteKeyName(section, _T("UDPAddr"));
 	m_ini.SetDWORD(section, _T("dnsOpt"), item.dnsOpt);
+	m_ini.SetDWORD(section, _T("RedirectPrivateDNS"), item.bRedirectPrivateDNS);
+	m_ini.SetString(section, _T("RedirectDNS"), item.strRedirectDNS);
 	m_ini.SetString(section, _T("ChildFilter"), EncodeFilter(item.strChildFilter));
 	m_ini.SetDWORD(section, _T("ChildFilterMode"), item.nChildFilterMode);
 	m_ini.SetString(section, _T("TargetFilter"), EncodeFilter(item.strTargetFilter));

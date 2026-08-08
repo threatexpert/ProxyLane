@@ -384,6 +384,7 @@
     <ClInclude Include="token.h" />
     <ClInclude Include="TSSTL.h" />
 	<ClInclude Include="UdpAssociationPolicy.h" />
+	<ClInclude Include="DnsRedirectPolicy.h" />
 	<ClInclude Include="UdpPayloadPolicy.h" />
     <ClInclude Include="UdpProxyTask.h" />
     <ClInclude Include="asynsocket\AsyncProxySocketLayer.h" />

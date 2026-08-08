@@ -2,6 +2,8 @@
 
 #include "ProxyModule.h"
 
+class CProxyReceptionCentre;
+
 class CProxyLog
 	: public IProxyLog
 {
@@ -22,3 +24,6 @@ private:
 
 void PrintText(const TCHAR *fmt, ...);
 void LogNewProxyTask(const LPPRCClient lpC);
+void LogUdpFirstDatagram(CProxyReceptionCentre *receptionCentre,
+	const LPPRCClient lpC, const LPProxyInfo lpPI);
+void LogDnsRedirect(const LPPRCClient lpC);

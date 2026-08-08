@@ -1,4 +1,6 @@
 {
+  "page1.redirect_private_dns": "内网 DNS 自动替换为：",
+  "profile.invalid_redirect_dns": "替代 DNS 服务器必须是有效的公网 IPv4 或 IPv6 地址。",
   "common.config": "配置",
   "common.save_profile": "保存配置",
   "common.delete": "删除",

@@ -98,6 +98,8 @@ public:
 	CButton m_btnBlockUDP;
 	CButton m_btnDNSLocal;
 	CButton m_btnDNSRemote;
+	CButton m_btnRedirectPrivateDNS;
+	CEdit   m_editRedirectDNS;
 	CButton m_btnHookChildProcess;
 	CEdit   m_editChildFilter;
 	CButton m_radioChildFilterExclude;
@@ -111,6 +113,7 @@ public:
 	CStatusLabel m_staticTestProxy;
 	afx_msg void OnEnChangeEditAddr();
 	afx_msg void OnProfileFieldChanged();
+	afx_msg void OnDnsSettingsChanged();
 	afx_msg void OnCbnEditchangeComboCfgs();
 	afx_msg void OnCfgoptLoad();
 	afx_msg void OnCfgoptSave();
@@ -120,6 +123,8 @@ public:
 	afx_msg void OnCbnSelchangeComboCfgs();
 	afx_msg void OnBnClickedHookChildProcess();
 	void UpdateChildFilterEnable();
+	void UpdateDnsRedirectEnable();
+	BOOL ValidateDnsRedirectSettings(BOOL showError);
 	void PublishChildFilterSnapshot();
 	void PublishTargetFilterSnapshot();
 	void PublishProfileSnapshots();

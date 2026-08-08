@@ -4,6 +4,7 @@
 #include "structinfo.h"
 #include "TSSTL.h"
 #include "PRCPipeClient.h"
+#include "DnsRedirectPolicy.h"
 #include "inlinehook.h"
 
 using namespace std;
@@ -448,6 +449,12 @@ class CHookWinsock
 				return HOOK_FAILED;
 			if (proxyInfo)
 				*proxyInfo = pi;
+
+			// Remote-DNS mode intentionally overrides the general LAN bypass for
+			// private :53 endpoints.  PRC keeps the original address for identity
+			// and substitutes only the upstream destination.
+			if (DnsRedirectPolicy::ShouldRedirect(*pCI, m_pHW->m_psi, pi))
+				return HOOK_REDIRECTED;
 
 			if (pCI->IsDNValid())
 				return HOOK_REDIRECTED;

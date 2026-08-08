@@ -27,6 +27,19 @@ static Destination IPv4(DWORD address, WORD port)
 
 int main()
 {
+	assert(UdpAssociationPolicy::ShouldActivateUpstream(
+		UdpAssociationPolicy::UPSTREAM_ROUTE_RESERVED));
+	assert(UdpAssociationPolicy::ShouldActivateUpstream(
+		UdpAssociationPolicy::UPSTREAM_DORMANT));
+	assert(!UdpAssociationPolicy::ShouldActivateUpstream(
+		UdpAssociationPolicy::UPSTREAM_ASSOCIATING));
+	assert(!UdpAssociationPolicy::ShouldActivateUpstream(
+		UdpAssociationPolicy::UPSTREAM_READY));
+	assert(!UdpAssociationPolicy::ShouldActivateUpstream(
+		UdpAssociationPolicy::UPSTREAM_RECONNECT_WAIT));
+	assert(!UdpAssociationPolicy::ShouldActivateUpstream(
+		UdpAssociationPolicy::UPSTREAM_CLOSING));
+
 	assert(UdpAssociationPolicy::IsSameDestination(
 		Domain("dns.example", 53), Domain("DNS.EXAMPLE", 53)));
 	assert(UdpAssociationPolicy::CanShareAssociation(

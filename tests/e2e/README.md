@@ -19,6 +19,10 @@ to loopback test services.
   targets through a SOCKS5 server on an IPv4-only local network.
 - `udp_writemsg_probe.go`: Windows `WriteToUDP` / `WriteMsgUDP` compatibility
   probe, including IPv4-mapped destinations on dual-stack sockets.
+- `udp_connect_probe.go`: connected UDP lifecycle probe. By default it only
+  connects and closes without sending; `-write` activates one datagram per
+  socket. This verifies that route reservation does not eagerly open SOCKS5
+  UDP associations.
 - `quic/`: quic-go stream and unreliable-datagram echo test.
 - `tcp_e2e.go`: TCP server/client whose response is sent only after the server
   observes EOF. This makes successful completion proof of end-to-end
@@ -34,6 +38,7 @@ go build -o build/qa/go/socks5_e2e_server.exe tests/e2e/socks5_udp_server.go
 go build -o build/qa/go/udp_soak.exe tests/e2e/udp_soak.go
 go build -o build/qa/go/udp_echo.exe tests/e2e/udp_echo.go
 go build -o build/qa/go/ipv6_egress_probe.exe tests/e2e/ipv6_egress_probe.go
+go build -o build/qa/go/udp_connect_probe.exe tests/e2e/udp_connect_probe.go
 go build -o build/qa/go/tcp_e2e.exe tests/e2e/tcp_e2e.go
 go build -o build/qa/go/http_connect_server.exe tests/e2e/http_connect_server.go
 Push-Location tests/e2e/quic

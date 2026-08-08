@@ -5,6 +5,22 @@
 
 namespace UdpAssociationPolicy
 {
+	enum UpstreamState
+	{
+		UPSTREAM_ROUTE_RESERVED = 0,
+		UPSTREAM_ASSOCIATING,
+		UPSTREAM_READY,
+		UPSTREAM_RECONNECT_WAIT,
+		UPSTREAM_DORMANT,
+		UPSTREAM_CLOSING
+	};
+
+	inline BOOL ShouldActivateUpstream(UpstreamState state)
+	{
+		return state == UPSTREAM_ROUTE_RESERVED ||
+			state == UPSTREAM_DORMANT;
+	}
+
 	struct Destination
 	{
 		BOOL hasDomain;

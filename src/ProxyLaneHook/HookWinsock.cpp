@@ -990,7 +990,14 @@ HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 	if (nSockType == SOCK_STREAM && !m_psi.bHookTCP)
 		return HOOK_BYPASS;
 
-	if (addrname.IsLoopback())
+	// 127.255.0.0/16 is ProxyLane's IPv4 dummy-DNS range.  It is part of
+	// 127.0.0.0/8, but it must reach the PRC so the original hostname can be
+	// recovered.  Only genuine loopback destinations bypass interception.
+	const BOOL isDummyDestination =
+		(addrname.IsIPv4() && m_DummyDNS.IsDummyIP(addrname.GetdwIP())) ||
+		(addrname.IsIPv6() &&
+			m_DummyDNS.IsDummyIPv6(addrname.GetAddr6()));
+	if (addrname.IsLoopback() && !isDummyDestination)
 		return HOOK_BYPASS;
 
 	_SockAddr srcAddr;
