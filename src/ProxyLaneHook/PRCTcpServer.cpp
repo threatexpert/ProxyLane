@@ -93,18 +93,25 @@ static BOOL ResolveProcPath(
 	return ppszName[0] != L'\0';
 }
 
-CPRCTcpServer::CPRCTcpServer(CProxyReceptionCentre *pPRC)
+CPRCTcpServer::CPRCTcpServer(CProxyReceptionCentre *pPRC, int addressFamily,
+	CProxyTCPTaskMgr *sharedTaskMgr)
 	: CPRCXServer(pPRC)
-	, m_ProxyTaskMgr(pPRC)
+	, m_addressFamily(addressFamily)
+	, m_pProxyTaskMgr(sharedTaskMgr ? sharedTaskMgr : new CProxyTCPTaskMgr(pPRC))
+	, m_ownsProxyTaskMgr(sharedTaskMgr == NULL)
 {
 }
 
 CPRCTcpServer::~CPRCTcpServer(void)
 {
+	if (m_ownsProxyTaskMgr)
+		delete m_pProxyTaskMgr;
 }
 
 BOOL CPRCTcpServer::StartupServer()
 {
+	if (!m_pProxyTaskMgr)
+		return FALSE;
 	UINT nSocketPort = INADDR_ANY;
 
 #ifdef _DEBUG
@@ -112,7 +119,8 @@ BOOL CPRCTcpServer::StartupServer()
 #endif
 	if(!Create(nSocketPort, SOCK_STREAM,
 		FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE,
-		"127.0.0.1"))
+		m_addressFamily == AF_INET6 ? "::1" : "127.0.0.1", FALSE,
+		m_addressFamily))
 		return FALSE;
 
 	int socketbufsize=1024*16;
@@ -129,7 +137,9 @@ BOOL CPRCTcpServer::StartupServer()
 		return FALSE;
 	}
 
-	PrintText(_T("PRCTcpServer listening on port: %d\r\n"), tcpaddr.GetPort());
+	PrintText(_T("PRCTcpServer listening on %s:%d\r\n"),
+		m_addressFamily == AF_INET6 ? _T("[::1]") : _T("127.0.0.1"),
+		tcpaddr.GetPort());
 
 	return TRUE;
 }
@@ -137,8 +147,9 @@ BOOL CPRCTcpServer::StartupServer()
 
 BOOL CPRCTcpServer::ShutdownServer()
 {
-	m_ProxyTaskMgr.RemoveAllTasks();
 	Close();
+	if (m_ownsProxyTaskMgr && m_pProxyTaskMgr)
+		m_pProxyTaskMgr->RemoveAllTasks();
 
 	PrintText(_T("PRCTcpServer stopped.\r\n"));
 	return TRUE;
@@ -230,8 +241,19 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 		}
 	}
 
-	if(!m_ProxyTaskMgr.OnNewTask(sClient, &PRCC, &pisetting))
+	if(!m_pProxyTaskMgr->OnNewTask(sClient, &PRCC, &pisetting))
 	{
+		if (PRCC.dstAddr.IsIPv6())
+		{
+			WCHAR addressText[INET6_ADDRSTRLEN] = L"";
+			InetNtopW(AF_INET6, (PVOID)PRCC.dstAddr.GetAddr6(), addressText,
+				_countof(addressText));
+			PrintText(_T("Failed to add proxy task. PID: %d(%s), [%s]:%d, domain: %S:%d\r\n"),
+				PRCC.dwPid, ppszName ? ppszName : L"", addressText,
+				PRCC.dstAddr.GetPort(), PRCC.szDomainName, PRCC.dstAddr.GetPort());
+			closesocket(sClient);
+			return;
+		}
 #ifdef _UNICODE
 		PrintText(_T("Failed to add proxy task. PID: %d(%s), %u.%u.%u.%u:%d, domain: %S:%d\r\n"), PRCC.dwPid, ppszName ? ppszName : L"", pucIP[0], pucIP[1], pucIP[2], pucIP[3], PRCC.dstAddr.GetPort(), PRCC.szDomainName, PRCC.dstAddr.GetPort());
 #else
@@ -253,7 +275,17 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 #endif
 	}else
 	{
-		PrintText(_T("%sPID: %d(%s), connect to: %u.%u.%u.%u:%d\r\n"), szTag, PRCC.dwPid, ppszName ? ppszName : L"", pucIP[0], pucIP[1], pucIP[2], pucIP[3], PRCC.dstAddr.GetPort());
+		if (PRCC.dstAddr.IsIPv6())
+		{
+			WCHAR addressText[INET6_ADDRSTRLEN] = L"";
+			InetNtopW(AF_INET6, (PVOID)PRCC.dstAddr.GetAddr6(), addressText,
+				_countof(addressText));
+			PrintText(_T("%sPID: %d(%s), connect to: [%s]:%d\r\n"),
+				szTag, PRCC.dwPid, ppszName ? ppszName : L"", addressText,
+				PRCC.dstAddr.GetPort());
+		}
+		else
+			PrintText(_T("%sPID: %d(%s), connect to: %u.%u.%u.%u:%d\r\n"), szTag, PRCC.dwPid, ppszName ? ppszName : L"", pucIP[0], pucIP[1], pucIP[2], pucIP[3], PRCC.dstAddr.GetPort());
 	}
 
 
@@ -261,5 +293,10 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 
 IProxyTaskMgr *CPRCTcpServer::GetPTMInstance()
 {
-	return &m_ProxyTaskMgr;
+	return m_pProxyTaskMgr;
+}
+
+CProxyTCPTaskMgr *CPRCTcpServer::GetTCPTaskMgr()
+{
+	return m_pProxyTaskMgr;
 }

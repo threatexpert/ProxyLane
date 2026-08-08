@@ -9,11 +9,154 @@
 #include "GlobalProxy.h"
 #include "token.h"
 #include "ElevatedLauncher.h"
+#include "UdpPayloadPolicy.h"
 
 #pragma comment(lib,"psapi.lib")
 #pragma comment(lib,"ws2_32.lib")
 
 CHookWinsock *g_pHookWinsock = NULL;
+
+static BOOL IsWSABufferPayloadAllowed(LPWSABUF buffers, DWORD bufferCount,
+	size_t maxPayload)
+{
+	if (!buffers && bufferCount)
+		return TRUE; // Let Winsock report the invalid pointer.
+	size_t total = 0;
+	for (DWORD i = 0; i < bufferCount; ++i)
+	{
+		if (buffers[i].len > maxPayload - min(total, maxPayload))
+			return FALSE;
+		total += buffers[i].len;
+	}
+	return total <= maxPayload;
+}
+
+static DWORD GetWSABufferPayloadLength(LPWSABUF buffers, DWORD bufferCount)
+{
+	DWORD total = 0;
+	for (DWORD i = 0; i < bufferCount; ++i)
+		total += buffers[i].len;
+	return total;
+}
+
+static BOOL NormalizeSocketAddress(const SOCKADDR *address, int addressLength,
+	_SockAddr *normalized)
+{
+	if (!address || !normalized)
+		return FALSE;
+	ZeroMemory(normalized, sizeof(*normalized));
+	if (address->sa_family == AF_INET &&
+		addressLength >= (int)sizeof(SOCKADDR_IN))
+	{
+		*normalized = *address;
+		return TRUE;
+	}
+	if (address->sa_family != AF_INET6 ||
+		addressLength < (int)sizeof(SOCKADDR_IN6))
+		return FALSE;
+	const SOCKADDR_IN6 *address6 = reinterpret_cast<const SOCKADDR_IN6 *>(address);
+	if (!IN6_IS_ADDR_V4MAPPED(&address6->sin6_addr))
+		return normalized->Set(address, addressLength);
+	normalized->sa_family = AF_INET;
+	DWORD ipv4 = 0;
+	memcpy(&ipv4, &address6->sin6_addr.u.Byte[12], sizeof(ipv4));
+	normalized->SetIPLong(ipv4);
+	normalized->SetPort(ntohs(address6->sin6_port));
+	return TRUE;
+}
+
+static BOOL GetSocketEndpoint(SOCKET socketHandle, int destinationFamily,
+	_SockAddr *endpoint)
+{
+	if (!endpoint)
+		return FALSE;
+	SOCKADDR_STORAGE storage;
+	ZeroMemory(&storage, sizeof(storage));
+	int storageLength = sizeof(storage);
+	if (getsockname(socketHandle, reinterpret_cast<SOCKADDR *>(&storage),
+		&storageLength) == SOCKET_ERROR)
+		return FALSE;
+	if (storage.ss_family == AF_INET)
+		return NormalizeSocketAddress(reinterpret_cast<SOCKADDR *>(&storage),
+			storageLength, endpoint);
+	if (storage.ss_family != AF_INET6)
+		return FALSE;
+	const SOCKADDR_IN6 *endpoint6 = reinterpret_cast<const SOCKADDR_IN6 *>(&storage);
+	if (destinationFamily == AF_INET6 &&
+		!IN6_IS_ADDR_V4MAPPED(&endpoint6->sin6_addr))
+		return endpoint->Set(reinterpret_cast<const SOCKADDR *>(&storage),
+			storageLength);
+	if (!IN6_IS_ADDR_UNSPECIFIED(&endpoint6->sin6_addr) &&
+		!IN6_IS_ADDR_V4MAPPED(&endpoint6->sin6_addr))
+		return FALSE;
+	ZeroMemory(endpoint, sizeof(*endpoint));
+	endpoint->sa_family = AF_INET;
+	if (IN6_IS_ADDR_V4MAPPED(&endpoint6->sin6_addr))
+	{
+		DWORD ipv4 = 0;
+		memcpy(&ipv4, &endpoint6->sin6_addr.u.Byte[12], sizeof(ipv4));
+		endpoint->SetIPLong(ipv4);
+	}
+	endpoint->SetPort(ntohs(endpoint6->sin6_port));
+	return TRUE;
+}
+
+static BOOL EnsureSocketBound(SOCKET socketHandle, const SOCKADDR *address)
+{
+	SOCKADDR_STORAGE storage;
+	int storageLength = sizeof(storage);
+	if (getsockname(socketHandle, reinterpret_cast<SOCKADDR *>(&storage),
+		&storageLength) == 0)
+		return TRUE;
+	if (WSAGetLastError() != WSAEINVAL || !address)
+		return FALSE;
+	ZeroMemory(&storage, sizeof(storage));
+	if (address->sa_family == AF_INET6)
+	{
+		SOCKADDR_IN6 *local6 = reinterpret_cast<SOCKADDR_IN6 *>(&storage);
+		local6->sin6_family = AF_INET6;
+		return bind(socketHandle, reinterpret_cast<SOCKADDR *>(local6),
+			sizeof(*local6)) == 0;
+	}
+	SOCKADDR_IN *local4 = reinterpret_cast<SOCKADDR_IN *>(&storage);
+	local4->sin_family = AF_INET;
+	return bind(socketHandle, reinterpret_cast<SOCKADDR *>(local4),
+		sizeof(*local4)) == 0;
+}
+
+static const SOCKADDR *MakeSocketAddress(const SOCKADDR *original,
+	_SockAddr &redirectedAddress, SOCKADDR_STORAGE *storage, int *addressLength)
+{
+	if (!original || original->sa_family == redirectedAddress.sa_family)
+	{
+		*addressLength = redirectedAddress.Size();
+		return &redirectedAddress;
+	}
+	if (original->sa_family != AF_INET6 || !redirectedAddress.IsIPv4())
+		return NULL;
+	ZeroMemory(storage, sizeof(*storage));
+	SOCKADDR_IN6 *mapped = reinterpret_cast<SOCKADDR_IN6 *>(storage);
+	mapped->sin6_family = AF_INET6;
+	mapped->sin6_port = htons(redirectedAddress.GetPort());
+	mapped->sin6_addr.u.Byte[10] = 0xff;
+	mapped->sin6_addr.u.Byte[11] = 0xff;
+	DWORD address = redirectedAddress.GetdwIP();
+	memcpy(&mapped->sin6_addr.u.Byte[12], &address, sizeof(address));
+	*addressLength = sizeof(*mapped);
+	return reinterpret_cast<SOCKADDR *>(mapped);
+}
+
+static void SetLoopbackAddress(_SockAddr *address, int family)
+{
+	if (!address)
+		return;
+	address->Clear();
+	address->sa_family = (ADDRESS_FAMILY)family;
+	if (family == AF_INET6)
+		reinterpret_cast<SOCKADDR_IN6 *>(address)->sin6_addr = in6addr_loopback;
+	else
+		address->SetIP("127.0.0.1");
+}
 
 static ULONGLONG GetCurrentProcessCreateTimeValue()
 {
@@ -246,7 +389,10 @@ BOOL CHookWinsock::HookAPI(eHOOKMODUDLE ehm, eHOOKFUN ehf, char *exportfunc, LPV
 
 BOOL CHookWinsock::IsHostNameReserved(const char *name)
 {
-	if (inet_addr(name) != INADDR_NONE)
+	IN_ADDR address4;
+	IN6_ADDR address6;
+	if (name && (InetPtonA(AF_INET, name, &address4) == 1 ||
+		InetPtonA(AF_INET6, name, &address6) == 1))
 		return TRUE;
 
 	CPRCPipeClient PRCPipeClient;
@@ -337,6 +483,7 @@ int WSAAPI CHookWinsock::inhook_getaddrinfo(IN const char FAR * nodename, IN con
 		ATLTRACE("inhook_getaddrinfo %s\r\n", nodename);
 
 		DWORD dummyIP = m_DummyDNS.GetDummyIP(nodename);
+		IN6_ADDR dummyIPv6 = m_DummyDNS.GetDummyIPv6(nodename);
 		// 		CHAR szIP[64];
 		// 		const BYTE* pucIP = (BYTE*)&dummyIP;
 		// 
@@ -348,16 +495,15 @@ int WSAAPI CHookWinsock::inhook_getaddrinfo(IN const char FAR * nodename, IN con
 		struct addrinfo FAR *resls = (ret == 0 && res) ? *res : NULL;
 		while (resls)
 		{
-			_SockAddr *pas = (_SockAddr*)resls->ai_addr;
-			if (pas)
+			if (resls->ai_addr && resls->ai_family == AF_INET6 &&
+				resls->ai_addrlen >= sizeof(SOCKADDR_IN6))
 			{
-				if (resls->ai_family == AF_INET6)
-				{
-					resls->ai_family = AF_INET;
-					resls->ai_addrlen = sizeof(sockaddr);
-				}
-				pas->sa_family = AF_INET;
-				pas->SetIPLong(dummyIP);
+				reinterpret_cast<SOCKADDR_IN6 *>(resls->ai_addr)->sin6_addr = dummyIPv6;
+			}
+			else if (resls->ai_addr && resls->ai_family == AF_INET &&
+				resls->ai_addrlen >= sizeof(SOCKADDR_IN))
+			{
+				reinterpret_cast<SOCKADDR_IN *>(resls->ai_addr)->sin_addr.s_addr = dummyIP;
 			}
 			resls = resls->ai_next;
 		}
@@ -423,17 +569,14 @@ struct timeval *timeout,
 		ATLTRACE("inhook_GetAddrInfoEx %s\r\n", nodename);
 
 		if (lpOverlapped)
-		{
-			// Replacing an asynchronous request with a synchronous one breaks the
-			// completion contract and may corrupt caller-owned state. Preserve the
-			// original operation until an async-safe dummy DNS implementation exists.
-			return CallTrampoline(GetAddrInfoExW)(pName, pServiceName,
-				dwNameSpace, lpNspId, hints, ppResult, timeout, lpOverlapped,
-				lpCompletionRoutine, lpHandle);
-		}
+			ATLTRACE("inhook_GetAddrInfoEx Overlapped completed synchronously\r\n");
 
 		DWORD dummyIP = m_DummyDNS.GetDummyIP(nodename);
+		IN6_ADDR dummyIPv6 = m_DummyDNS.GetDummyIPv6(nodename);
 
+		// GetAddrInfoExW may complete synchronously even when the caller supplies
+		// an OVERLAPPED. Returning 0 with ppResult populated is the documented
+		// completion path; the caller must not wait for a callback in that case.
 		ret = CallTrampoline(GetAddrInfoExW)(L"localhost", // 127.0.0.1的话不知道为什么会引起堆破坏？？
 			pServiceName,
 			dwNameSpace,
@@ -450,16 +593,15 @@ struct timeval *timeout,
 			PADDRINFOEX resls = *ppResult;
 			while (resls)
 			{
-				_SockAddr *pas = (_SockAddr*)resls->ai_addr;
-				if (pas)
+				if (resls->ai_addr && resls->ai_family == AF_INET6 &&
+					resls->ai_addrlen >= sizeof(SOCKADDR_IN6))
 				{
-					if (resls->ai_family == AF_INET6)
-					{
-						resls->ai_family = AF_INET;
-						resls->ai_addrlen = sizeof(sockaddr);
-					}
-					pas->sa_family = AF_INET;
-					pas->SetIPLong(dummyIP);
+					reinterpret_cast<SOCKADDR_IN6 *>(resls->ai_addr)->sin6_addr = dummyIPv6;
+				}
+				else if (resls->ai_addr && resls->ai_family == AF_INET &&
+					resls->ai_addrlen >= sizeof(SOCKADDR_IN))
+				{
+					reinterpret_cast<SOCKADDR_IN *>(resls->ai_addr)->sin_addr.s_addr = dummyIP;
 				}
 				resls = resls->ai_next;
 			}
@@ -517,6 +659,7 @@ int WSAAPI CHookWinsock::inhook_GetAddrInfoW(
 		ATLTRACE("inhook_GetAddrInfoW %s\r\n", nodename);
 
 		DWORD dummyIP = m_DummyDNS.GetDummyIP(nodename);
+		IN6_ADDR dummyIPv6 = m_DummyDNS.GetDummyIPv6(nodename);
 
 		ret = CallTrampoline(GetAddrInfoW)(L"localhost", 
 			pServiceName,
@@ -528,16 +671,15 @@ int WSAAPI CHookWinsock::inhook_GetAddrInfoW(
 			PADDRINFOW resls = *ppResult;
 			while (resls)
 			{
-				_SockAddr *pas = (_SockAddr*)resls->ai_addr;
-				if (pas)
+				if (resls->ai_addr && resls->ai_family == AF_INET6 &&
+					resls->ai_addrlen >= sizeof(SOCKADDR_IN6))
 				{
-					if (resls->ai_family == AF_INET6)
-					{
-						resls->ai_family = AF_INET;
-						resls->ai_addrlen = sizeof(sockaddr);
-					}
-					pas->sa_family = AF_INET;
-					pas->SetIPLong(dummyIP);
+					reinterpret_cast<SOCKADDR_IN6 *>(resls->ai_addr)->sin6_addr = dummyIPv6;
+				}
+				else if (resls->ai_addr && resls->ai_family == AF_INET &&
+					resls->ai_addrlen >= sizeof(SOCKADDR_IN))
+				{
+					reinterpret_cast<SOCKADDR_IN *>(resls->ai_addr)->sin_addr.s_addr = dummyIP;
 				}
 				resls = resls->ai_next;
 			}
@@ -565,8 +707,11 @@ int
 WSAAPI
 CHookWinsock::inhook_connect(SOCKET s, const struct sockaddr FAR * name, int namelen)
 {
-	if (!name || namelen < (int)sizeof(SOCKADDR_IN) || name->sa_family != AF_INET)
+	_SockAddr addrname;
+	if (!NormalizeSocketAddress(name, namelen, &addrname))
 		return CallTrampoline(connect)(s, name, namelen);
+	if (!EnsureSocketBound(s, name))
+		return SOCKET_ERROR;
 
 	int socketType = 0;
 	int socketTypeLength = sizeof(socketType);
@@ -577,10 +722,6 @@ CHookWinsock::inhook_connect(SOCKET s, const struct sockaddr FAR * name, int nam
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
 	}
-	_SockAddr addrname;
-
-	addrname = *name;
-
 	HookDecision decision = HackConnect(s, addrname);
 	if (decision == HOOK_FAILED)
 	{
@@ -589,8 +730,18 @@ CHookWinsock::inhook_connect(SOCKET s, const struct sockaddr FAR * name, int nam
 		return SOCKET_ERROR;
 	}
 
-	return CallTrampoline(connect)(s,
-		decision == HOOK_REDIRECTED ? &addrname : name, namelen);
+	if (decision != HOOK_REDIRECTED)
+		return CallTrampoline(connect)(s, name, namelen);
+	SOCKADDR_STORAGE redirectedStorage;
+	int redirectedLength = 0;
+	const SOCKADDR *redirected = MakeSocketAddress(name, addrname,
+		&redirectedStorage, &redirectedLength);
+	if (!redirected)
+	{
+		WSASetLastError(WSAEAFNOSUPPORT);
+		return SOCKET_ERROR;
+	}
+	return CallTrampoline(connect)(s, redirected, redirectedLength);
 }
 
 MyDetourProc(has_Return,
@@ -606,9 +757,12 @@ int
 WSAAPI
 CHookWinsock::inhook_WSAConnect(SOCKET s, const struct sockaddr* name, int namelen, LPWSABUF lpCallerData, LPWSABUF lpCalleeData, LPQOS lpSQOS, LPQOS lpGQOS)
 {
-	if (!name || namelen < (int)sizeof(SOCKADDR_IN) || name->sa_family != AF_INET)
+	_SockAddr addrname;
+	if (!NormalizeSocketAddress(name, namelen, &addrname))
 		return CallTrampoline(WSAConnect)(s, name, namelen, lpCallerData,
 			lpCalleeData, lpSQOS, lpGQOS);
+	if (!EnsureSocketBound(s, name))
+		return SOCKET_ERROR;
 
 	int socketType = 0;
 	int socketTypeLength = sizeof(socketType);
@@ -619,10 +773,6 @@ CHookWinsock::inhook_WSAConnect(SOCKET s, const struct sockaddr* name, int namel
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
 	}
-	_SockAddr addrname;
-
-	addrname = *name;
-
 	HookDecision decision = HackConnect(s, addrname);
 	if (decision == HOOK_FAILED)
 	{
@@ -631,8 +781,19 @@ CHookWinsock::inhook_WSAConnect(SOCKET s, const struct sockaddr* name, int namel
 		return SOCKET_ERROR;
 	}
 
-	return CallTrampoline(WSAConnect)(s,
-		decision == HOOK_REDIRECTED ? &addrname : name, namelen,
+	if (decision != HOOK_REDIRECTED)
+		return CallTrampoline(WSAConnect)(s, name, namelen, lpCallerData,
+			lpCalleeData, lpSQOS, lpGQOS);
+	SOCKADDR_STORAGE redirectedStorage;
+	int redirectedLength = 0;
+	const SOCKADDR *redirected = MakeSocketAddress(name, addrname,
+		&redirectedStorage, &redirectedLength);
+	if (!redirected)
+	{
+		WSASetLastError(WSAEAFNOSUPPORT);
+		return SOCKET_ERROR;
+	}
+	return CallTrampoline(WSAConnect)(s, redirected, redirectedLength,
 		lpCallerData, lpCalleeData, lpSQOS, lpGQOS);
 }
 
@@ -672,13 +833,16 @@ BOOL PASCAL CHookWinsock::inhook_ConnectEx(
 		WSASetLastError(WSAEOPNOTSUPP);
 		return FALSE;
 	}
-	if (!name || namelen < (int)sizeof(SOCKADDR_IN) || name->sa_family != AF_INET)
+	if (!name || (name->sa_family != AF_INET && name->sa_family != AF_INET6))
 		return m_pConnectEx(s, name, namelen, lpSendBuffer, dwSendDataLength,
 			lpdwBytesSent, lpOverlapped);
 
 	_SockAddr addrname;
-
-	addrname = *name;
+	if (!NormalizeSocketAddress(name, namelen, &addrname))
+	{
+		WSASetLastError(WSAEFAULT);
+		return FALSE;
+	}
 
 	HookDecision decision = HackConnect(s, addrname);
 	if (decision == HOOK_FAILED)
@@ -688,9 +852,22 @@ BOOL PASCAL CHookWinsock::inhook_ConnectEx(
 		return FALSE;
 	}
 
+	SOCKADDR_STORAGE redirectedStorage;
+	int redirectedLength = namelen;
+	const SOCKADDR *redirected = name;
+	if (decision == HOOK_REDIRECTED)
+	{
+		redirected = MakeSocketAddress(name, addrname, &redirectedStorage,
+			&redirectedLength);
+		if (!redirected)
+		{
+			WSASetLastError(WSAEAFNOSUPPORT);
+			return FALSE;
+		}
+	}
 	return m_pConnectEx(s,
-		decision == HOOK_REDIRECTED ? &addrname : name,
-		namelen,
+		redirected,
+		redirectedLength,
 		lpSendBuffer,
 		dwSendDataLength,
 		lpdwBytesSent,
@@ -719,16 +896,32 @@ INT PASCAL CHookWinsock::inhook_WSASendMsg(SOCKET s, LPWSAMSG lpMsg,
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
 	}
-	if (!m_psi.bHookUDP || !lpMsg || !lpMsg->name ||
-		lpMsg->namelen < (INT)sizeof(SOCKADDR_IN) ||
-		lpMsg->name->sa_family != AF_INET)
+	if (!m_psi.bHookUDP || !lpMsg)
 		return m_pWSASendMsg(s, lpMsg, dwFlags, lpNumberOfBytesSent,
 			lpOverlapped, lpCompletionRoutine);
-
+	if (!lpMsg->name)
+	{
+		size_t connectedMaxPayload = 0;
+		if (m_HackedSocket.GetConnectedUDPMaxPayload(s,
+			&connectedMaxPayload) &&
+			!IsWSABufferPayloadAllowed(lpMsg->lpBuffers,
+				lpMsg->dwBufferCount, connectedMaxPayload))
+		{
+			WSASetLastError(WSAEMSGSIZE);
+			return SOCKET_ERROR;
+		}
+		return m_pWSASendMsg(s, lpMsg, dwFlags, lpNumberOfBytesSent,
+			lpOverlapped, lpCompletionRoutine);
+	}
 	_SockAddr destination;
-	destination = *lpMsg->name;
+	if (!NormalizeSocketAddress(lpMsg->name, lpMsg->namelen, &destination))
+		return m_pWSASendMsg(s, lpMsg, dwFlags, lpNumberOfBytesSent,
+			lpOverlapped, lpCompletionRoutine);
+	if (!EnsureSocketBound(s, lpMsg->name))
+		return SOCKET_ERROR;
 	PRCClient client;
-	HookDecision decision = HackSendTo(s, destination, &client);
+	size_t maxPayload = UdpPayloadPolicy::MAX_IPV4_UDP_PAYLOAD;
+	HookDecision decision = HackSendTo(s, destination, &client, &maxPayload);
 	if (decision == HOOK_FAILED)
 	{
 		if (WSAGetLastError() == 0)
@@ -738,17 +931,44 @@ INT PASCAL CHookWinsock::inhook_WSASendMsg(SOCKET s, LPWSAMSG lpMsg,
 	if (decision == HOOK_BYPASS)
 		return m_pWSASendMsg(s, lpMsg, dwFlags, lpNumberOfBytesSent,
 			lpOverlapped, lpCompletionRoutine);
+	if (!IsWSABufferPayloadAllowed(lpMsg->lpBuffers, lpMsg->dwBufferCount,
+		maxPayload))
+	{
+		WSASetLastError(WSAEMSGSIZE);
+		return SOCKET_ERROR;
+	}
 
-	WSAMSG redirected = *lpMsg;
-	redirected.name = &destination;
-	redirected.namelen = sizeof(destination);
-	return m_pWSASendMsg(s, &redirected, dwFlags, lpNumberOfBytesSent,
-		lpOverlapped, lpCompletionRoutine);
+	SOCKADDR_STORAGE redirectedStorage;
+	int redirectedLength = 0;
+	const SOCKADDR *redirected = MakeSocketAddress(lpMsg->name, destination,
+		&redirectedStorage, &redirectedLength);
+	if (!redirected)
+	{
+		WSASetLastError(WSAEAFNOSUPPORT);
+		return SOCKET_ERROR;
+	}
+	// Ancillary data describes the original egress interface / ECN state and
+	// is not meaningful for the local PRC route. WSASendTo also avoids keeping
+	// a stack-local WSAMSG alive across an overlapped operation.
+	__WSASendTo realWSASendTo = reinterpret_cast<__WSASendTo>(
+		m_HookedInfo[HOOKAPI_WSASendTo].newfuncaddr);
+	INT result = realWSASendTo(s, lpMsg->lpBuffers,
+		lpMsg->dwBufferCount, lpNumberOfBytesSent, dwFlags, redirected,
+		redirectedLength, lpOverlapped, lpCompletionRoutine);
+	// On sockets using FILE_SKIP_COMPLETION_PORT_ON_SUCCESS (notably Go's
+	// UDP poller), a synchronously completed WSASendTo may leave the byte
+	// count untouched. WSASendMsg callers still require the accepted datagram
+	// length in that case; UDP success is all-or-nothing.
+	if (result == 0 && lpNumberOfBytesSent)
+		*lpNumberOfBytesSent = GetWSABufferPayloadLength(lpMsg->lpBuffers,
+			lpMsg->dwBufferCount);
+	return result;
 }
 
 HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 {
-	if (*(DWORD*)&addrname.sa_data[6] == 'pass' && *(DWORD*)&addrname.sa_data[10] == 'port')
+	if (addrname.IsIPv4() && *(DWORD*)&addrname.sa_data[6] == 'pass' &&
+		*(DWORD*)&addrname.sa_data[10] == 'port')
 	{
 		*(DWORD*)&addrname.sa_data[6] = 0;
 		*(DWORD*)&addrname.sa_data[10] = 0;
@@ -770,23 +990,20 @@ HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 	if (nSockType == SOCK_STREAM && !m_psi.bHookTCP)
 		return HOOK_BYPASS;
 
-	if (addrname.GetdwIP() == 0x0100007f)
+	if (addrname.IsLoopback())
 		return HOOK_BYPASS;
 
 	_SockAddr srcAddr;
-	int srcaddrlen = sizeof(_SockAddr);
-	//查询该socket绑定的地址
-	if (getsockname(s, &srcAddr, &srcaddrlen) == SOCKET_ERROR)
+	// Match the application socket family so the corresponding PRC loopback
+	// listener can identify the registered source endpoint.
+	if (!GetSocketEndpoint(s, addrname.sa_family, &srcAddr))
 	{
-		//未绑定则绑定之, 再重新查询
-		srcAddr.sa_family = AF_INET;
-		srcAddr.SetIPLong(0);
+		srcAddr.Clear();
+		srcAddr.sa_family = addrname.sa_family;
 		srcAddr.SetPort(0);
-		if (bind(s, &srcAddr, sizeof(_SockAddr)) == SOCKET_ERROR)
+		if (bind(s, &srcAddr, srcAddr.Size()) == SOCKET_ERROR)
 			return HOOK_FAILED;
-
-		srcaddrlen = sizeof(_SockAddr);
-		if (getsockname(s, &srcAddr, &srcaddrlen) == SOCKET_ERROR)
+		if (!GetSocketEndpoint(s, addrname.sa_family, &srcAddr))
 			return HOOK_FAILED;
 	}
 
@@ -812,6 +1029,12 @@ HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 		}
 
 	}
+	else if (addrname.IsIPv6() &&
+		m_DummyDNS.IsDummyIPv6(addrname.GetAddr6()))
+	{
+		m_DummyDNS.GetHostByIPv6(addrname.GetAddr6(), prcc.szDomainName,
+			sizeof(prcc.szDomainName));
+	}
 
 
 	CScopedCriticalSection pipeLock(&m_RequestPipeLock);
@@ -825,7 +1048,9 @@ HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 		return HOOK_FAILED;
 	}
 
-	HookDecision decision = m_HackedSocket.CanHackIt(&prcc, m_RequestPipe);
+	ProxyInfo proxyInfo;
+	HookDecision decision = m_HackedSocket.CanHackIt(&prcc, m_RequestPipe,
+		&proxyInfo);
 	if (decision != HOOK_REDIRECTED)
 	{
 		ATLTRACE("Hook: CHackedSocket.CanHackIt == %d\r\n", decision);
@@ -840,6 +1065,14 @@ HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 	}
 
 	m_HackedSocket.push(&prcc);
+	if (nSockType == SOCK_DGRAM)
+	{
+		size_t maxPayload = UdpPayloadPolicy::MaxPayload(
+			proxyInfo.GetProxyType() == PROXYTYPE_SOCKS5,
+			prcc.IsDNValid() ? prcc.szDomainName : NULL,
+			prcc.dstAddr.IsIPv6());
+		m_HackedSocket.SetUDPMaxPayload(&prcc, maxPayload, TRUE);
+	}
 
 	//修改请求的目的地址为PRC
 
@@ -849,11 +1082,11 @@ HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 	}
 	else
 	{
-		addrname = prcinfo.tcpaddr;
+		addrname = prcc.dstAddr.IsIPv6() ? prcinfo.tcpaddr6 : prcinfo.tcpaddr;
 	}
 
-	if (addrname.GetdwIP() == 0)
-		addrname.SetIP("127.0.0.1");
+	if (addrname.IsAny())
+		SetLoopbackAddress(&addrname, prcc.dstAddr.sa_family);
 
 #ifdef _DEBUG
 
@@ -896,13 +1129,14 @@ int WSAAPI CHookWinsock::inhook_getpeername(SOCKET s, struct sockaddr* name, int
 	PRCClient prcc;
 	if (m_HackedSocket.GetInfo(s, &prcc) && prcc.sType == SOCK_STREAM)
 	{
-		if (*namelen < sizeof(sockaddr))
+		const int requiredLength = prcc.dstAddr.Size();
+		if (!name || !namelen || *namelen < requiredLength)
 		{
 			WSASetLastError(WSAEFAULT);
 			return SOCKET_ERROR;
 		}
-		*name = prcc.dstAddr;
-		*namelen = sizeof(sockaddr);
+		CopyMemory(name, &prcc.dstAddr, requiredLength);
+		*namelen = requiredLength;
 		WSASetLastError(0);
 		return 0;
 	}
@@ -956,6 +1190,26 @@ int WSAAPI CHookWinsock::inhook_closesocket(SOCKET s)
 }
 
 MyDetourProc(has_Return,
+	int, WSAAPI, send, (SOCKET s, const char* buf, int len, int flags))
+{
+	return g_pHookWinsock->inhook_send(s, buf, len, flags);
+}
+
+MyDetourProc(has_Return, int, WSAAPI, WSASend, (
+	SOCKET s,
+	LPWSABUF lpBuffers,
+	DWORD dwBufferCount,
+	LPDWORD lpNumberOfBytesSent,
+	DWORD dwFlags,
+	LPWSAOVERLAPPED lpOverlapped,
+	LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
+	))
+{
+	return g_pHookWinsock->inhook_WSASend(s, lpBuffers, dwBufferCount,
+		lpNumberOfBytesSent, dwFlags, lpOverlapped, lpCompletionRoutine);
+}
+
+MyDetourProc(has_Return,
 	int, WSAAPI, sendto,(SOCKET s, const char* buf, int len, int flags, const struct sockaddr* to, int tolen))
 {
 	return g_pHookWinsock->inhook_sendto(s, buf, len, flags, to, tolen);
@@ -1000,6 +1254,51 @@ struct sockaddr* lpFrom,
 
 ////////////////////
 
+int WSAAPI CHookWinsock::inhook_send(SOCKET s, const char* buf, int len,
+	int flags)
+{
+	WSABUF buffer;
+	buffer.buf = const_cast<char *>(buf);
+	buffer.len = len >= 0 ? static_cast<ULONG>(len) : 0;
+	DWORD sent = 0;
+	if (len >= 0)
+	{
+		int result = inhook_WSASend(s, &buffer, 1, &sent, flags, NULL, NULL);
+		return result == 0 ? static_cast<int>(sent) : SOCKET_ERROR;
+	}
+	return CallTrampoline(send)(s, buf, len, flags);
+}
+
+int WSAAPI CHookWinsock::inhook_WSASend(SOCKET s, LPWSABUF lpBuffers,
+	DWORD dwBufferCount, LPDWORD lpNumberOfBytesSent, DWORD dwFlags,
+	LPWSAOVERLAPPED lpOverlapped,
+	LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine)
+{
+	if (m_psi.bBlockUDP)
+	{
+		int socketType = 0;
+		int socketTypeLength = sizeof(socketType);
+		if (getsockopt(s, SOL_SOCKET, SO_TYPE, (char*)&socketType,
+			&socketTypeLength) == 0 && socketType == SOCK_DGRAM)
+		{
+			WSASetLastError(WSAEACCES);
+			return SOCKET_ERROR;
+		}
+	}
+	if (!m_psi.bHookUDP)
+		return CallTrampoline(WSASend)(s, lpBuffers, dwBufferCount,
+			lpNumberOfBytesSent, dwFlags, lpOverlapped, lpCompletionRoutine);
+	size_t maxPayload = 0;
+	if (m_HackedSocket.GetConnectedUDPMaxPayload(s, &maxPayload) &&
+		!IsWSABufferPayloadAllowed(lpBuffers, dwBufferCount, maxPayload))
+	{
+		WSASetLastError(WSAEMSGSIZE);
+		return SOCKET_ERROR;
+	}
+	return CallTrampoline(WSASend)(s, lpBuffers, dwBufferCount,
+		lpNumberOfBytesSent, dwFlags, lpOverlapped, lpCompletionRoutine);
+}
+
 int WSAAPI CHookWinsock::inhook_sendto(SOCKET s, const char* buf, int len, int flags, const struct sockaddr* to, int tolen)
 {
 	if (m_psi.bBlockUDP)
@@ -1011,6 +1310,8 @@ int WSAAPI CHookWinsock::inhook_sendto(SOCKET s, const char* buf, int len, int f
 	{
 		return CallTrampoline(sendto)(s, buf, len, flags, to, tolen);
 	}
+	if (len < 0)
+		return CallTrampoline(sendto)(s, buf, len, flags, to, tolen);
 
 	WSABUF bufs;
 
@@ -1057,22 +1358,31 @@ int WSAAPI CHookWinsock::inhook_WSASendTo(
 	_SockAddr addrname;
 	if (!lpTo)
 	{
-		// A connected UDP socket was redirected once by connect/WSAConnect.
-		// Its subsequent send path must remain completely transparent,
-		// including Overlapped and IOCP operations.
+		size_t connectedMaxPayload = 0;
+		if (m_HackedSocket.GetConnectedUDPMaxPayload(s,
+			&connectedMaxPayload) &&
+			!IsWSABufferPayloadAllowed(lpBuffers, dwBufferCount,
+				connectedMaxPayload))
+		{
+			WSASetLastError(WSAEMSGSIZE);
+			return SOCKET_ERROR;
+		}
+		// Buffers and completion state remain owned by Winsock.
 		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount,
 			lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped,
 			lpCompletionRoutine);
 	}
-	if (iToLen < sizeof(SOCKADDR_IN) || lpTo->sa_family != AF_INET)
+	if (!NormalizeSocketAddress(lpTo, iToLen, &addrname))
 		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount,
 			lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped,
 			lpCompletionRoutine);
-	addrname = *lpTo;
+	if (!EnsureSocketBound(s, lpTo))
+		return SOCKET_ERROR;
 
 	PRCClient prcc;
 
-	HookDecision decision = HackSendTo(s, addrname, &prcc);
+	size_t maxPayload = UdpPayloadPolicy::MAX_IPV4_UDP_PAYLOAD;
+	HookDecision decision = HackSendTo(s, addrname, &prcc, &maxPayload);
 	if (decision == HOOK_FAILED)
 	{
 		if (WSAGetLastError() == 0)
@@ -1083,12 +1393,26 @@ int WSAAPI CHookWinsock::inhook_WSASendTo(
 	{
 		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped, lpCompletionRoutine);
 	}
+	if (!IsWSABufferPayloadAllowed(lpBuffers, dwBufferCount, maxPayload))
+	{
+		WSASetLastError(WSAEMSGSIZE);
+		return SOCKET_ERROR;
+	}
 
 
 	// Only the destination is replaced. Application buffers and completion
 	// state remain owned by Winsock, so Overlapped/IOCP works naturally.
+	SOCKADDR_STORAGE redirectedStorage;
+	int redirectedLength = 0;
+	const SOCKADDR *redirected = MakeSocketAddress(lpTo, addrname,
+		&redirectedStorage, &redirectedLength);
+	if (!redirected)
+	{
+		WSASetLastError(WSAEAFNOSUPPORT);
+		return SOCKET_ERROR;
+	}
 	return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount,
-		lpNumberOfBytesSent, dwFlags, &addrname, sizeof(addrname),
+		lpNumberOfBytesSent, dwFlags, redirected, redirectedLength,
 		lpOverlapped, lpCompletionRoutine);
 }
 
@@ -1169,12 +1493,14 @@ struct sockaddr* lpFrom,
 }
 
 
-HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname, LPPRCClient lpC)
+HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname,
+	LPPRCClient lpC, size_t *maxPayload)
 {
 	if (!m_psi.bHookUDP)
 		return HOOK_BYPASS;
 
-	if (*(DWORD*)&addrname.sa_data[6] == 'pass' && *(DWORD*)&addrname.sa_data[10] == 'port')
+	if (addrname.IsIPv4() && *(DWORD*)&addrname.sa_data[6] == 'pass' &&
+		*(DWORD*)&addrname.sa_data[10] == 'port')
 	{
 		*(DWORD*)&addrname.sa_data[6] = 0;
 		*(DWORD*)&addrname.sa_data[10] = 0;
@@ -1197,19 +1523,16 @@ HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname, LPPRCClient
 		return HOOK_BYPASS;
 
 	_SockAddr srcAddr;
-	int srcaddrlen = sizeof(_SockAddr);
-	//查询该socket绑定的地址
-	if (getsockname(s, &srcAddr, &srcaddrlen) == SOCKET_ERROR)
+	if (!GetSocketEndpoint(s, addrname.sa_family, &srcAddr))
 	{
 		if (WSAGetLastError() != WSAEINVAL)
 			return HOOK_FAILED;
-		srcAddr.sa_family = AF_INET;
-		srcAddr.SetIPLong(0);
+		srcAddr.Clear();
+		srcAddr.sa_family = addrname.sa_family;
 		srcAddr.SetPort(0);
-		if (bind(s, &srcAddr, sizeof(srcAddr)) == SOCKET_ERROR)
+		if (bind(s, &srcAddr, srcAddr.Size()) == SOCKET_ERROR)
 			return HOOK_FAILED;
-		srcaddrlen = sizeof(srcAddr);
-		if (getsockname(s, &srcAddr, &srcaddrlen) == SOCKET_ERROR)
+		if (!GetSocketEndpoint(s, addrname.sa_family, &srcAddr))
 			return HOOK_FAILED;
 	}
 
@@ -1233,15 +1556,23 @@ HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname, LPPRCClient
 		}
 
 	}
+	else if (addrname.IsIPv6() &&
+		m_DummyDNS.IsDummyIPv6(addrname.GetAddr6()))
+	{
+		m_DummyDNS.GetHostByIPv6(addrname.GetAddr6(), prcc.szDomainName,
+			sizeof(prcc.szDomainName));
+	}
 
 	//如果已经hacked 则函数会设置prcc.udpAddr， 即处理转发udp的服务地址
 	if (m_HackedSocket.IsUDPReqHacked(&prcc))
 	{
 		addrname = prcc.udpAddr;
-		if (addrname.GetdwIP() == 0)
-			addrname.SetIP("127.0.0.1");
+		if (addrname.IsAny())
+			SetLoopbackAddress(&addrname, prcc.dstAddr.sa_family);
 
 		*lpC = prcc;
+		if (maxPayload)
+			m_HackedSocket.GetUDPMaxPayload(&prcc, maxPayload);
 
 #ifdef _DEBUG
 		in_addr *pAddr = addrname.GetAddr();
@@ -1264,15 +1595,19 @@ HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname, LPPRCClient
 	if (m_HackedSocket.IsUDPReqHacked(&prcc))
 	{
 		addrname = prcc.udpAddr;
-		if (addrname.GetdwIP() == 0)
-			addrname.SetIP("127.0.0.1");
+		if (addrname.IsAny())
+			SetLoopbackAddress(&addrname, prcc.dstAddr.sa_family);
 		*lpC = prcc;
+		if (maxPayload)
+			m_HackedSocket.GetUDPMaxPayload(&prcc, maxPayload);
 		return HOOK_REDIRECTED;
 	}
 	if (!EnsureRequestPipe())
 		return HOOK_FAILED;
 
-	HookDecision decision = m_HackedSocket.CanHackIt(&prcc, m_RequestPipe);
+	ProxyInfo proxyInfo;
+	HookDecision decision = m_HackedSocket.CanHackIt(&prcc, m_RequestPipe,
+		&proxyInfo);
 	if (decision != HOOK_REDIRECTED)
 	{
 		ATLTRACE("UDP: CHackedSocket.CanHackIt == %d\r\n", decision);
@@ -1301,9 +1636,16 @@ HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname, LPPRCClient
 
 
 	m_HackedSocket.push(&prcc);
+	size_t routeMaxPayload = UdpPayloadPolicy::MaxPayload(
+		proxyInfo.GetProxyType() == PROXYTYPE_SOCKS5,
+		prcc.IsDNValid() ? prcc.szDomainName : NULL,
+		prcc.dstAddr.IsIPv6());
+	m_HackedSocket.SetUDPMaxPayload(&prcc, routeMaxPayload, FALSE);
+	if (maxPayload)
+		*maxPayload = routeMaxPayload;
 
-	if (addrname.GetdwIP() == 0)
-		addrname.SetIP("127.0.0.1");
+	if (addrname.IsAny())
+		SetLoopbackAddress(&addrname, prcc.dstAddr.sa_family);
 
 	*lpC = prcc;
 
@@ -1635,6 +1977,10 @@ BOOL CHookWinsock::HookWinsock()
 		if (!HookAPI(HOOKMODULE_WS2_32, _EHF(getpeername), "getpeername", _HOOKFUNC(getpeername), _TRAMPFUNC(getpeername)))
 			break;
 		if (!HookAPI(HOOKMODULE_WS2_32, _EHF(closesocket), "closesocket", _HOOKFUNC(closesocket), _TRAMPFUNC(closesocket)))
+			break;
+		if (!HookAPI(HOOKMODULE_WS2_32, _EHF(send), "send", _HOOKFUNC(send), _TRAMPFUNC(send)))
+			break;
+		if (!HookAPI(HOOKMODULE_WS2_32, _EHF(WSASend), "WSASend", _HOOKFUNC(WSASend), _TRAMPFUNC(WSASend)))
 			break;
 		if (!HookAPI(HOOKMODULE_WS2_32, _EHF(sendto), "sendto", _HOOKFUNC(sendto), _TRAMPFUNC(sendto)))
 			break;

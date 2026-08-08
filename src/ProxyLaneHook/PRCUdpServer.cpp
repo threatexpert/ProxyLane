@@ -161,6 +161,16 @@ BOOL CPRCUdpServer::OnLocalThreadRegister(LPPRCClient lpPRCClient)
 	}
 	else
 	{
+		if (lpPRCClient->dstAddr.IsIPv6())
+		{
+			WCHAR addressText[INET6_ADDRSTRLEN] = L"";
+			InetNtopW(AF_INET6, (PVOID)lpPRCClient->dstAddr.GetAddr6(),
+				addressText, _countof(addressText));
+			PrintText(_T("%sUDP PID: %d(%s), send to: [%s]:%d\r\n"),
+				tag, lpPRCClient->dwPid, processName ? processName : L"",
+				addressText, lpPRCClient->dstAddr.GetPort());
+			return TRUE;
+		}
 		DWORD ip = lpPRCClient->dstAddr.GetdwIP();
 		const BYTE *bytes = (const BYTE*)&ip;
 		PrintText(_T("%sUDP PID: %d(%s), send to: %u.%u.%u.%u:%d\r\n"),

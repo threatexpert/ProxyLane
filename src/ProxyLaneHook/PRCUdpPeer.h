@@ -41,7 +41,8 @@ public:
 
 	BOOL CreateUDPSocket(OUT SOCKADDR* lpSockAddr, OUT int* lpSockAddrLen, UINT nSocketPort = 0, 
 		long lEvent = FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT |	FD_CONNECT | FD_CLOSE,
-		LPCSTR lpszSocketAddress = NULL, BOOL bReuseAddr = FALSE);
+		LPCSTR lpszSocketAddress = NULL, BOOL bReuseAddr = FALSE,
+		int addressFamily = AF_INET);
 	void OnReceive(int nErrorCode);
 	void OnSend(int nErrorCode);
 	void OnConnect(int nErrorCode);

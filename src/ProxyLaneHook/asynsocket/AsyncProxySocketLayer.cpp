@@ -156,6 +156,7 @@ CAsyncProxySocketLayer::CAsyncProxySocketLayer()
 	m_pRecvBuffer = 0;
 	m_nRecvBufferPos = 0;
 	m_nProxyPeerIP = 0;
+	m_proxyPeerAddress.Clear();
 	m_nProxyPeerPort = 0;
 	m_pProxyPeerHost = NULL;
 	m_pStrBuffer = NULL;
@@ -505,8 +506,10 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 
 					char cBuff[1 + 1 + 255 + 1 + 255];
 					int iLen = _snprintf(cBuff, _countof(cBuff), "\x01%c%s%c%s", 
-						m_ProxyData.strProxyUser.GetLength(), m_ProxyData.strProxyUser, 
-						m_ProxyData.strProxyPass.GetLength(), m_ProxyData.strProxyPass);
+						m_ProxyData.strProxyUser.GetLength(),
+						(LPCSTR)m_ProxyData.strProxyUser,
+						m_ProxyData.strProxyPass.GetLength(),
+						(LPCSTR)m_ProxyData.strProxyPass);
 
 					int res = QueueProxyRequest(cBuff, iLen) ? iLen : SOCKET_ERROR;
 					if (res == SOCKET_ERROR || res < iLen)
@@ -530,15 +533,24 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 				// Send connection request
 				const char* pszAsciiProxyPeerHost;
 				int iLenAsciiProxyPeerHost;
-				if (m_nProxyPeerIP == 0 && m_nProxyOpID != PROXYOP_UDPASSOCIATE) {
+				if (!m_proxyPeerAddress.IsIPv6() && m_nProxyPeerIP == 0 &&
+					m_nProxyOpID != PROXYOP_UDPASSOCIATE) {
 					pszAsciiProxyPeerHost = m_pProxyPeerHost;
+					if (!pszAsciiProxyPeerHost)
+					{
+						DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC,
+							PROXYERROR_REQUESTFAILED, WSAEINVAL);
+						TriggerEvent(FD_CONNECT, WSAEINVAL, TRUE);
+						Reset();
+						return;
+					}
 					iLenAsciiProxyPeerHost = strlen(pszAsciiProxyPeerHost);
 				}
 				else {
 					pszAsciiProxyPeerHost = 0;
 					iLenAsciiProxyPeerHost = 0;
 				}
-				char* pcReq = (char*)_alloca(10 + 1 + iLenAsciiProxyPeerHost);
+				char* pcReq = (char*)_alloca(22 + 1 + iLenAsciiProxyPeerHost);
 				pcReq[0] = 5;
 				//pcReq[1] = (m_nProxyOpID == PROXYOP_CONNECT) ? 1 : 2;
 				pcReq[1] = (char)m_nProxyOpID;//PROXYOP_CONNECT PROXYOP_BIND PROXYOP_UDPASSOCIATE
@@ -553,7 +565,12 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 					iReqLen += 2;
 				}else
 				{
-					if (m_nProxyPeerIP) {
+					if (m_proxyPeerAddress.IsIPv6()) {
+						pcReq[iReqLen++] = 4;
+						memcpy(&pcReq[iReqLen], m_proxyPeerAddress.GetAddr6(), 16);
+						iReqLen += 16;
+					}
+					else if (m_nProxyPeerIP) {
 						pcReq[iReqLen++] = 1;
 						*(u_long*)&pcReq[iReqLen] = m_nProxyPeerIP;
 						iReqLen += 4;
@@ -593,11 +610,11 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 			if (!m_pRecvBuffer)
 				m_pRecvBuffer = new char[CSocks5UdpCodec::MAX_HEADER_SIZE];
 
-			int responseLength = 10;
-			if (m_nProxyOpID == PROXYOP_UDPASSOCIATE)
+			int responseLength = 4;
+			if (m_nRecvBufferPos >= 4)
 			{
-				if (m_nRecvBufferPos < 4)
-					responseLength = 4;
+				if ((BYTE)m_pRecvBuffer[3] == 1)
+					responseLength = 10;
 				else if ((BYTE)m_pRecvBuffer[3] == 3)
 					responseLength = m_nRecvBufferPos < 5 ? 5 : 7 + (BYTE)m_pRecvBuffer[4];
 				else if ((BYTE)m_pRecvBuffer[3] == 4)
@@ -624,7 +641,7 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 			// read before deciding that the SOCKS5 reply is complete. Otherwise
 			// the first four bytes of a UDP ASSOCIATE reply are mistaken for the
 			// entire reply and the relay address is read from uninitialized data.
-			if (m_nProxyOpID == PROXYOP_UDPASSOCIATE)
+			if (m_nRecvBufferPos >= 4)
 			{
 				if (m_nRecvBufferPos < 4)
 					responseLength = 4;
@@ -636,7 +653,17 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 				else if ((BYTE)m_pRecvBuffer[3] == 4)
 					responseLength = 22;
 				else
-					responseLength = 4;
+				{
+					DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC,
+						PROXYERROR_REQUESTFAILED, WSAEAFNOSUPPORT,
+						(LPARAM)"Unexpected ATYP received");
+					TriggerEvent(m_nProxyOpID == PROXYOP_CONNECT ||
+						m_nProxyOpID == PROXYOP_UDPASSOCIATE ? FD_CONNECT : FD_ACCEPT,
+						WSAEAFNOSUPPORT, TRUE);
+					Reset();
+					ClearBuffer();
+					return;
+				}
 			}
 
 			if (m_nRecvBufferPos == responseLength && responseLength >= 4)
@@ -870,6 +897,7 @@ BOOL CAsyncProxySocketLayer::Connect(LPCSTR lpszHostAddress, UINT nHostPort)
 			}
 			m_nProxyPeerPort = htons((u_short)nHostPort);
 			m_nProxyPeerIP = 0;
+			m_proxyPeerAddress.Clear();
 			delete[] m_pProxyPeerHost;
 			m_pProxyPeerHost = NULL; // 'new' may throw an exception
 			m_pProxyPeerHost = new CHAR[strlen(lpszHostAddress) + 1];
@@ -912,13 +940,23 @@ BOOL CAsyncProxySocketLayer::Connect(const SOCKADDR* lpSockAddr, int nSockAddrLe
 		//Connect normally because there is no proxy
 		return ConnectNext(lpSockAddr, nSockAddrLen);
 
-	LPSOCKADDR_IN sockAddr = (LPSOCKADDR_IN)lpSockAddr;
+	if (!lpSockAddr ||
+		(lpSockAddr->sa_family != AF_INET && lpSockAddr->sa_family != AF_INET6) ||
+		nSockAddrLen < (lpSockAddr->sa_family == AF_INET6
+			? (int)sizeof(SOCKADDR_IN6) : (int)sizeof(SOCKADDR_IN)))
+	{
+		WSASetLastError(WSAEAFNOSUPPORT);
+		return FALSE;
+	}
 
 	//Save server details
-	m_nProxyPeerIP = sockAddr->sin_addr.S_un.S_addr;
-	m_nProxyPeerPort = sockAddr->sin_port;
+	m_proxyPeerAddress.Set(lpSockAddr, nSockAddrLen);
+	m_nProxyPeerIP = m_proxyPeerAddress.GetdwIP();
+	m_nProxyPeerPort = lpSockAddr->sa_family == AF_INET6
+		? reinterpret_cast<const SOCKADDR_IN6 *>(lpSockAddr)->sin6_port
+		: reinterpret_cast<const SOCKADDR_IN *>(lpSockAddr)->sin_port;
 
-	if (m_nProxyPeerIP == 0)
+	if (m_proxyPeerAddress.IsAny())
 		return FALSE;
 
 	delete[] m_pProxyPeerHost;
@@ -973,6 +1011,14 @@ void CAsyncProxySocketLayer::OnConnect(int nErrorCode)
 
 		if (m_ProxyData.nProxyType == PROXYTYPE_SOCKS4 || m_ProxyData.nProxyType == PROXYTYPE_SOCKS4A)
 		{
+			if (m_proxyPeerAddress.IsIPv6())
+			{
+				DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC,
+					PROXYERROR_REQUESTFAILED, WSAEAFNOSUPPORT);
+				TriggerEvent(FD_CONNECT, WSAEAFNOSUPPORT, TRUE);
+				Reset();
+				return;
+			}
 			const char* pszAsciiProxyPeerHost;
 			int iSizeAsciiProxyPeerHost;
 			if (m_nProxyPeerIP == 0) {
@@ -1112,10 +1158,26 @@ void CAsyncProxySocketLayer::OnConnect(int nErrorCode)
 		else if (m_ProxyData.nProxyType == PROXYTYPE_HTTP10 || m_ProxyData.nProxyType == PROXYTYPE_HTTP11)
 		{
 			const char* pszHost;
+			char ipv6Host[INET6_ADDRSTRLEN] = { 0 };
 			if (m_pProxyPeerHost && m_pProxyPeerHost[0] != '\0')
 				pszHost = m_pProxyPeerHost;
+			else if (m_proxyPeerAddress.IsIPv6())
+			{
+				pszHost = InetNtopA(AF_INET6, (PVOID)m_proxyPeerAddress.GetAddr6(),
+					ipv6Host, _countof(ipv6Host));
+			}
 			else
 				pszHost = inet_ntoa(*(in_addr*)&m_nProxyPeerIP);
+			if (!pszHost)
+			{
+				DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC,
+					PROXYERROR_REQUESTFAILED, WSAEINVAL);
+				TriggerEvent(m_nProxyOpID == PROXYOP_CONNECT ? FD_CONNECT : FD_ACCEPT,
+					WSAEINVAL, TRUE);
+				Reset();
+				ClearBuffer();
+				return;
+			}
 
 			UINT nProxyPeerPort = ntohs((u_short)m_nProxyPeerPort);
 			char szHttpReq[4096];
@@ -1126,24 +1188,30 @@ void CAsyncProxySocketLayer::OnConnect(int nErrorCode)
 					// The reason why we offer HTTP/1.0 support is just because it 
 					// allows us to *not *send the "Host" field, thus saving overhead.
 					iHttpReqLen = _snprintf(szHttpReq, _countof(szHttpReq),
-						"CONNECT %s:%u HTTP/1.0\r\n"
+						"CONNECT %s%s%s:%u HTTP/1.0\r\n"
 						"\r\n",
-						pszHost, nProxyPeerPort);
+						m_proxyPeerAddress.IsIPv6() ? "[" : "", pszHost,
+						m_proxyPeerAddress.IsIPv6() ? "]" : "", nProxyPeerPort);
 				}
 				else {
 					// "Host" field is a MUST for HTTP/1.1 according RFC 2161
 					iHttpReqLen = _snprintf(szHttpReq, _countof(szHttpReq),
-						"CONNECT %s:%u HTTP/1.1\r\n"
-						"Host: %s:%u\r\n"
+						"CONNECT %s%s%s:%u HTTP/1.1\r\n"
+						"Host: %s%s%s:%u\r\n"
 						"Proxy-Connection: Keep-Alive\r\n"
 						"\r\n",
-						pszHost, nProxyPeerPort, pszHost, nProxyPeerPort);
+						m_proxyPeerAddress.IsIPv6() ? "[" : "", pszHost,
+						m_proxyPeerAddress.IsIPv6() ? "]" : "", nProxyPeerPort,
+						m_proxyPeerAddress.IsIPv6() ? "[" : "", pszHost,
+						m_proxyPeerAddress.IsIPv6() ? "]" : "", nProxyPeerPort);
 				}
 			}
 			else
 			{
 				char szUserPass[512];
-				int iUserPassLen = _snprintf(szUserPass, _countof(szUserPass), "%s:%s", m_ProxyData.strProxyUser, m_ProxyData.strProxyPass);
+				int iUserPassLen = _snprintf(szUserPass, _countof(szUserPass),
+					"%s:%s", (LPCSTR)m_ProxyData.strProxyUser,
+					(LPCSTR)m_ProxyData.strProxyPass);
 
 				char szUserPassBase64[2048];
 				CBase64Coding base64coding;
@@ -1162,24 +1230,41 @@ void CAsyncProxySocketLayer::OnConnect(int nErrorCode)
 					// The reason why we offer HTTP/1.0 support is just because it 
 					// allows us to *not *send the "Host" field, thus saving overhead.
 					iHttpReqLen = _snprintf(szHttpReq, _countof(szHttpReq), 
-						"CONNECT %s:%u HTTP/1.0\r\n"
+						"CONNECT %s%s%s:%u HTTP/1.0\r\n"
 						"Authorization: Basic %s\r\n"
 						"Proxy-Authorization: Basic %s\r\n"
 						"Proxy-Connection: Keep-Alive\r\n"
 						"\r\n",
-						pszHost, nProxyPeerPort, szUserPassBase64, szUserPassBase64);
+						m_proxyPeerAddress.IsIPv6() ? "[" : "", pszHost,
+						m_proxyPeerAddress.IsIPv6() ? "]" : "", nProxyPeerPort,
+						szUserPassBase64, szUserPassBase64);
 				}
 				else {
 					// "Host" field is a MUST for HTTP/1.1 according RFC 2161
 					iHttpReqLen = _snprintf(szHttpReq, _countof(szHttpReq), 
-						"CONNECT %s:%u HTTP/1.1\r\n"
-						"Host: %s:%u\r\n"
+						"CONNECT %s%s%s:%u HTTP/1.1\r\n"
+						"Host: %s%s%s:%u\r\n"
 						"Authorization: Basic %s\r\n"
 						"Proxy-Authorization: Basic %s\r\n"
 						"Proxy-Connection: Keep-Alive\r\n"
 						"\r\n",
-						pszHost, nProxyPeerPort, pszHost, nProxyPeerPort, szUserPassBase64, szUserPassBase64);
+						m_proxyPeerAddress.IsIPv6() ? "[" : "", pszHost,
+						m_proxyPeerAddress.IsIPv6() ? "]" : "", nProxyPeerPort,
+						m_proxyPeerAddress.IsIPv6() ? "[" : "", pszHost,
+						m_proxyPeerAddress.IsIPv6() ? "]" : "", nProxyPeerPort,
+						szUserPassBase64, szUserPassBase64);
 				}
+			}
+			if (iHttpReqLen <= 0 ||
+				iHttpReqLen >= (int)_countof(szHttpReq))
+			{
+				DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC,
+					PROXYERROR_REQUESTFAILED, WSAEINVAL);
+				TriggerEvent(m_nProxyOpID == PROXYOP_CONNECT ? FD_CONNECT : FD_ACCEPT,
+					WSAEINVAL, TRUE);
+				Reset();
+				ClearBuffer();
+				return;
 			}
 
 			int iSent = QueueProxyRequest(szHttpReq, iHttpReqLen) ? iHttpReqLen : SOCKET_ERROR;
@@ -1261,7 +1346,8 @@ BOOL CAsyncProxySocketLayer::GetPeerName(CString &rPeerAddress, UINT &rPeerPort)
 		WSASetLastError(WSAENOTCONN);
 		return FALSE;
 	}
-	else if (!m_nProxyPeerIP || !m_nProxyPeerPort)
+	else if ((!m_proxyPeerAddress.IsIPv4() && !m_proxyPeerAddress.IsIPv6()) ||
+		!m_nProxyPeerPort)
 	{
 		WSASetLastError(WSAENOTCONN);
 		return FALSE;
@@ -1272,7 +1358,20 @@ BOOL CAsyncProxySocketLayer::GetPeerName(CString &rPeerAddress, UINT &rPeerPort)
 	if (res)
 	{
 		rPeerPort = ntohs((u_short)m_nProxyPeerPort);
-		rPeerAddress.Format(_T("%u.%u.%u.%u"), m_nProxyPeerIP&0xff, (m_nProxyPeerIP>>8)&0xff, (m_nProxyPeerIP>>16)&0xff, m_nProxyPeerIP>>24);
+		if (m_proxyPeerAddress.IsIPv6())
+		{
+			TCHAR address[INET6_ADDRSTRLEN] = { 0 };
+#ifdef _UNICODE
+			InetNtopW(AF_INET6, (PVOID)m_proxyPeerAddress.GetAddr6(), address,
+				_countof(address));
+#else
+			InetNtopA(AF_INET6, (PVOID)m_proxyPeerAddress.GetAddr6(), address,
+				_countof(address));
+#endif
+			rPeerAddress = address;
+		}
+		else
+			rPeerAddress.Format(_T("%u.%u.%u.%u"), m_nProxyPeerIP&0xff, (m_nProxyPeerIP>>8)&0xff, (m_nProxyPeerIP>>16)&0xff, m_nProxyPeerIP>>24);
 	}
 	return res;
 }
@@ -1293,21 +1392,23 @@ BOOL CAsyncProxySocketLayer::GetPeerName(SOCKADDR* lpSockAddr, int* lpSockAddrLe
 		WSASetLastError(WSAENOTCONN);
 		return FALSE;
 	}
-	else if (!m_nProxyPeerIP || !m_nProxyPeerPort)
+	else if ((!m_proxyPeerAddress.IsIPv4() && !m_proxyPeerAddress.IsIPv6()) ||
+		!m_nProxyPeerPort)
 	{
 		WSASetLastError(WSAENOTCONN);
 		return FALSE;
 	}
 
 	ASSERT( m_ProxyData.nProxyType );
-	BOOL res = GetPeerNameNext(lpSockAddr, lpSockAddrLen);
-	if (res)
+	const int requiredLength = m_proxyPeerAddress.Size();
+	if (!lpSockAddr || !lpSockAddrLen || *lpSockAddrLen < requiredLength)
 	{
-		LPSOCKADDR_IN addr = (LPSOCKADDR_IN)lpSockAddr;
-		addr->sin_port = (u_short)m_nProxyPeerPort;
-		addr->sin_addr.S_un.S_addr = m_nProxyPeerIP;
+		WSASetLastError(WSAEFAULT);
+		return FALSE;
 	}
-	return res;
+	CopyMemory(lpSockAddr, &m_proxyPeerAddress, requiredLength);
+	*lpSockAddrLen = requiredLength;
+	return TRUE;
 }
 
 int CAsyncProxySocketLayer::GetProxyType() const
@@ -1585,12 +1686,16 @@ int CAsyncProxySocketLayer::SendTo(const void* lpBuf, int nBufLen, const SOCKADD
 		return SOCKET_ERROR;
 	}
 
-	if (!lpSockAddr || nSockAddrLen < sizeof(SOCKADDR_IN) || lpSockAddr->sa_family != AF_INET)
+	if (!lpSockAddr ||
+		(lpSockAddr->sa_family != AF_INET && lpSockAddr->sa_family != AF_INET6) ||
+		nSockAddrLen < (lpSockAddr->sa_family == AF_INET6
+			? (int)sizeof(SOCKADDR_IN6) : (int)sizeof(SOCKADDR_IN)))
 	{
 		WSASetLastError(WSAEAFNOSUPPORT);
 		return SOCKET_ERROR;
 	}
-	if (nBufLen < 0 || nBufLen > 65507 - 10)
+	const int headerLength = lpSockAddr->sa_family == AF_INET6 ? 22 : 10;
+	if (nBufLen < 0 || nBufLen > 65507 - headerLength)
 	{
 		WSASetLastError(WSAEMSGSIZE);
 		return SOCKET_ERROR;
@@ -1602,9 +1707,13 @@ int CAsyncProxySocketLayer::SendTo(const void* lpBuf, int nBufLen, const SOCKADD
 		return SOCKET_ERROR;
 	}
 
-	int packetLength = CSocks5UdpCodec::EncodeIPv4(m_udpBuffer,
-		nBufLen + CSocks5UdpCodec::MAX_HEADER_SIZE,
-		(const SOCKADDR_IN*)lpSockAddr, lpBuf, nBufLen);
+	int packetLength = lpSockAddr->sa_family == AF_INET6
+		? CSocks5UdpCodec::EncodeIPv6(m_udpBuffer,
+			nBufLen + CSocks5UdpCodec::MAX_HEADER_SIZE,
+			reinterpret_cast<const SOCKADDR_IN6 *>(lpSockAddr), lpBuf, nBufLen)
+		: CSocks5UdpCodec::EncodeIPv4(m_udpBuffer,
+			nBufLen + CSocks5UdpCodec::MAX_HEADER_SIZE,
+			reinterpret_cast<const SOCKADDR_IN *>(lpSockAddr), lpBuf, nBufLen);
 	if (packetLength == SOCKET_ERROR)
 	{
 		WSASetLastError(WSAEINVAL);
@@ -1612,9 +1721,9 @@ int CAsyncProxySocketLayer::SendTo(const void* lpBuf, int nBufLen, const SOCKADD
 	}
 
 	int nBytesSent = SendToNext((LPBYTE)m_udpBuffer, packetLength, (SOCKADDR*)&m_udpsrvAddr, sizeof(SOCKADDR));
-	if(nBytesSent >= 10)
+	if(nBytesSent >= headerLength)
 	{
-		nBytesSent -= 10;
+		nBytesSent -= headerLength;
 	}
 	return nBytesSent;
 }
@@ -1716,13 +1825,16 @@ int CAsyncProxySocketLayer::ReceiveFrom(void* lpBuf, int nBufLen, SOCKADDR* lpSo
 		memcpy(lpBuf, decoded.payload, decoded.payloadLength);
 	if (lpSockAddr && lpSockAddrLen)
 	{
-		if (*lpSockAddrLen < sizeof(SOCKADDR_IN))
+		if (*lpSockAddrLen < decoded.sourceLength)
 		{
 			WSASetLastError(WSAEFAULT);
 			return SOCKET_ERROR;
 		}
-		memcpy(lpSockAddr, &decoded.source, sizeof(decoded.source));
-		*lpSockAddrLen = sizeof(decoded.source);
+		if (decoded.sourceLength == sizeof(decoded.source6))
+			memcpy(lpSockAddr, &decoded.source6, decoded.sourceLength);
+		else
+			memcpy(lpSockAddr, &decoded.source, decoded.sourceLength);
+		*lpSockAddrLen = decoded.sourceLength;
 	}
 	return decoded.payloadLength;
 }

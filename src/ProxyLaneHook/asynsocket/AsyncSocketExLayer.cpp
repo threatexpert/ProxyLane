@@ -480,22 +480,26 @@ void CAsyncSocketExLayer::CallEvent(int nEvent, int nErrorCode)
 	}
 }
 
-BOOL CAsyncSocketExLayer::Create(UINT nSocketPort, int nSocketType, long lEvent, LPCSTR lpszSocketAddress)
+BOOL CAsyncSocketExLayer::Create(UINT nSocketPort, int nSocketType, long lEvent,
+	LPCSTR lpszSocketAddress, int nAddressFamily)
 {
-	return CreateNext(nSocketPort, nSocketType, lEvent, lpszSocketAddress);
+	return CreateNext(nSocketPort, nSocketType, lEvent, lpszSocketAddress,
+		nAddressFamily);
 }
 
-BOOL CAsyncSocketExLayer::CreateNext(UINT nSocketPort, int nSocketType, long lEvent, LPCSTR lpszSocketAddress)
+BOOL CAsyncSocketExLayer::CreateNext(UINT nSocketPort, int nSocketType,
+	long lEvent, LPCSTR lpszSocketAddress, int nAddressFamily)
 {
 	ASSERT(GetLayerState()==notsock);
 	BOOL res=FALSE;
 	if (m_pNextLayer)
-		res=m_pNextLayer->Create(nSocketPort, nSocketType, lEvent, lpszSocketAddress);
+		res=m_pNextLayer->Create(nSocketPort, nSocketType, lEvent,
+			lpszSocketAddress, nAddressFamily);
 	else
 	{
 		do 
 		{
-			SOCKET hSocket=socket(AF_INET, nSocketType, 0);
+			SOCKET hSocket=socket(nAddressFamily, nSocketType, 0);
 			if (hSocket==INVALID_SOCKET)
 			{
 				res=FALSE;
@@ -518,8 +522,21 @@ BOOL CAsyncSocketExLayer::CreateNext(UINT nSocketPort, int nSocketType, long lEv
 					break;
 				}
 			}
-			//if (!m_pOwnerSocket->Bind(nSocketPort, lpszSocketAddress))
-			if (!Bind(nSocketPort, lpszSocketAddress))
+			BOOL bound = FALSE;
+			if (nAddressFamily == AF_INET6)
+			{
+				SOCKADDR_IN6 local6 = { 0 };
+				local6.sin6_family = AF_INET6;
+				local6.sin6_port = htons((u_short)nSocketPort);
+				if (!lpszSocketAddress ||
+					InetPtonA(AF_INET6, lpszSocketAddress, &local6.sin6_addr) == 1)
+					bound = Bind(reinterpret_cast<SOCKADDR *>(&local6), sizeof(local6));
+				else
+					WSASetLastError(WSAEINVAL);
+			}
+			else
+				bound = Bind(nSocketPort, lpszSocketAddress);
+			if (!bound)
 			{
 				m_pOwnerSocket->Close();
 				res=FALSE;

@@ -188,6 +188,12 @@
     <ClInclude Include="TSSTL.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+	<ClInclude Include="UdpAssociationPolicy.h">
+	  <Filter>Header Files</Filter>
+	</ClInclude>
+	<ClInclude Include="UdpPayloadPolicy.h">
+	  <Filter>Header Files</Filter>
+	</ClInclude>
     <ClInclude Include="UdpProxyTask.h">
       <Filter>Header Files</Filter>
     </ClInclude>

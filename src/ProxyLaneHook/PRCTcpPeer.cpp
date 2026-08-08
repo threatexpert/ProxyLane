@@ -28,6 +28,7 @@ CPRCTcpPeer::CPRCTcpPeer(CTcpProxyTask *pNotify)
 	m_bConnShutted = 0;
 	m_bReadClosed = FALSE;
 	m_bWriteShutdown = FALSE;
+	m_bForwardingReady = FALSE;
 	m_bFullyClosing = FALSE;
 
 	m_TimeoutMonitor[TM_CONN].SetTimeoutVal(15*1000);
@@ -77,7 +78,13 @@ BOOL CPRCTcpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo)
 
 	BOOL bConnect = FALSE;
 
-	CAsyncSocketEx::Create(0, SOCK_STREAM, FD_READ | FD_WRITE | FD_CONNECT | FD_CLOSE);
+	int transportFamily = lpProxyInfo &&
+		lpProxyInfo->GetProxyType() == PROXYTYPE_NOPROXY &&
+		lpPRCClient->dstAddr.IsIPv6() ? AF_INET6 : AF_INET;
+	if (!CAsyncSocketEx::Create(0, SOCK_STREAM,
+		FD_READ | FD_WRITE | FD_CONNECT | FD_CLOSE, NULL, FALSE,
+		transportFamily))
+		return FALSE;
 	CAsyncSocketEx::AsyncSelect(FD_READ | FD_WRITE | FD_CONNECT | FD_CLOSE);
 
 	//Is domain name valid?
@@ -192,6 +199,7 @@ void CPRCTcpPeer::ClearBuffer()
 
 void CPRCTcpPeer::OnReceive(int nErrorCode)
 {
+	const int MAX_EVENT_READ_BYTES = MAXTCPBUFSIZE * 16;
 	if(nErrorCode != 0)
 	{
 		return;
@@ -215,7 +223,8 @@ void CPRCTcpPeer::OnReceive(int nErrorCode)
 		return;
 	}
 
-	while(m_recvbufpos<MAXTCPBUFSIZE)
+	while(m_recvbufpos < MAXTCPBUFSIZE &&
+		(nRecvd < MAX_EVENT_READ_BYTES || m_bReadClosed))
 	//do
 	{
 		int nRetVal = Receive(m_recvbuf+m_recvbufpos, MAXTCPBUFSIZE-m_recvbufpos);
@@ -233,6 +242,7 @@ void CPRCTcpPeer::OnReceive(int nErrorCode)
 		{
 			m_bConnShutted = TRUE;
 			m_bReadClosed = TRUE;
+			AsyncSelect(FD_WRITE | FD_CLOSE);
 			ATLTRACE("%d.Receive == 0; preserving opposite direction.\r\n",
 				GetSocketHandle());
 			break;
@@ -266,10 +276,16 @@ void CPRCTcpPeer::OnReceive(int nErrorCode)
 		}
 		//data have been completely transferred. continue receiving?
 		ATLTRACE("nValidLen = %d, TransferSend = %d\r\n", nValidLen, nRetVal);
-		//一般一个FD_READ对应一次recv， 如果连接已经优雅的关闭，那么把系统buf中的数据全部收下来并转发
-		if (m_bConnShutted)
-			continue;
-		else
+		// Drain data that was already readable when this event arrived. Limiting
+		// each pass prevents a busy TCP stream from monopolizing the PRC/UI
+		// thread; TriggerEvent below continues the drain on the next message.
+		int readable = TestSocketStatus(FD_READ);
+		if (readable < 0)
+		{
+			bOK = FALSE;
+			break;
+		}
+		if (readable == 0)
 			break;
 	}
 	//while(FALSE);
@@ -281,6 +297,9 @@ void CPRCTcpPeer::OnReceive(int nErrorCode)
 		TriggerEvent(FD_CLOSE, nErrorCode);
 		return;
 	}
+	if (!m_bReadClosed && nRecvd >= MAX_EVENT_READ_BYTES &&
+		TestSocketStatus(FD_READ) > 0)
+		TriggerEvent(FD_READ);
 	PropagateHalfClose();
 	TryFinishConnection();
 
@@ -427,8 +446,14 @@ void CPRCTcpPeer::OnConnect(int nErrorCode)
 	}
 
 	ATLTRACE("CPRCTcpPeer.OnConnect()\r\n");
+	m_bForwardingReady = TRUE;
 	//代理已经建立，修改Client关注的event
 	m_pPartner->AsyncSelect(FD_READ | FD_WRITE | FD_CLOSE);
+	// The application may have written and half-closed while the proxy
+	// handshake was still in progress. Flush that buffered payload before
+	// propagating its FIN to the newly established upstream connection.
+	if (m_pPartner->GetValidDataLen() > 0)
+		TriggerEvent(FD_WRITE);
 	if(m_pPartner->TestSocketStatus(FD_WRITE) > 0)
 		m_pPartner->TriggerEvent(FD_WRITE);
 	if(m_pPartner->TestSocketStatus(FD_READ) > 0)
@@ -438,6 +463,7 @@ void CPRCTcpPeer::OnConnect(int nErrorCode)
 	m_pPartner->m_TimeoutMonitor[TM_SEND].Update();
 	m_pPartner->m_TimeoutMonitor[TM_RECV].Enable();
 	m_pPartner->m_TimeoutMonitor[TM_RECV].Update();
+	m_pPartner->PropagateHalfClose();
 
 }
 
@@ -446,50 +472,24 @@ void CPRCTcpPeer::OnClose(int nErrorCode)
 	m_bConnShutted = TRUE;
 	if( nErrorCode == 0 )
 	{
-		m_bReadClosed = TRUE;
-		//正常关闭，但 还有数据没转发?
-		//if(GetValidDataLen() > 0)
-		//{
-		//	return;
-		//}
-		//if(m_pPartner->GetValidDataLen())
-		//{
-		//	return;
-		//}
-
-		//DWORD nCBytes = 0, nSBytes = 0;
-		//if(IOCtl(FIONREAD, &nCBytes) &&	m_pPartner->IOCtl(FIONREAD, &nSBytes))
-		//{
-		//	if(nCBytes > 0)
-		//		TriggerEvent(FD_READ);
-		//	if(nSBytes > 0)
-		//		m_pPartner->TriggerEvent(FD_READ);
-
-		//	if(nCBytes || nSBytes)
-		//		return;
-		//}
-
 		if(GetValidDataLen() > 0)
 		{
 			ATLTRACE("%d.OnClose() -> GetValidDataLen() > 0", GetSocketHandle());
 			return;
 		}
-
-		DWORD nBytes = 0;
-		IOCtl(FIONREAD, &nBytes);
-		if(nBytes > 0)
+		if (m_bReadClosed)
 		{
-			ATLTRACE("%d.OnClose() -> IOCtl(FIONREAD) > 0", GetSocketHandle());
-			TriggerEvent(FD_READ);
+			PropagateHalfClose();
+			TryFinishConnection();
 			return;
 		}
 
-		// FIN is directional. Stop reading this side, propagate FIN only after
-		// its buffered bytes have reached the partner, and keep reverse traffic.
-		m_bReadClosed = TRUE;
-		AsyncSelect(FD_WRITE | FD_CLOSE);
-		PropagateHalfClose();
-		TryFinishConnection();
+		// FD_CLOSE is a prompt to drain recv(), not proof that EOF has already
+		// been consumed. In particular, loopback and concurrent senders can make
+		// FIONREAD momentarily zero while more bytes precede the FIN. Only a
+		// Receive() result of zero is authoritative for half-close propagation.
+		AsyncSelect(FD_READ | FD_WRITE | FD_CLOSE);
+		TriggerEvent(FD_READ);
 		return;
 	}
 
@@ -522,8 +522,15 @@ void CPRCTcpPeer::PropagateHalfClose()
 {
 	if (!m_bReadClosed || GetValidDataLen() != 0 || !m_pPartner ||
 		m_pPartner->GetSocketHandle() == INVALID_SOCKET ||
-		m_pPartner->m_bWriteShutdown)
+		m_pPartner->m_bWriteShutdown ||
+		(m_pPartner->m_pProxyLayer && !m_pPartner->m_bForwardingReady))
 		return;
+	DWORD pendingBytes = 0;
+	if (IOCtl(FIONREAD, &pendingBytes) && pendingBytes > 0)
+	{
+		TriggerEvent(FD_READ);
+		return;
+	}
 
 	m_pPartner->ShutDown(SD_SEND);
 	m_pPartner->m_bWriteShutdown = TRUE;

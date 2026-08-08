@@ -6,6 +6,7 @@
 #include "stdafx.h"
 #include "ProxyTaskMgr.h"
 #include "PRCTcpPeer.h"
+#include "ProxyLog.h"
 //#include "PRCUdpPeer.h"
 
 #define TIMER_TCPPERTASK 100
@@ -237,28 +238,57 @@ CProxyUDPTaskMgr::~CProxyUDPTaskMgr(void)
 
 BOOL CProxyUDPTaskMgr::OnNewTask(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo)
 {
+	if (!lpPRCClient || !lpProxyInfo)
+		return FALSE;
 	CTSList<CUdpProxyTask*>::critical lc = m_tasklist;
-	for(list<CUdpProxyTask*>::iterator it = m_tasklist.begin(); it != m_tasklist.end(); ++it)
+	for(list<CUdpProxyTask*>::iterator it = m_tasklist.begin(); it != m_tasklist.end(); )
 	{
 		CUdpProxyTask *existing = *it;
-		if (existing->MatchesAssociation(lpPRCClient, lpProxyInfo))
+		if (existing->MatchesAssociation(lpPRCClient, lpProxyInfo) &&
+			existing->IsClosed())
 		{
 			// A closed task may remain in the list until the maintenance timer.
 			// It must never return its stale route port to a new registration.
-			if (existing->IsClosed())
-			{
-				m_tasklist.erase(it);
-				RemoveTask(existing);
-				break;
-			}
+			it = m_tasklist.erase(it);
+			RemoveTask(existing);
+			continue;
+		}
+		++it;
+	}
+
+	// First prefer the task which already owns this destination.  This keeps
+	// repeated registrations on their original SOCKS5 UDP association even
+	// when several associations exist for the same application socket.
+	for(list<CUdpProxyTask*>::iterator it = m_tasklist.begin();
+		it != m_tasklist.end(); ++it)
+	{
+		CUdpProxyTask *existing = *it;
+		if (existing->MatchesAssociation(lpPRCClient, lpProxyInfo) &&
+			existing->HasRoute(lpPRCClient))
+		{
 			if (!existing->AddRoute(lpPRCClient))
 				return FALSE;
-			WORD routePort = lpPRCClient->udpAddr.GetPort();
-			m_PortState[routePort].clientip = lpPRCClient->srcAddr.GetdwIP();
-			m_PortState[routePort].clientport = lpPRCClient->srcAddr.GetPort();
-			m_PortState[routePort].proxyport = routePort;
+			RegisterRoutePort(lpPRCClient);
 			return TRUE;
 		}
+	}
+
+	BOOL requiresSeparateAssociation = FALSE;
+	for(list<CUdpProxyTask*>::iterator it = m_tasklist.begin();
+		it != m_tasklist.end(); ++it)
+	{
+		CUdpProxyTask *existing = *it;
+		if (!existing->MatchesAssociation(lpPRCClient, lpProxyInfo))
+			continue;
+		if (!existing->CanAcceptRoute(lpPRCClient))
+		{
+			requiresSeparateAssociation = TRUE;
+			continue;
+		}
+		if (!existing->AddRoute(lpPRCClient))
+			return FALSE;
+		RegisterRoutePort(lpPRCClient);
+		return TRUE;
 	}
 
 	CUdpProxyTask *pTask = new CUdpProxyTask(this);
@@ -271,9 +301,13 @@ BOOL CProxyUDPTaskMgr::OnNewTask(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInf
 		return FALSE;
 	}
 
-	m_PortState[pTask->m_LocalProxyUdpPort].clientip = lpPRCClient->srcAddr.GetdwIP();
-	m_PortState[pTask->m_LocalProxyUdpPort].clientport = lpPRCClient->srcAddr.GetPort();
-	m_PortState[pTask->m_LocalProxyUdpPort].proxyport = lpPRCClient->udpAddr.GetPort();
+	RegisterRoutePort(lpPRCClient);
+	if (requiresSeparateAssociation)
+	{
+		PrintText(_T("UDP route split: PID %d, socket %Iu, destination port %d uses a separate SOCKS5 association.\r\n"),
+			lpPRCClient->dwPid, (ULONG_PTR)lpPRCClient->s,
+			lpPRCClient->dstAddr.GetPort());
+	}
 
 	OnAddTask(lpPRCClient, lpProxyInfo);
 	if(m_tasklist.size() == 0)
@@ -301,6 +335,8 @@ BOOL CProxyUDPTaskMgr::OnDeleteTask(CUdpProxyTask *pTask)
 
 INT  CProxyUDPTaskMgr::KillTasks(LPPRCClient lpPRCClient)
 {
+	if (!lpPRCClient)
+		return 0;
 	CTSList<CUdpProxyTask*>::critical lc = m_tasklist;
 	int nCount = 0;
 	for(list<CUdpProxyTask*>::iterator it = m_tasklist.begin(); it!=m_tasklist.end(); it++)
@@ -312,8 +348,8 @@ INT  CProxyUDPTaskMgr::KillTasks(LPPRCClient lpPRCClient)
 			pObj->m_PRCClient.socketGeneration == lpPRCClient->socketGeneration &&
 			pObj->m_PRCClient.s == lpPRCClient->s)
 		{
+			ClearTaskPortStates(pObj);
 			pObj->CloseTask();
-			m_PortState[pObj->m_LocalProxyUdpPort].proxyport = 0;
 			nCount ++;
 		}
 	}
@@ -324,24 +360,46 @@ INT  CProxyUDPTaskMgr::KillTasks(LPPRCClient lpPRCClient)
 VOID CProxyUDPTaskMgr::RemoveAllTasks()
 {
 	CTSList<CUdpProxyTask*>::critical lc = m_tasklist;
-	for(list<CUdpProxyTask*>::iterator it = m_tasklist.begin(); it!=m_tasklist.end(); it++)
+	while (!m_tasklist.empty())
 	{
-		CUdpProxyTask *pObj = *it;
-		pObj->EndTask();
-		//notify call back
+		CUdpProxyTask *pObj = m_tasklist.front();
+		m_tasklist.pop_front();
 		RemoveTask(pObj);
-
 	}
 	KillTimer(TIMER_TCPPERTASK);
 	KillTimer(TIMER_IS_TASK_ALIVE);
-	m_tasklist.clear();
 }
 
 VOID CProxyUDPTaskMgr::RemoveTask(CUdpProxyTask* pTask)
 {
-	m_PortState[pTask->m_LocalProxyUdpPort].proxyport = 0;
+	if (!pTask)
+		return;
+	ClearTaskPortStates(pTask);
 	OnDelTask(&pTask->m_PRCClient);
 	delete pTask;
+}
+
+VOID CProxyUDPTaskMgr::RegisterRoutePort(const LPPRCClient lpPRCClient)
+{
+	if (!lpPRCClient)
+		return;
+	WORD routePort = lpPRCClient->udpAddr.GetPort();
+	m_PortState[routePort].clientip = lpPRCClient->srcAddr.GetdwIP();
+	m_PortState[routePort].clientport = lpPRCClient->srcAddr.GetPort();
+	m_PortState[routePort].proxyport = routePort;
+}
+
+VOID CProxyUDPTaskMgr::ClearTaskPortStates(CUdpProxyTask *pTask)
+{
+	if (!pTask)
+		return;
+	for (CUdpProxyTask::UdpRouteList::iterator it = pTask->m_routes.begin();
+		it != pTask->m_routes.end(); ++it)
+	{
+		WORD routePort = it->client.udpAddr.GetPort();
+		if (m_PortState[routePort].proxyport == routePort)
+			ZeroMemory(&m_PortState[routePort], sizeof(m_PortState[routePort]));
+	}
 }
 
 VOID CProxyUDPTaskMgr::OnTimer(UINT_PTR nIDEvent)
@@ -353,7 +411,7 @@ VOID CProxyUDPTaskMgr::OnTimer(UINT_PTR nIDEvent)
 			CTSList<CUdpProxyTask*>::critical lc = m_tasklist;
 			for(list<CUdpProxyTask*>::iterator it = m_tasklist.begin();
 				it != m_tasklist.end(); ++it)
-				(*it)->OnServerWritable();
+				(*it)->OnMaintenanceTimer();
 		}
 		break;
 	case TIMER_IS_TASK_ALIVE:
@@ -366,14 +424,12 @@ VOID CProxyUDPTaskMgr::OnTimer(UINT_PTR nIDEvent)
 				if (!TestTaskByPid(pObj->m_PRCClient.dwPid,
 					pObj->m_PRCClient.processCreateTime))
 				{
-					pObj->EndTask();
+					it = m_tasklist.erase(it);
 					RemoveTask(pObj);
-
-					m_tasklist.erase(it++);
 				}else if (pObj->IsClosed())
 				{
+					it = m_tasklist.erase(it);
 					RemoveTask(pObj);
-					m_tasklist.erase(it++);
 				}else
 				{
 					it++;

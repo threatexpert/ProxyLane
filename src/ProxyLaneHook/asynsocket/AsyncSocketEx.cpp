@@ -534,7 +534,8 @@ CAsyncSocketEx::~CAsyncSocketEx()
 
 BOOL CAsyncSocketEx::Create(UINT nSocketPort /*=0*/, int nSocketType /*=SOCK_STREAM*/, 
 							long lEvent /*=FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE*/, 
-							LPCSTR lpszSocketAddress /*=NULL*/, BOOL bReuseAddr /*=FALSE*/ )
+							LPCSTR lpszSocketAddress /*=NULL*/, BOOL bReuseAddr /*=FALSE*/,
+							int nAddressFamily /*=AF_INET*/ )
 {
 	//Close the socket, although this should not happen
 	if (GetSocketHandle() != INVALID_SOCKET) {
@@ -551,11 +552,12 @@ BOOL CAsyncSocketEx::Create(UINT nSocketPort /*=0*/, int nSocketType /*=SOCK_STR
 
 #ifndef NOLAYERS
 	if (m_pFirstLayer)
-		return m_pFirstLayer->Create(nSocketPort, nSocketType, lEvent, lpszSocketAddress);
+		return m_pFirstLayer->Create(nSocketPort, nSocketType, lEvent,
+			lpszSocketAddress, nAddressFamily);
 	else
 #endif //NOLAYERS
 	{
-		SOCKET hSocket = socket(AF_INET, nSocketType, 0);
+		SOCKET hSocket = socket(nAddressFamily, nSocketType, 0);
 		if (hSocket == INVALID_SOCKET)
 			return FALSE;
 		m_SocketData.hSocket = hSocket;
@@ -582,7 +584,25 @@ BOOL CAsyncSocketEx::Create(UINT nSocketPort /*=0*/, int nSocketType /*=SOCK_STR
 			VERIFY( SetSockOpt(SO_REUSEADDR, &iOptVal, sizeof iOptVal) );
 		}
 
-		if (!Bind(nSocketPort, lpszSocketAddress)) {
+		if (nAddressFamily == AF_INET6)
+		{
+			SOCKADDR_IN6 local6 = { 0 };
+			local6.sin6_family = AF_INET6;
+			local6.sin6_port = htons((u_short)nSocketPort);
+			if (lpszSocketAddress &&
+				InetPtonA(AF_INET6, lpszSocketAddress, &local6.sin6_addr) != 1)
+			{
+				Close();
+				WSASetLastError(WSAEINVAL);
+				return FALSE;
+			}
+			if (!Bind(reinterpret_cast<SOCKADDR *>(&local6), sizeof(local6)))
+			{
+				Close();
+				return FALSE;
+			}
+		}
+		else if (!Bind(nSocketPort, lpszSocketAddress)) {
 			Close();
 			return FALSE;
 		}

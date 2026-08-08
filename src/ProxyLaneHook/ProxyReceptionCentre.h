@@ -79,6 +79,7 @@ private:
 	HANDLE m_hPRCThread;
 	DWORD m_dwPRCThreadId;
 	CPRCTcpServer *m_pTcpServer;
+	CPRCTcpServer *m_pTcpServer6;
 	CPRCUdpServer *m_pUdpServer;
 	CPRCPipeServer *m_pPipeServer;
 	CProxyDataHandle *m_pProxyDataHandle;

@@ -80,6 +80,8 @@ public:
 	BOOL GetUDPPortState(UDPLocalProxyAddrInfo *pLPAI);
 
 private:
+	VOID RegisterRoutePort(const LPPRCClient lpPRCClient);
+	VOID ClearTaskPortStates(CUdpProxyTask *pTask);
 	CTSList<CUdpProxyTask*> m_tasklist;
 
 

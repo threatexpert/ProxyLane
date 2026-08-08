@@ -8,6 +8,32 @@
 
 
 #define TMID_TASKCOUNT 1
+
+static CString FormatProxyEndpoint(const _SockAddr &address)
+{
+	CString text;
+	if (address.IsIPv6())
+	{
+		TCHAR addressText[INET6_ADDRSTRLEN] = { 0 };
+#ifdef _UNICODE
+		InetNtopW(AF_INET6, (PVOID)address.GetAddr6(), addressText,
+			_countof(addressText));
+#else
+		InetNtopA(AF_INET6, (PVOID)address.GetAddr6(), addressText,
+			_countof(addressText));
+#endif
+		text.Format(_T("[%s]:%d"), addressText, address.GetPort());
+	}
+	else
+	{
+		DWORD ip = address.GetdwIP();
+		const BYTE *bytes = reinterpret_cast<const BYTE *>(&ip);
+		text.Format(_T("%u.%u.%u.%u:%d"), bytes[0], bytes[1], bytes[2],
+			bytes[3], address.GetPort());
+	}
+	return text;
+}
+
 // CPage4 对话框
 
 IMPLEMENT_DYNAMIC(CPage4, CModernDialog)
@@ -163,9 +189,10 @@ void CPage4::OnConnect(LPProxyPacketInfo lpppi)
 		szText.Format(_T("PID: %d, %s.connect to: %s:%d, state: %s\r\n"), lpppi->lpC->dwPid, szType, (LPCTSTR)(CString)lpppi->lpC->szDomainName, lpppi->lpC->dstAddr.GetPort(), !lpppi->errcode ? _T("success") : _T("failure"));
 	}else
 	{
-		DWORD nIP = lpppi->lpC->dstAddr.GetdwIP();
-		const BYTE* pucIP = (BYTE*)&nIP;
-		szText.Format(_T("PID: %d, %s.connect to: %u.%u.%u.%u:%d, state: %s\r\n"), lpppi->lpC->dwPid, szType, pucIP[0], pucIP[1], pucIP[2], pucIP[3], lpppi->lpC->dstAddr.GetPort(), !lpppi->errcode ? _T("success"):_T("failure"));
+		CString endpoint = FormatProxyEndpoint(lpppi->lpC->dstAddr);
+		szText.Format(_T("PID: %d, %s.connect to: %s, state: %s\r\n"),
+			lpppi->lpC->dwPid, szType, (LPCTSTR)endpoint,
+			!lpppi->errcode ? _T("success"):_T("failure"));
 	}
 
 	PrintText(szText);
@@ -238,9 +265,8 @@ void CPage4::OnEachPacket(LPProxyPacketInfo lpppi)
 		szAddr.Format(_T("%s.%s:%d"), szType, (LPCTSTR)(CString)lpppi->lpC->szDomainName, lpppi->lpC->dstAddr.GetPort());
 	}else
 	{
-		DWORD nIP = lpppi->lpC->dstAddr.GetdwIP();
-		const BYTE* pucIP = (BYTE*)&nIP;
-		szAddr.Format(_T("%s.%u.%u.%u.%u:%d"), szType, pucIP[0], pucIP[1], pucIP[2], pucIP[3], lpppi->lpC->dstAddr.GetPort());
+		CString endpoint = FormatProxyEndpoint(lpppi->lpC->dstAddr);
+		szAddr.Format(_T("%s.%s"), szType, (LPCTSTR)endpoint);
 	}
 
 	CString szFrom;
@@ -280,9 +306,7 @@ void CPage4::OnClose(LPProxyPacketInfo lpppi)
 		szAddr.Format(_T("%s:%d"), (CString)lpppi->lpC->szDomainName, lpppi->lpC->dstAddr.GetPort());
 	}else
 	{
-		DWORD nIP = lpppi->lpC->dstAddr.GetdwIP();
-		const BYTE* pucIP = (BYTE*)&nIP;
-		szAddr.Format(_T("%u.%u.%u.%u:%d"), pucIP[0], pucIP[1], pucIP[2], pucIP[3], lpppi->lpC->dstAddr.GetPort());
+		szAddr = FormatProxyEndpoint(lpppi->lpC->dstAddr);
 	}
 
 	CString szText;

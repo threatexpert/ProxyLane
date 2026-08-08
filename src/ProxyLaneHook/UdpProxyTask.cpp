@@ -8,6 +8,23 @@
 #include "ProxyTaskMgr.h"
 #include "PRCUdpPeer.h"
 #include "ProxyLog.h"
+#include "UdpAssociationPolicy.h"
+
+static const DWORD UDP_ASSOCIATION_IDLE_TIMEOUT = 5 * 60 * 1000;
+
+static UdpAssociationPolicy::Destination GetUdpDestination(PRCClient &client)
+{
+	UdpAssociationPolicy::Destination destination;
+	destination.hasDomain = client.szDomainName[0] != '\0';
+	destination.domain = client.szDomainName;
+	destination.family = client.dstAddr.sa_family;
+	destination.ipv4 = client.dstAddr.GetdwIP();
+	ZeroMemory(destination.ipv6, sizeof(destination.ipv6));
+	if (client.dstAddr.IsIPv6() && client.dstAddr.GetAddr6())
+		CopyMemory(destination.ipv6, client.dstAddr.GetAddr6(), sizeof(destination.ipv6));
+	destination.port = client.dstAddr.GetPort();
+	return destination;
+}
 
 CUdpProxyTask::CUdpProxyTask(CProxyUDPTaskMgr *pTaskmgr)
 {
@@ -18,6 +35,8 @@ CUdpProxyTask::CUdpProxyTask(CProxyUDPTaskMgr *pTaskmgr)
 	m_pendingReplyBytes = 0;
 	m_serverReconnectPending = FALSE;
 	m_serverReady = FALSE;
+	m_serverDormant = FALSE;
+	m_lastActivity = GetTickCount();
 	m_nextServerReconnect = 0;
 	m_serverReconnectDelay = 250;
 	m_lastServerError = 0;
@@ -90,6 +109,7 @@ BOOL CUdpProxyTask::CreateServerPeer()
 
 	m_pServer = server;
 	m_serverReady = m_ProxyInfo.GetProxyType() == PROXYTYPE_NOPROXY;
+	m_serverDormant = FALSE;
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
 	{
 		if (it->peer && it->peer->GetSocketHandle() != INVALID_SOCKET)
@@ -110,18 +130,13 @@ BOOL CUdpProxyTask::CreateServerPeer()
 
 BOOL CUdpProxyTask::AddRoute(LPPRCClient lpPRCClient)
 {
+	if (!lpPRCClient)
+		return FALSE;
+	UdpAssociationPolicy::Destination requested = GetUdpDestination(*lpPRCClient);
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
 	{
-		BOOL sameDestination = FALSE;
-		if (lpPRCClient->IsDNValid())
-			sameDestination = it->client.IsDNValid() &&
-				_stricmp(it->client.szDomainName, lpPRCClient->szDomainName) == 0 &&
-				it->client.dstAddr.GetPort() == lpPRCClient->dstAddr.GetPort();
-		else
-			sameDestination = !it->client.IsDNValid() &&
-				it->client.dstAddr.GetdwIP() == lpPRCClient->dstAddr.GetdwIP() &&
-				it->client.dstAddr.GetPort() == lpPRCClient->dstAddr.GetPort();
-		if (sameDestination)
+		if (UdpAssociationPolicy::IsSameDestination(
+			GetUdpDestination(it->client), requested))
 		{
 			if (it->peer && it->peer->GetSocketHandle() != INVALID_SOCKET)
 			{
@@ -129,8 +144,9 @@ BOOL CUdpProxyTask::AddRoute(LPPRCClient lpPRCClient)
 				it->client = *lpPRCClient;
 				it->client.udpAddr = routeAddress;
 				lpPRCClient->udpAddr = routeAddress;
-				PrintText(_T("UDP route reused: PID %d, socket %Iu, route 127.0.0.1:%d.\r\n"),
+				PrintText(_T("UDP route reused: PID %d, socket %Iu, route %s:%d.\r\n"),
 					lpPRCClient->dwPid, (ULONG_PTR)lpPRCClient->s,
+					lpPRCClient->udpAddr.IsIPv6() ? _T("[::1]") : _T("127.0.0.1"),
 					lpPRCClient->udpAddr.GetPort());
 				return TRUE;
 			}
@@ -161,7 +177,8 @@ BOOL CUdpProxyTask::AddRoute(LPPRCClient lpPRCClient)
 	int routeAddressLength = sizeof(routeAddress);
 	if (!peer->CreateUDPSocket(&routeAddress, &routeAddressLength, 0,
 		FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE,
-		"127.0.0.1"))
+		lpPRCClient->dstAddr.IsIPv6() ? "::1" : "127.0.0.1", FALSE,
+		lpPRCClient->dstAddr.IsIPv6() ? AF_INET6 : AF_INET))
 	{
 		delete peer;
 		return FALSE;
@@ -176,11 +193,42 @@ BOOL CUdpProxyTask::AddRoute(LPPRCClient lpPRCClient)
 	m_routes.push_back(route);
 	if (m_routes.size() == 1)
 	{
-		m_pServer->SetPartner(peer);
+		if (m_pServer)
+			m_pServer->SetPartner(peer);
 		m_LocalProxyUdpPort = routeAddress.GetPort();
 	}
-	PrintText(_T("UDP route created: PID %d, socket %Iu, route 127.0.0.1:%d.\r\n"),
-		lpPRCClient->dwPid, (ULONG_PTR)lpPRCClient->s, routeAddress.GetPort());
+	PrintText(_T("UDP route created: PID %d, socket %Iu, route %s:%d.\r\n"),
+		lpPRCClient->dwPid, (ULONG_PTR)lpPRCClient->s,
+		routeAddress.IsIPv6() ? _T("[::1]") : _T("127.0.0.1"),
+		routeAddress.GetPort());
+	return TRUE;
+}
+
+BOOL CUdpProxyTask::HasRoute(const LPPRCClient lpPRCClient)
+{
+	if (!lpPRCClient)
+		return FALSE;
+	UdpAssociationPolicy::Destination requested = GetUdpDestination(*lpPRCClient);
+	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
+	{
+		if (UdpAssociationPolicy::IsSameDestination(
+			GetUdpDestination(it->client), requested))
+			return TRUE;
+	}
+	return FALSE;
+}
+
+BOOL CUdpProxyTask::CanAcceptRoute(const LPPRCClient lpPRCClient)
+{
+	if (!lpPRCClient)
+		return FALSE;
+	UdpAssociationPolicy::Destination requested = GetUdpDestination(*lpPRCClient);
+	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
+	{
+		if (!UdpAssociationPolicy::CanShareAssociation(
+			GetUdpDestination(it->client), requested))
+			return FALSE;
+	}
 	return TRUE;
 }
 
@@ -202,7 +250,7 @@ VOID CUdpProxyTask::OnPeerClosed(CPRCUdpPeer *pPeer, int errorCode)
 	if (pPeer == m_pServer)
 	{
 		m_serverReady = FALSE;
-		if (m_taskClosing)
+		if (m_taskClosing || m_serverDormant)
 			return;
 		// Keep every application-facing route bound.  Deletion/recreation of
 		// the closed server peer is deferred to the task timer so this callback
@@ -218,7 +266,7 @@ VOID CUdpProxyTask::OnPeerClosed(CPRCUdpPeer *pPeer, int errorCode)
 
 VOID CUdpProxyTask::OnServerReady(CPRCUdpPeer *pPeer)
 {
-	if (m_taskClosing || pPeer != m_pServer)
+	if (m_taskClosing || m_serverDormant || pPeer != m_pServer)
 		return;
 	m_serverReady = TRUE;
 	m_serverReconnectPending = FALSE;
@@ -233,6 +281,7 @@ VOID CUdpProxyTask::ScheduleServerReconnect(int errorCode)
 {
 	if (m_taskClosing)
 		return;
+	m_serverDormant = FALSE;
 	if (!m_serverReconnectPending)
 	{
 		m_serverReady = FALSE;
@@ -254,6 +303,9 @@ VOID CUdpProxyTask::OnServerWritable()
 	if (m_taskClosing)
 		return;
 	const DWORD now = GetTickCount();
+	ExpirePendingDatagrams(now);
+	FlushPendingReplies();
+
 	if (m_serverReconnectPending)
 	{
 		if ((LONG)(now - m_nextServerReconnect) < 0)
@@ -261,6 +313,12 @@ VOID CUdpProxyTask::OnServerWritable()
 
 		CPRCUdpPeer *oldServer = m_pServer;
 		m_pServer = NULL;
+		for (UdpRouteList::iterator it = m_routes.begin();
+			it != m_routes.end(); ++it)
+		{
+			if (it->peer)
+				it->peer->SetPartner(NULL);
+		}
 		if (oldServer)
 			delete oldServer;
 
@@ -301,7 +359,7 @@ VOID CUdpProxyTask::OnServerWritable()
 		else
 		{
 			sent = m_pServer->SendTo(packetData, (int)packet.data.size(),
-				&packet.target.dstAddr, sizeof(_SockAddr));
+				&packet.target.dstAddr, packet.target.dstAddr.Size());
 		}
 		if (sent == SOCKET_ERROR)
 		{
@@ -322,6 +380,95 @@ VOID CUdpProxyTask::OnServerWritable()
 	FlushPendingReplies();
 }
 
+VOID CUdpProxyTask::OnMaintenanceTimer()
+{
+	if (m_taskClosing)
+		return;
+	const DWORD now = GetTickCount();
+	ExpirePendingDatagrams(now);
+	FlushPendingReplies();
+
+	if (m_serverDormant)
+		return;
+
+	BOOL hasPendingWork = !m_pending.empty() || !m_pendingReplies.empty();
+	if (UdpAssociationPolicy::ShouldEnterDormant(now, m_lastActivity,
+		UDP_ASSOCIATION_IDLE_TIMEOUT, hasPendingWork))
+	{
+		// This method is called only by the manager timer. Never destroy the
+		// server peer from its own FD_WRITE/FD_CONNECT callback stack.
+		EnterServerDormant();
+		return;
+	}
+
+	OnServerWritable();
+}
+
+VOID CUdpProxyTask::ExpirePendingDatagrams(DWORD now)
+{
+	while (!m_pending.empty() &&
+		(DWORD)(now - m_pending.front().queuedAt) > 5000)
+	{
+		m_pendingBytes -= (DWORD)m_pending.front().data.size();
+		m_pending.pop_front();
+	}
+}
+
+VOID CUdpProxyTask::EnterServerDormant()
+{
+	if (m_taskClosing || m_serverDormant || !m_pending.empty() ||
+		!m_pendingReplies.empty())
+		return;
+
+	m_serverDormant = TRUE;
+	m_serverReady = FALSE;
+	m_serverReconnectPending = FALSE;
+	m_serverReconnectDelay = 250;
+	m_lastServerError = 0;
+
+	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
+	{
+		if (it->peer)
+			it->peer->SetPartner(NULL);
+	}
+
+	CPRCUdpPeer *oldServer = m_pServer;
+	if (oldServer)
+	{
+		oldServer->AsyncSelect(0);
+		oldServer->Close();
+	}
+	m_pServer = NULL;
+	delete oldServer;
+
+	PrintText(_T("UDP association dormant after %d seconds; local route %d remains open.\r\n"),
+		UDP_ASSOCIATION_IDLE_TIMEOUT / 1000, m_LocalProxyUdpPort);
+}
+
+VOID CUdpProxyTask::WakeServerAssociation()
+{
+	if (m_taskClosing || !m_serverDormant)
+		return;
+
+	m_serverDormant = FALSE;
+	m_serverReconnectPending = FALSE;
+	m_serverReconnectDelay = 250;
+	PrintText(_T("UDP association waking; local route %d was preserved.\r\n"),
+		m_LocalProxyUdpPort);
+
+	if (!CreateServerPeer())
+	{
+		int errorCode = WSAGetLastError();
+		if (!errorCode)
+			errorCode = WSAECONNREFUSED;
+		ScheduleServerReconnect(errorCode);
+		return;
+	}
+
+	if (m_serverReady)
+		OnServerWritable();
+}
+
 VOID CUdpProxyTask::OnRouteWritable(CPRCUdpPeer *routePeer)
 {
 	FlushPendingReplies(routePeer);
@@ -333,6 +480,7 @@ BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer *routePeer,
 {
 	if (!data || length < 0)
 		return FALSE;
+	m_lastActivity = GetTickCount();
 
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
 	{
@@ -342,6 +490,14 @@ BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer *routePeer,
 			it->hasApplicationEndpoint = TRUE;
 			break;
 		}
+	}
+
+	if (m_serverDormant)
+	{
+		BOOL queued = QueueDatagram(target, data, length);
+		if (queued)
+			WakeServerAssociation();
+		return queued;
 	}
 
 	if (m_serverReady && !m_serverReconnectPending && m_pServer &&
@@ -355,7 +511,8 @@ BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer *routePeer,
 		}
 		else
 		{
-			sent = m_pServer->SendTo(data, length, &target.dstAddr, sizeof(_SockAddr));
+			sent = m_pServer->SendTo(data, length, &target.dstAddr,
+				target.dstAddr.Size());
 		}
 		if (sent != SOCKET_ERROR)
 			return TRUE;
@@ -372,13 +529,15 @@ BOOL CUdpProxyTask::ForwardServerDatagram(_SockAddr source,
 	if (!data || length < 0)
 		return FALSE;
 	UdpRoute *selected = NULL;
+	UdpRoute *domainCandidate = NULL;
+	DWORD domainCandidateCount = 0;
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
 	{
 		if (!it->peer || it->peer->GetSocketHandle() == INVALID_SOCKET ||
 			it->client.dstAddr.GetPort() != source.GetPort())
 			continue;
 		if (!it->client.IsDNValid() &&
-			it->client.dstAddr.GetdwIP() == source.GetdwIP())
+			it->client.dstAddr.SameAddress(source))
 		{
 			selected = &*it;
 			break;
@@ -387,22 +546,26 @@ BOOL CUdpProxyTask::ForwardServerDatagram(_SockAddr source,
 		// destination port remains a stable discriminator.
 		if (it->client.IsDNValid())
 		{
-			if (selected)
-				selected = NULL; // ambiguous same-port domains
-			else
-				selected = &*it;
+			domainCandidate = &*it;
+			++domainCandidateCount;
 		}
 	}
-	if (!selected && m_routes.size() == 1)
+	if (!selected && domainCandidateCount == 1)
+		selected = domainCandidate;
+	if (!selected && domainCandidateCount == 0 && m_routes.size() == 1 &&
+		m_routes.front().peer &&
+		m_routes.front().peer->GetSocketHandle() != INVALID_SOCKET)
 		selected = &m_routes.front();
 	if (!selected)
 		return FALSE;
+	m_lastActivity = GetTickCount();
 
 	_SockAddr application = selected->hasApplicationEndpoint ?
 		selected->applicationEndpoint : selected->client.srcAddr;
-	if (application.GetdwIP() == INADDR_ANY)
-		application.SetIP("127.0.0.1");
-	int sent = selected->peer->SendTo(data, length, &application, sizeof(application));
+	if (application.IsAny())
+		application.SetIP(application.IsIPv6() ? "::1" : "127.0.0.1");
+	int sent = selected->peer->SendTo(data, length, &application,
+		application.Size());
 	if (sent == length)
 		return TRUE;
 	return QueueReply(selected->peer, application, data, length);
@@ -454,7 +617,7 @@ VOID CUdpProxyTask::FlushPendingReplies(CPRCUdpPeer *routePeer)
 		}
 		const char *packetData = it->data.empty() ? "" : &it->data[0];
 		int sent = it->routePeer->SendTo(packetData, (int)it->data.size(),
-			&it->application, sizeof(it->application));
+			&it->application, it->application.Size());
 		if (sent != (int)it->data.size())
 		{
 			++it;
@@ -493,6 +656,7 @@ VOID CUdpProxyTask::EndTask()
 	m_taskClosing = TRUE;
 	m_serverReconnectPending = FALSE;
 	m_serverReady = FALSE;
+	m_serverDormant = FALSE;
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
 	{
 		if (it->peer)
@@ -520,6 +684,7 @@ VOID CUdpProxyTask::CloseTask()
 	m_taskClosing = TRUE;
 	m_serverReconnectPending = FALSE;
 	m_serverReady = FALSE;
+	m_serverDormant = FALSE;
 	m_pendingReplies.clear();
 	m_pendingReplyBytes = 0;
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)

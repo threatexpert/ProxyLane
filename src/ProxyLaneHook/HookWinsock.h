@@ -25,6 +25,8 @@ typedef enum
 	HOOKAPI_getaddrinfo,
 	HOOKAPI_getpeername,
 	HOOKAPI_closesocket,
+	HOOKAPI_send,
+	HOOKAPI_WSASend,
 	HOOKAPI_sendto,
 	HOOKAPI_WSASendTo,
 	HOOKAPI_recvfrom,
@@ -102,6 +104,7 @@ class CHookWinsock
 		typedef struct
 		{
 			DWORD dummyIP;
+			IN6_ADDR dummyIPv6;
 			char szHost[256];
 		}INFO;
 
@@ -120,6 +123,12 @@ class CHookWinsock
 		BOOL IsDummyIP(DWORD dwip)
 		{
 			return (ntohl(dwip) >> 16) == 0x7fff;//127.255.x.x
+		}
+
+		BOOL IsDummyIPv6(const IN6_ADDR *address)
+		{
+			return address && address->u.Byte[0] == 0xfd &&
+				address->u.Byte[1] == 0xff;
 		}
 
 		HANDLE GetDummyHandle(const char* name, char* buf, int buflen)
@@ -149,11 +158,27 @@ class CHookWinsock
 			ZeroMemory(&info, sizeof(info));
 
 			info.dummyIP = htonl(m_DummyIP);
+			info.dummyIPv6.u.Byte[0] = 0xfd;
+			info.dummyIPv6.u.Byte[1] = 0xff;
+			CopyMemory(&info.dummyIPv6.u.Byte[12], &info.dummyIP,
+				sizeof(info.dummyIP));
 			strncpy(info.szHost, lpHost, sizeof(info.szHost)-1);
 
 			m_ls.push_front(info);
 
 			return htonl(m_DummyIP);
+		}
+
+		IN6_ADDR GetDummyIPv6(const char *lpHost)
+		{
+			INFO *node = GetNode(lpHost);
+			if (!node)
+			{
+				GetDummyIP(lpHost);
+				node = GetNode(lpHost);
+			}
+			IN6_ADDR empty = IN6ADDR_ANY_INIT;
+			return node ? node->dummyIPv6 : empty;
 		}
 
 		BOOL GetHostByIP(DWORD dummyip, char *lpbuf, int bufsize)
@@ -169,6 +194,23 @@ class CHookWinsock
 			}
 			return FALSE;
 		};
+
+		BOOL GetHostByIPv6(const IN6_ADDR *address, char *lpbuf, int bufsize)
+		{
+			if (!address || !lpbuf || bufsize <= 0)
+				return FALSE;
+			CTSList<INFO>::critical lc = m_ls;
+			for(list<INFO>::iterator it=m_ls.begin(); it!=m_ls.end(); it++)
+			{
+				if (IN6_ARE_ADDR_EQUAL(&it->dummyIPv6, address))
+				{
+					strncpy(lpbuf, it->szHost, bufsize - 1);
+					lpbuf[bufsize - 1] = '\0';
+					return TRUE;
+				}
+			}
+			return FALSE;
+		}
 
 		hostent *GetHostent(DWORD nIP)
 		{
@@ -226,6 +268,16 @@ class CHookWinsock
 			int sType;
 			ULONGLONG generation;
 		};
+		struct UDP_PAYLOAD_LIMIT
+		{
+			SOCKET s;
+			ULONGLONG generation;
+			_SockAddr destination;
+			WORD destinationPort;
+			char domain[256];
+			size_t maxPayload;
+			BOOL connected;
+		};
 
 		ULONGLONG GetSocketGeneration(SOCKET s, int sType)
 		{
@@ -253,8 +305,7 @@ class CHookWinsock
 			{
 				if (it->s == pCI->s && it->sType == pCI->sType &&
 					it->srcAddr.GetPort() == pCI->srcAddr.GetPort() &&
-					it->dstAddr.GetdwIP() == pCI->dstAddr.GetdwIP() &&
-					it->dstAddr.GetPort() == pCI->dstAddr.GetPort() &&
+					it->dstAddr == pCI->dstAddr &&
 					_stricmp(it->szDomainName, pCI->szDomainName) == 0)
 				{
 					*it = *pCI;
@@ -294,7 +345,84 @@ class CHookWinsock
 						++it;
 				}
 			}
+			{
+				CTSList<UDP_PAYLOAD_LIMIT>::critical lc = m_udpPayloadLimits;
+				for (CTSList<UDP_PAYLOAD_LIMIT>::iterator it = m_udpPayloadLimits.begin();
+					it != m_udpPayloadLimits.end(); )
+				{
+					if (it->s == s)
+						m_udpPayloadLimits.erase(it++);
+					else
+						++it;
+				}
+			}
 			return nCount;
+		}
+
+		void SetUDPMaxPayload(CONNINFO *pCI, size_t maxPayload,
+			BOOL connected)
+		{
+			if (!pCI || pCI->sType != SOCK_DGRAM)
+				return;
+			CTSList<UDP_PAYLOAD_LIMIT>::critical lc = m_udpPayloadLimits;
+			for (CTSList<UDP_PAYLOAD_LIMIT>::iterator it = m_udpPayloadLimits.begin();
+				it != m_udpPayloadLimits.end(); ++it)
+			{
+				if (it->s == pCI->s && it->generation == pCI->socketGeneration &&
+					it->destination == pCI->dstAddr &&
+					_stricmp(it->domain, pCI->szDomainName) == 0)
+				{
+					it->maxPayload = maxPayload;
+					it->connected = connected;
+					return;
+				}
+			}
+			UDP_PAYLOAD_LIMIT item;
+			ZeroMemory(&item, sizeof(item));
+			item.s = pCI->s;
+			item.generation = pCI->socketGeneration;
+			item.destination = pCI->dstAddr;
+			item.destinationPort = pCI->dstAddr.GetPort();
+			strncpy(item.domain, pCI->szDomainName, sizeof(item.domain) - 1);
+			item.maxPayload = maxPayload;
+			item.connected = connected;
+			m_udpPayloadLimits.push_front(item);
+		}
+
+		BOOL GetUDPMaxPayload(CONNINFO *pCI, size_t *maxPayload)
+		{
+			if (!pCI || !maxPayload)
+				return FALSE;
+			CTSList<UDP_PAYLOAD_LIMIT>::critical lc = m_udpPayloadLimits;
+			for (CTSList<UDP_PAYLOAD_LIMIT>::iterator it = m_udpPayloadLimits.begin();
+				it != m_udpPayloadLimits.end(); ++it)
+			{
+				if (it->s == pCI->s && it->generation == pCI->socketGeneration &&
+					it->destination == pCI->dstAddr &&
+					_stricmp(it->domain, pCI->szDomainName) == 0)
+				{
+					*maxPayload = it->maxPayload;
+					return TRUE;
+				}
+			}
+			return FALSE;
+		}
+
+		BOOL GetConnectedUDPMaxPayload(SOCKET s, size_t *maxPayload)
+		{
+			if (!maxPayload)
+				return FALSE;
+			CTSList<UDP_PAYLOAD_LIMIT>::critical lc = m_udpPayloadLimits;
+			for (CTSList<UDP_PAYLOAD_LIMIT>::iterator it = m_udpPayloadLimits.begin();
+				it != m_udpPayloadLimits.end(); ++it)
+			{
+				if (it->s == s && it->connected)
+				{
+					*maxPayload = it->maxPayload;
+					return TRUE;
+				}
+			}
+			return FALSE;
 		}
 
 		BOOL GetInfo(SOCKET s, CONNINFO *pCI)
@@ -312,13 +440,18 @@ class CHookWinsock
 			return FALSE;
 		}
 
-		HookDecision CanHackIt(const LPPRCClient pCI, CPRCPipeClient& pipeClient)
+		HookDecision CanHackIt(const LPPRCClient pCI, CPRCPipeClient& pipeClient,
+			LPProxyInfo proxyInfo = NULL)
 		{
 			ProxyInfo pi;
 			if (!pipeClient.PRCGetProxyInfo((LPPRCClient)pCI, &pi))
 				return HOOK_FAILED;
+			if (proxyInfo)
+				*proxyInfo = pi;
 
 			if (pCI->IsDNValid())
+				return HOOK_REDIRECTED;
+			if (pCI->dstAddr.IsIPv6())
 				return HOOK_REDIRECTED;
 
 			//如果程序要访问本地局域网络，但是代理服务器是公网的，则不劫持这个socket
@@ -376,7 +509,7 @@ class CHookWinsock
 				{
 					//判断原地址是否一致
 					if ( it->srcAddr.GetPort() != ((LPPRCClient)pCI)->srcAddr.GetPort()
-						|| (it->srcAddr.GetdwIP() != 0 && it->srcAddr.GetdwIP() != ((LPPRCClient)pCI)->srcAddr.GetdwIP())
+						|| (!it->srcAddr.IsAny() && !it->srcAddr.SameAddress(((LPPRCClient)pCI)->srcAddr))
 						)
 						continue;//当前节点信息不一致， 但不能确定没劫持过这个socket， 继续查找其他节点
 
@@ -394,8 +527,7 @@ class CHookWinsock
 					else
 					{
 						if (it->IsDNValid() ||
-							it->dstAddr.GetdwIP() != ((LPPRCClient)pCI)->dstAddr.GetdwIP() ||
-							it->dstAddr.GetPort() != ((LPPRCClient)pCI)->dstAddr.GetPort())
+							!(it->dstAddr == ((LPPRCClient)pCI)->dstAddr))
 							continue;
 					}
 
@@ -409,7 +541,8 @@ class CHookWinsock
 
 		BOOL IsUDPRouteAddress(SOCKET s, _SockAddr *destination)
 		{
-			if (!destination || destination->sa_family != AF_INET)
+			if (!destination ||
+				(destination->sa_family != AF_INET && destination->sa_family != AF_INET6))
 				return FALSE;
 
 			CTSList<CONNINFO>::critical lc = m_ls;
@@ -420,10 +553,8 @@ class CHookWinsock
 					it->udpAddr.GetPort() != destination->GetPort())
 					continue;
 
-				DWORD routeIP = it->udpAddr.GetdwIP();
-				DWORD destinationIP = destination->GetdwIP();
-				if (routeIP == destinationIP ||
-					(routeIP == INADDR_ANY && destinationIP == inet_addr("127.0.0.1")))
+				if (it->udpAddr.SameAddress(*destination) ||
+					(it->udpAddr.IsAny() && destination->IsLoopback()))
 					return TRUE;
 			}
 			return FALSE;
@@ -449,13 +580,13 @@ class CHookWinsock
 				if(it->s == s)
 				{
 					if (it->srcAddr.GetPort() != srcAddr.GetPort()
-						|| (it->srcAddr.GetdwIP() != 0 && it->srcAddr.GetdwIP() != srcAddr.GetdwIP())
+						|| (!it->srcAddr.IsAny() && !it->srcAddr.SameAddress(srcAddr))
 						)
 						continue;
 
 					//确定包是来自PRC的（udpAddr是本地udp代理的地址）
 					if (from->GetPort() != it->udpAddr.GetPort()
-						|| (it->udpAddr.GetdwIP() != 0 && it->udpAddr.GetdwIP() != from->GetdwIP())
+						|| (!it->udpAddr.IsAny() && !it->udpAddr.SameAddress(*from))
 						)
 					{
 						continue;
@@ -491,6 +622,7 @@ class CHookWinsock
 	private:
 		CTSList<CONNINFO> m_ls;
 		CTSList<SOCKETGEN> m_socketGenerations;
+		CTSList<UDP_PAYLOAD_LIMIT> m_udpPayloadLimits;
 		ULONGLONG m_nextSocketGeneration;
 		CHookWinsock *m_pHW;
 
@@ -543,6 +675,11 @@ public:
 	int WSAAPI inhook_getpeername(SOCKET s, struct sockaddr* name, int* namelen);
 
 	int WSAAPI inhook_closesocket(SOCKET s);
+	int WSAAPI inhook_send(SOCKET s, const char* buf, int len, int flags);
+	int WSAAPI inhook_WSASend(SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
+		LPDWORD lpNumberOfBytesSent, DWORD dwFlags,
+		LPWSAOVERLAPPED lpOverlapped,
+		LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
 
 	int WSAAPI inhook_sendto(SOCKET s, const char* buf, int len, int flags, const struct sockaddr* to, int tolen);
 
@@ -572,7 +709,8 @@ public:
 		LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
 		);
 
-	HookDecision HackSendTo(SOCKET s, _SockAddr &addrname, LPPRCClient lpC);
+	HookDecision HackSendTo(SOCKET s, _SockAddr &addrname, LPPRCClient lpC,
+		size_t *maxPayload = NULL);
 
 	int
 		WSAAPI

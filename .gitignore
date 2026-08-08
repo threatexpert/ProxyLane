@@ -13,3 +13,5 @@ src/.vs/
 *.ilk
 *.tlog
 *.lastbuildstate
+__pycache__/
+*.pyc

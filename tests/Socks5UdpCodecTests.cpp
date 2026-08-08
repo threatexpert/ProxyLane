@@ -43,6 +43,29 @@ static void TestDomainRoundTrip()
 	assert(decoded.payloadLength == sizeof(payload) - 1);
 }
 
+static void TestIPv6RoundTrip()
+{
+	SOCKADDR_IN6 destination = { 0 };
+	destination.sin6_family = AF_INET6;
+	destination.sin6_port = htons(443);
+	assert(InetPtonA(AF_INET6, "2001:db8::1234", &destination.sin6_addr) == 1);
+	const char payload[] = "ipv6-payload";
+	BYTE packet[256];
+	int packetLength = CSocks5UdpCodec::EncodeIPv6(packet, sizeof(packet),
+		&destination, payload, sizeof(payload));
+	assert(packetLength == 22 + sizeof(payload));
+	assert(packet[3] == 4);
+	CSocks5UdpCodec::DecodedPacket decoded;
+	assert(CSocks5UdpCodec::Decode(packet, packetLength, &decoded));
+	assert(decoded.sourceLength == sizeof(SOCKADDR_IN6));
+	assert(decoded.source6.sin6_family == AF_INET6);
+	assert(decoded.source6.sin6_port == destination.sin6_port);
+	assert(IN6_ARE_ADDR_EQUAL(&decoded.source6.sin6_addr,
+		&destination.sin6_addr));
+	assert(decoded.payloadLength == sizeof(payload));
+	assert(memcmp(decoded.payload, payload, sizeof(payload)) == 0);
+}
+
 static void TestMalformedPackets()
 {
 	BYTE fragmented[] = { 0, 0, 1, 1, 0, 0, 0, 0, 0, 0 };
@@ -109,6 +132,7 @@ int main()
 {
 	TestIPv4RoundTrip();
 	TestDomainRoundTrip();
+	TestIPv6RoundTrip();
 	TestMalformedPackets();
 	TestPayloadBoundaries();
 	TestMaximumDomainAndConcurrentUse();

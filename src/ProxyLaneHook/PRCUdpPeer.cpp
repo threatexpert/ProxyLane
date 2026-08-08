@@ -36,6 +36,7 @@ CPRCUdpPeer::CPRCUdpPeer(CUdpProxyTask *pNotify)
 	m_pProxyLayer = NULL;
 	m_pClientLayer = NULL;
 	m_pNotify = pNotify;
+	m_pPartner = NULL;
 	m_pProxyDataHandle = (CProxyDataHandle*)pNotify->m_pTaskmgr->m_pPRC->GetPDHInstance();
 	m_ppi.lpC = &pNotify->m_PRCClient;
 	m_ppi.lpPI = &pNotify->m_ProxyInfo;
@@ -61,15 +62,16 @@ void CPRCUdpPeer::SetIdentity(INT iId)
 void CPRCUdpPeer::SetAddrInfo(_CSAddrInfo *pInfo)
 {
 	m_CSAddrInfo = *pInfo;
-	if(m_CSAddrInfo.dstAddr.GetdwIP() == 0)
+	if(m_CSAddrInfo.dstAddr.sa_family == 0)
 		m_CSAddrInfo.dstAddr.SetIP("127.0.0.1");
-	if(m_CSAddrInfo.srcAddr.GetdwIP() == 0)
+	if(m_CSAddrInfo.srcAddr.sa_family == 0)
 		m_CSAddrInfo.srcAddr.SetIP("127.0.0.1");
 }
 
 BOOL CPRCUdpPeer::CreateUDPSocket(OUT SOCKADDR* lpSockAddr, OUT int* lpSockAddrLen, 
 								  UINT nSocketPort /* = 0 */, long lEvent /* = FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE */, 
-								  LPCSTR lpszSocketAddress /* = NULL */, BOOL bReuseAddr /* = FALSE */)
+								  LPCSTR lpszSocketAddress /* = NULL */, BOOL bReuseAddr /* = FALSE */,
+								  int addressFamily /* = AF_INET */)
 {
 	ATLASSERT(m_Identity == CLIENT);
 
@@ -79,7 +81,8 @@ BOOL CPRCUdpPeer::CreateUDPSocket(OUT SOCKADDR* lpSockAddr, OUT int* lpSockAddrL
 	if (m_pClientLayer)
 		m_pClientLayer->BypassHook(TRUE);
 
-	if (!CAsyncSocketEx::Create(nSocketPort, SOCK_DGRAM, lEvent, lpszSocketAddress, bReuseAddr))
+	if (!CAsyncSocketEx::Create(nSocketPort, SOCK_DGRAM, lEvent,
+		lpszSocketAddress, bReuseAddr, addressFamily))
 		return FALSE;
 
 	if (!CAsyncSocketEx::GetSockName(lpSockAddr, lpSockAddrLen))
@@ -100,7 +103,12 @@ BOOL CPRCUdpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo)
 	if (m_pProxyLayer)
 		m_pProxyLayer->BypassHook(TRUE);
 
-	if (!Create(0, SOCK_DGRAM, FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE))
+	int transportFamily = lpProxyInfo &&
+		lpProxyInfo->GetProxyType() == PROXYTYPE_NOPROXY &&
+		lpPRCClient->dstAddr.IsIPv6() ? AF_INET6 : AF_INET;
+	if (!Create(0, SOCK_DGRAM,
+		FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE,
+		NULL, FALSE, transportFamily))
 		return FALSE;
 	if (!AsyncSelect(FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE))
 		return FALSE;
@@ -258,16 +266,6 @@ void CPRCUdpPeer::OnReceive(int nErrorCode)
 				bOK = FALSE;
 				break;
 			}
-		}else if (nRetVal == 0)
-		{
-			//connection has a graceful closing
-			//continue transferring if there are any available data existing.
-			if(m_recvbufpos == 0)
-			{
-				ATLTRACE("m_recvbufpos == 0. connection closed\r\n");
-				bOK = FALSE;
-				break;
-			}
 		}
 
 		DWORD nIP = addrname.GetdwIP();
@@ -367,12 +365,13 @@ int CPRCUdpPeer::TransferSend()
 			else
 			{
 				nRetVal = m_pPartner->SendTo(m_recvbuf+nBytesSent, nBytesLeft,
-					&m_CSAddrInfo.dstAddr, sizeof(_SockAddr));
+					&m_CSAddrInfo.dstAddr, m_CSAddrInfo.dstAddr.Size());
 			}
 		} 
 		else
 		{
-			nRetVal	= m_pPartner->SendTo(m_recvbuf+nBytesSent, nBytesLeft, &m_CSAddrInfo.dstAddr, sizeof(_SockAddr));
+			nRetVal	= m_pPartner->SendTo(m_recvbuf+nBytesSent, nBytesLeft,
+				&m_CSAddrInfo.dstAddr, m_CSAddrInfo.dstAddr.Size());
 		}
 
 		if(nRetVal == SOCKET_ERROR)

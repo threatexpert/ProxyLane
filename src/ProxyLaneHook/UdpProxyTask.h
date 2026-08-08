@@ -20,10 +20,13 @@ public:
 	BOOL IsClosed();
 	BOOL SetTaskInfo(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo);
 	BOOL AddRoute(LPPRCClient lpPRCClient);
+	BOOL HasRoute(const LPPRCClient lpPRCClient);
+	BOOL CanAcceptRoute(const LPPRCClient lpPRCClient);
 	BOOL MatchesAssociation(const LPPRCClient lpPRCClient, const LPProxyInfo lpProxyInfo);
 
 	VOID OnPeerClosed(CPRCUdpPeer *pPeer, int errorCode);
 	VOID OnServerReady(CPRCUdpPeer *pPeer);
+	VOID OnMaintenanceTimer();
 	VOID OnServerWritable();
 	VOID OnRouteWritable(CPRCUdpPeer *routePeer);
 	BOOL ForwardClientDatagram(CPRCUdpPeer *routePeer,
@@ -45,6 +48,10 @@ public:
 	WORD m_LocalProxyUdpPort;
 
 private:
+	VOID EnterServerDormant();
+	VOID WakeServerAssociation();
+	VOID ExpirePendingDatagrams(DWORD now);
+
 	struct UdpRoute
 	{
 		PRCClient client;
@@ -76,6 +83,8 @@ private:
 	CPRCUdpPeer *m_pServer;
 	BOOL m_serverReconnectPending;
 	BOOL m_serverReady;
+	BOOL m_serverDormant;
+	DWORD m_lastActivity;
 	DWORD m_nextServerReconnect;
 	DWORD m_serverReconnectDelay;
 	int m_lastServerError;

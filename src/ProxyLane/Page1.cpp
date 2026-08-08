@@ -420,7 +420,20 @@ BOOL CPage1::GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI)
 		}
 		else
 		{
-			strKey.Format(_T("%u.%u.%u.%u:%d"), p[0], p[1], p[2], p[3], nPort);
+			if (pPRCC->dstAddr.IsIPv6())
+			{
+				TCHAR addressText[INET6_ADDRSTRLEN] = { 0 };
+#ifdef _UNICODE
+				InetNtopW(AF_INET6, (PVOID)pPRCC->dstAddr.GetAddr6(),
+					addressText, _countof(addressText));
+#else
+				InetNtopA(AF_INET6, (PVOID)pPRCC->dstAddr.GetAddr6(),
+					addressText, _countof(addressText));
+#endif
+				strKey.Format(_T("[%s]:%d"), addressText, nPort);
+			}
+			else
+				strKey.Format(_T("%u.%u.%u.%u:%d"), p[0], p[1], p[2], p[3], nPort);
 		}
 
 		BOOL bMatched = FALSE;

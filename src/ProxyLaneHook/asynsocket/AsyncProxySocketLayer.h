@@ -252,6 +252,7 @@ private:
 
 	u_short m_nProxyPeerPort;//Port of the server you are connected to, retrieve via GetPeerName
 	u_long m_nProxyPeerIP;	//IP of the server you are connected to, retrieve via GetPeerName
+	_SockAddr m_proxyPeerAddress;
 	typedef struct
 	{
 		int			nProxyType;

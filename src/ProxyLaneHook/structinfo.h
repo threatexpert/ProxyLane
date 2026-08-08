@@ -8,11 +8,73 @@ class _SockAddr
 	: public sockaddr
 {
 public:
+	// sockaddr is 16 bytes while sockaddr_in6 is 28 bytes. Keep the first
+	// 16 bytes ABI-compatible with sockaddr and reserve the remaining bytes so
+	// PRC/pipe records can carry either address family without pointers.
+	BYTE ipv6Tail[sizeof(SOCKADDR_IN6) - sizeof(sockaddr)];
 
-	DWORD GetdwIP()
+	void Clear()
 	{
-		SOCKADDR_IN *p = (SOCKADDR_IN*)this;
-		return p->sin_addr.s_addr;
+		ZeroMemory(this, sizeof(*this));
+	}
+
+	BOOL Set(const SOCKADDR *address, int addressLength)
+	{
+		if (!address)
+			return FALSE;
+		int required = address->sa_family == AF_INET6
+			? (int)sizeof(SOCKADDR_IN6) : (int)sizeof(SOCKADDR_IN);
+		if ((address->sa_family != AF_INET && address->sa_family != AF_INET6) ||
+			addressLength < required)
+			return FALSE;
+		Clear();
+		CopyMemory(this, address, required);
+		return TRUE;
+	}
+
+	INT Size() const
+	{
+		return sa_family == AF_INET6 ? sizeof(SOCKADDR_IN6) : sizeof(SOCKADDR_IN);
+	}
+
+	BOOL IsIPv4() const { return sa_family == AF_INET; }
+	BOOL IsIPv6() const { return sa_family == AF_INET6; }
+
+	BOOL IsIPv4Mapped() const
+	{
+		return IsIPv6() && IN6_IS_ADDR_V4MAPPED(
+			&reinterpret_cast<const SOCKADDR_IN6 *>(this)->sin6_addr);
+	}
+
+	BOOL IsAny() const
+	{
+		if (IsIPv6())
+			return IN6_IS_ADDR_UNSPECIFIED(
+				&reinterpret_cast<const SOCKADDR_IN6 *>(this)->sin6_addr);
+		return IsIPv4() && reinterpret_cast<const SOCKADDR_IN *>(this)->sin_addr.s_addr == INADDR_ANY;
+	}
+
+	BOOL IsLoopback() const
+	{
+		if (IsIPv6())
+			return IN6_IS_ADDR_LOOPBACK(
+				&reinterpret_cast<const SOCKADDR_IN6 *>(this)->sin6_addr);
+		return IsIPv4() &&
+			(ntohl(reinterpret_cast<const SOCKADDR_IN *>(this)->sin_addr.s_addr) >> 24) == 127;
+	}
+
+	DWORD GetdwIP() const
+	{
+		if (IsIPv4())
+			return reinterpret_cast<const SOCKADDR_IN *>(this)->sin_addr.s_addr;
+		if (IsIPv4Mapped())
+		{
+			DWORD address = 0;
+			CopyMemory(&address,
+				&reinterpret_cast<const SOCKADDR_IN6 *>(this)->sin6_addr.u.Byte[12], 4);
+			return address;
+		}
+		return 0;
 	}
 
 	in_addr* GetAddr()
@@ -20,29 +82,63 @@ public:
 		return &((LPSOCKADDR_IN)this)->sin_addr;
 	}
 
+	const IN6_ADDR *GetAddr6() const
+	{
+		return IsIPv6()
+			? &reinterpret_cast<const SOCKADDR_IN6 *>(this)->sin6_addr : NULL;
+	}
+
 	void SetIPLong(LONG nIP)
 	{
+		if (!IsIPv4())
+		{
+			Clear();
+			sa_family = AF_INET;
+		}
 		SOCKADDR_IN *p = (SOCKADDR_IN*)this;
 		p->sin_addr.s_addr = nIP;
 	}
 
 	BOOL SetIP(LPCSTR lpszIP)
 	{
-		SOCKADDR_IN *p = (SOCKADDR_IN*)this;
-		p->sin_addr.s_addr = inet_addr(lpszIP);
-		return p->sin_addr.s_addr != INADDR_NONE;
+		if (!lpszIP)
+			return FALSE;
+		IN_ADDR address4;
+		if (InetPtonA(AF_INET, lpszIP, &address4) == 1)
+		{
+			WORD port = (IsIPv4() || IsIPv6()) ? (WORD)GetPort() : 0;
+			Clear();
+			sa_family = AF_INET;
+			reinterpret_cast<SOCKADDR_IN *>(this)->sin_addr = address4;
+			SetPort(port);
+			return TRUE;
+		}
+		IN6_ADDR address6;
+		if (InetPtonA(AF_INET6, lpszIP, &address6) == 1)
+		{
+			WORD port = (IsIPv4() || IsIPv6()) ? (WORD)GetPort() : 0;
+			Clear();
+			sa_family = AF_INET6;
+			reinterpret_cast<SOCKADDR_IN6 *>(this)->sin6_addr = address6;
+			SetPort(port);
+			return TRUE;
+		}
+		return FALSE;
 	}
 
-	INT GetPort()
+	INT GetPort() const
 	{
-		SOCKADDR_IN *p = (SOCKADDR_IN*)this;
-		return (INT)ntohs(p->sin_port);
+		return IsIPv6()
+			? (INT)ntohs(reinterpret_cast<const SOCKADDR_IN6 *>(this)->sin6_port)
+			: (INT)ntohs(reinterpret_cast<const SOCKADDR_IN *>(this)->sin_port);
 	}
 
 	void SetPort(WORD Port)
 	{
-		SOCKADDR_IN *p = (SOCKADDR_IN*)this;
-		p->sin_port = htons(Port);
+		if (IsIPv6())
+			reinterpret_cast<SOCKADDR_IN6 *>(this)->sin6_port = htons(Port);
+		else
+			reinterpret_cast<SOCKADDR_IN *>(this)->sin_port = htons(Port);
 	}
 
 	//
@@ -64,25 +160,40 @@ public:
 		return *((DWORD*)&psa->sin_zero[0]+nPos);
 	}
 
-	BOOL operator == (_SockAddr &_dst)
+	BOOL SameAddress(const _SockAddr &_dst) const
 	{
-		SOCKADDR_IN *X = (SOCKADDR_IN*)this;
-		SOCKADDR_IN *Y = (SOCKADDR_IN*)&_dst;
-
-		return /*(X->sin_family == Y->sin_family) &&*/ (X->sin_addr.s_addr == Y->sin_addr.s_addr) && (X->sin_port == Y->sin_port);
+		if (sa_family != _dst.sa_family)
+			return FALSE;
+		if (IsIPv6())
+			return IN6_ARE_ADDR_EQUAL(GetAddr6(), _dst.GetAddr6());
+		return IsIPv4() && GetdwIP() == _dst.GetdwIP();
 	}
 
-	void operator = (_SockAddr &_dst)
+	BOOL operator == (const _SockAddr &_dst) const
 	{
-		memcpy(this, &_dst, sizeof(_SockAddr));
+		return SameAddress(_dst) && GetPort() == _dst.GetPort();
 	}
-	void operator = (const sockaddr &_dst)
+
+	_SockAddr &operator = (const _SockAddr &_dst)
 	{
 		memcpy(this, &_dst, sizeof(_SockAddr));
+		return *this;
 	}
-	void operator = (SOCKADDR_IN &_dst)
+	_SockAddr &operator = (const sockaddr &_dst)
 	{
-		memcpy(this, &_dst, sizeof(_SockAddr));
+		Set(&_dst, _dst.sa_family == AF_INET6
+			? sizeof(SOCKADDR_IN6) : sizeof(SOCKADDR_IN));
+		return *this;
+	}
+	_SockAddr &operator = (const SOCKADDR_IN &_dst)
+	{
+		Set(reinterpret_cast<const SOCKADDR *>(&_dst), sizeof(_dst));
+		return *this;
+	}
+	_SockAddr &operator = (const SOCKADDR_IN6 &_dst)
+	{
+		Set(reinterpret_cast<const SOCKADDR *>(&_dst), sizeof(_dst));
+		return *this;
 	}
 };
 
@@ -169,6 +280,7 @@ typedef struct _tagPRCINFO
 {
 	//local address info
 	_SockAddr tcpaddr;
+	_SockAddr tcpaddr6;
 	_SockAddr udpaddr;
 }PRCINFO, *LPPRCINFO;
 
@@ -349,6 +461,14 @@ int (WSAAPI *__sendto)(
 		   );
 
 typedef
+int (WSAAPI *__send)(
+		   SOCKET s,
+		   const char* buf,
+		   int len,
+		   int flags
+		   );
+
+typedef
 int (WSAAPI *__recvfrom)(
 			 SOCKET s,
 			 char* buf,
@@ -368,6 +488,17 @@ int (WSAAPI *__WSASendTo)(
 			  DWORD dwFlags,
 			  const struct sockaddr* lpTo,
 			  int iToLen,
+			  LPWSAOVERLAPPED lpOverlapped,
+			  LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
+			  );
+
+typedef
+int (WSAAPI *__WSASend)(
+			  SOCKET s,
+			  LPWSABUF lpBuffers,
+			  DWORD dwBufferCount,
+			  LPDWORD lpNumberOfBytesSent,
+			  DWORD dwFlags,
 			  LPWSAOVERLAPPED lpOverlapped,
 			  LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
 			  );

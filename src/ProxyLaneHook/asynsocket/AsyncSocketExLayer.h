@@ -95,7 +95,7 @@ protected:
 	virtual BOOL Connect(const SOCKADDR* lpSockAddr, int nSockAddrLen);
 	virtual BOOL Create(UINT nSocketPort = 0, int nSocketType = SOCK_STREAM,
 						long lEvent = FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE,
-						LPCSTR lpszSocketAddress = NULL );
+						LPCSTR lpszSocketAddress = NULL, int nAddressFamily = AF_INET );
 
 	//
 	virtual BOOL Bind(UINT nSocketPort, LPCSTR lpszSocketAddress);
@@ -163,7 +163,8 @@ protected:
 	void CloseNext();
 	BOOL ConnectNext(LPCSTR lpszHostAddress, UINT nHostPort);
 	BOOL ConnectNext(const SOCKADDR* lpSockAddr, int nSockAddrLen);
-	BOOL CreateNext(UINT nSocketPort, int nSocketType, long lEvent, LPCSTR lpszSocketAddress);
+	BOOL CreateNext(UINT nSocketPort, int nSocketType, long lEvent,
+		LPCSTR lpszSocketAddress, int nAddressFamily);
 #ifdef _AFX
 	BOOL GetPeerNameNext(CString& rPeerAddress, UINT& rPeerPort);
 #endif

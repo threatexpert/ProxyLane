@@ -34,6 +34,7 @@ CProxyReceptionCentre::CProxyReceptionCentre(CGlobalProxy *pGlobalProxy)
 	m_PRCWnd = NULL;
 	m_hTestEvent = NULL;
 	m_pTcpServer = NULL;
+	m_pTcpServer6 = NULL;
 	m_pUdpServer = NULL;
 	m_pPipeServer = NULL;
 
@@ -242,7 +243,7 @@ DWORD WINAPI CProxyReceptionCentre::InternalPRCThreadProc()
 
 BOOL CProxyReceptionCentre::StartupPRCServer()
 {
-	ATLASSERT(m_pTcpServer == NULL && m_pUdpServer == NULL);
+	ATLASSERT(m_pTcpServer == NULL && m_pTcpServer6 == NULL && m_pUdpServer == NULL);
 
 	if(!m_pProxyDataHandle)
 		return FALSE;
@@ -259,6 +260,19 @@ BOOL CProxyReceptionCentre::StartupPRCServer()
 		if(!m_pTcpServer->StartupServer())
 		{
 			m_szLastError = _T("Failed to start PRCTcpServer.");
+			break;
+		}
+
+		m_pTcpServer6 = new CPRCTcpServer(this, AF_INET6,
+			m_pTcpServer->GetTCPTaskMgr());
+		if(m_pTcpServer6 == NULL)
+		{
+			m_szLastError = _T("Failed to create IPv6 PRCTcpServer.");
+			break;
+		}
+		if(!m_pTcpServer6->StartupServer())
+		{
+			m_szLastError = _T("Failed to start IPv6 PRCTcpServer.");
 			break;
 		}
 
@@ -305,10 +319,15 @@ BOOL CProxyReceptionCentre::ShutdownPRCServer()
 		delete m_pPipeServer;
 		m_pPipeServer = NULL;
 	}
+	if(m_pTcpServer6)
+	{
+		m_pTcpServer6->ShutdownServer();
+		delete m_pTcpServer6;
+		m_pTcpServer6 = NULL;
+	}
 	if(m_pTcpServer)
 	{
 		m_pTcpServer->ShutdownServer();
-		//m_pTcpServer->xxxx
 		delete m_pTcpServer;
 		m_pTcpServer = NULL;
 	}
@@ -417,6 +436,13 @@ BOOL CProxyReceptionCentre::GetStartupInfo(LPPRCINFO lpStartupInfo)
 		m_szLastError = _T("GetSockName failed.");
 		return FALSE;
 	}
+	addlen = sizeof(lpStartupInfo->tcpaddr6);
+	if(!m_pTcpServer6 ||
+		!m_pTcpServer6->GetSockName(&lpStartupInfo->tcpaddr6, &addlen))
+	{
+		m_szLastError = _T("Get IPv6 SockName failed.");
+		return FALSE;
+	}
 
 	//udp
 
@@ -523,10 +549,11 @@ BOOL CProxyReceptionCentre::GetClientInfo(SOCKET accepted, LPPRCClient lpClientI
 	for(list<PRCClient>::iterator it=m_RegisteredClient.begin(); it!=m_RegisteredClient.end(); it++)
 	{
 		//端口一致
-		if(sa1.GetPort() == it->srcAddr.GetPort())
+		if(sa1.sa_family == it->srcAddr.sa_family &&
+			sa1.GetPort() == it->srcAddr.GetPort())
 		{
 			//bind的时候地址为0则不匹配地址
-			if(it->srcAddr.GetdwIP() == 0 || sa1.GetdwIP() == it->srcAddr.GetdwIP())
+			if(it->srcAddr.IsAny() || sa1.SameAddress(it->srcAddr))
 			{
 				*lpClientInfo = *it;
 				if(bpop)

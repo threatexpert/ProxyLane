@@ -53,6 +53,7 @@ private:
 	BOOL m_bConnShutted;
 	BOOL m_bReadClosed;
 	BOOL m_bWriteShutdown;
+	BOOL m_bForwardingReady;
 	BOOL m_bFullyClosing;
 	em_TMTimeOut m_SocketStatus;
 	CTimeoutMonitor m_TimeoutMonitor[TM_COUNT];
