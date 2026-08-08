@@ -90,6 +90,9 @@
     <ClCompile Include="asynsocket\AsyncProxySocketLayer.cpp">
       <Filter>Source Files\asynsocket</Filter>
     </ClCompile>
+    <ClCompile Include="asynsocket\AsyncSecureSocketLayer.cpp">
+      <Filter>Source Files\asynsocket</Filter>
+    </ClCompile>
     <ClCompile Include="asynsocket\AsyncSocketEx.cpp">
       <Filter>Source Files\asynsocket</Filter>
     </ClCompile>
@@ -201,6 +204,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="asynsocket\AsyncProxySocketLayer.h">
+      <Filter>Header Files\asynsocket</Filter>
+    </ClInclude>
+    <ClInclude Include="asynsocket\AsyncSecureSocketLayer.h">
       <Filter>Header Files\asynsocket</Filter>
     </ClInclude>
     <ClInclude Include="asynsocket\AsyncSocketEx.h">

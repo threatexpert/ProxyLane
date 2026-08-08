@@ -220,6 +220,7 @@ void Localization::ApplyDialog(CWnd* dialog, UINT dialogId)
 		{ IDC_STATIC_TYPE_LABEL, _T("common.type") }, { IDC_STATIC_HOST_LABEL, _T("common.host") },
 		{ IDC_STATIC_PORT_LABEL, _T("common.port") }, { IDC_STATIC_USER_LABEL, _T("common.username") },
 		{ IDC_STATIC_PASSWORD_LABEL, _T("common.password") }, { IDC_STATIC_TestProxy, _T("status.test_not_run") },
+		{ IDC_STATIC_TRANSPORT_LABEL, _T("common.transport") }, { IDC_STATIC_PSK_LABEL, _T("common.psk") },
 		{ IDC_TestProxy, _T("action.test_current") }, { IDOK, _T("action.start_proxy") },
 		{ IDCANCEL, _T("action.stop_proxy") }, { IDC_RADIO_TAB_BASIC, _T("page1.tab_basic") },
 		{ IDC_RADIO_TAB_CHILD, _T("page1.tab_child") }, { IDC_RADIO_TAB_TARGET, _T("page1.tab_target") },

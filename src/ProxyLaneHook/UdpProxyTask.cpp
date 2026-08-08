@@ -253,6 +253,9 @@ BOOL CUdpProxyTask::MatchesAssociation(const LPPRCClient lpPRCClient,
 		m_PRCClient.s == lpPRCClient->s &&
 		m_ProxyInfo.GetProxyType() == lpProxyInfo->GetProxyType() &&
 		m_ProxyInfo.nProxyPort == lpProxyInfo->nProxyPort &&
+		m_ProxyInfo.reserved == lpProxyInfo->reserved &&
+		strcmp(m_ProxyInfo.strTransportPsk.szbuf,
+			lpProxyInfo->strTransportPsk.szbuf) == 0 &&
 		_stricmp(m_ProxyInfo.strProxyHost.szbuf, lpProxyInfo->strProxyHost.szbuf) == 0;
 }
 

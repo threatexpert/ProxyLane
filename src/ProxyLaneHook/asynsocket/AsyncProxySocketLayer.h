@@ -125,6 +125,7 @@ Version history
 #include "autoBuffer.h"
 
 class CSocks5UdpConn;
+class CAsyncSecureSocketLayer;
 
 class CAsyncProxySocketLayer : public CAsyncSocketExLayer
 {
@@ -151,6 +152,7 @@ public:
 	void SetProxy(int nProxyType); //Only PROXYTYPE_NOPROXY
 	void SetProxy(int nProxyType, const CStringA& strProxyHost, int ProxyPort); //May not be PROXYTYPE_NOPROXY
 	void SetProxy(int nProxyType, const CStringA& strProxyHost, int ProxyPort, const CStringA& strProxyUser, const CStringA& strProxyPass); //Only SOCKS5 and HTTP1.1 proxies
+	BOOL SetSecureTransport(const CStringA& psk);
 	//Sets the proxy details.
 	//nProxyType - Type of the proxy. May be PROXYTYPE_NONE, PROXYTYPE_SOCKS4, PROXYTYPE_SOCKS5 or PROXYTYPE_HTTP11
 	//ProxyHost - The address of the proxy. Can be either IP or URL
@@ -270,6 +272,9 @@ protected:
 	sockaddr_in m_udpcltAddr;
 	sockaddr_in m_udpsrvAddr;
 	autoBuffer m_udpBuffer;
+	autoBuffer m_secureUdpBuffer;
+	CStringA m_securePsk;
+	CAsyncSecureSocketLayer *m_pSecureLayer;
 
 };
 

@@ -24,6 +24,8 @@ struct CfgProxyItem
 	int nChildFilterMode;
 	CString strTargetFilter;
 	int nTargetFilterMode;
+	int nTransportMode;
+	CString strTransportPsk;
 };
 
 class CProxyProfileStore

@@ -204,6 +204,7 @@ typedef struct _tagProxyInfo
 	struct string
 	{
 		char szbuf[N];
+		string(){ szbuf[0] = '\0'; }
 
 		operator char*(){ return &szbuf[0]; }
 
@@ -229,8 +230,12 @@ typedef struct _tagProxyInfo
 	INT    nProxyPort;
 	string<128> strProxyUser;
 	string<128> strProxyPass;
-	DWORD  reserved;
+	DWORD  reserved; // PROXY_TRANSPORT_*
+	string<256> strTransportPsk;
 /////////////////////
+
+#define PROXY_TRANSPORT_PLAIN             0
+#define PROXY_TRANSPORT_GONC_TLS_PSK      1
 
 #define PROXYTYPE_NOPROXY	0
 #define PROXYTYPE_SOCKS4	1

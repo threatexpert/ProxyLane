@@ -10,10 +10,10 @@
 #include "ProxyReceptionCentre.h"
 #include "ProxyDataHandle.h"
 
-
 CPRCTcpPeer::CPRCTcpPeer(CTcpProxyTask *pNotify)
 {
 	m_pProxyLayer = NULL;
+	m_pSecureLayer = NULL;
 	m_pNotify = pNotify;
 	m_pProxyDataHandle = (CProxyDataHandle*)pNotify->m_pTaskmgr->m_pPRC->GetPDHInstance();
 	m_ppi.lpC = &pNotify->m_PRCClient;
@@ -140,14 +140,27 @@ BOOL CPRCTcpPeer::AddProxyLayer(LPProxyInfo lpProxyInfo)
 	}
 
 	m_pProxyLayer = pNewLayer;
-	return AddLayer(m_pProxyLayer);
+	if (!AddLayer(m_pProxyLayer))
+		return FALSE;
+	if (lpProxyInfo && lpProxyInfo->reserved == PROXY_TRANSPORT_GONC_TLS_PSK)
+	{
+		m_pSecureLayer = new CAsyncSecureSocketLayer;
+		if (!m_pSecureLayer ||
+			!m_pSecureLayer->Configure(lpProxyInfo->strTransportPsk.szbuf,
+				lpProxyInfo->strProxyHost.szbuf) ||
+			!AddLayer(m_pSecureLayer))
+			return FALSE;
+	}
+	return TRUE;
 }
 
 void CPRCTcpPeer::RemoveAllLayers()
 {
 	CAsyncSocketEx::RemoveAllLayers();
 	delete m_pProxyLayer;
+	delete m_pSecureLayer;
 	m_pProxyLayer = NULL;
+	m_pSecureLayer = NULL;
 }
 
 //void CPRCTcpPeer::PostSocketEvent(long lEvent, int nErrorCode)

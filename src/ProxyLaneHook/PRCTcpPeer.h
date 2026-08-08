@@ -3,6 +3,7 @@
 
 #include "asynsocket\AsyncSocketEx.h"
 #include "asynsocket\AsyncProxySocketLayer.h"
+#include "asynsocket\AsyncSecureSocketLayer.h"
 #include "structinfo.h"
 #include "TimeoutMonitor.h"
 
@@ -72,6 +73,7 @@ private:
 	CPRCTcpPeer *m_pPartner;
 
 	CAsyncProxySocketLayer *m_pProxyLayer;
+	CAsyncSecureSocketLayer *m_pSecureLayer;
 	CTcpProxyTask *m_pNotify;
 	CProxyDataHandle *m_pProxyDataHandle;
 

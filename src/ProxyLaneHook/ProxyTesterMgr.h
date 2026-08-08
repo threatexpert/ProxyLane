@@ -4,6 +4,7 @@
 #include "TSSTL.h"
 #include "asynsocket\AsyncSocketEx.h"
 #include "asynsocket\AsyncProxySocketLayer.h"
+#include "asynsocket\AsyncSecureSocketLayer.h"
 #include "TimerQueue.h"
 
 class CProxyTesterMgr;
@@ -36,6 +37,7 @@ public:
 
 private:
 	CAsyncProxySocketLayer *m_pProxyLayer;
+	CAsyncSecureSocketLayer *m_pSecureLayer;
 
 	PRCClient m_client;
 	ProxyInfo m_proxyinfo;

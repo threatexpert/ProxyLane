@@ -52,6 +52,18 @@ ProxyLane uses user-mode process injection and API hooking to intercept and redi
 
 Open `src/ProxyLane.sln`, select the `Win32` or `x64` platform, and build the solution. Release binaries are written to `bin/`.
 
+### gonc TLS-PSK transport
+
+For a SOCKS5 profile, select `gonc TLS-PSK` under **Transport** and enter the same PSK used by the remote gonc `:s5s` server. Both TCP and UDP use the encrypted SOCKS5 service directly; no local gonc client or standard SOCKS5 bridge is required.
+
+In this initial format, the PSK is stored as plaintext in the profile's `PSK=` field. Protect access to `ProxyLane.ini` accordingly. Secure transport is available only for SOCKS5, and plain HTTP/SOCKS5 profiles do not load the secure component.
+
+The secure implementation is isolated in the optional `ProxyLaneSecureTransport32.dll` and `ProxyLaneSecureTransport64.dll`. The application and Hook DLLs remain built with `v141_xp`, and the secure DLLs are not loaded unless the profile selects secure transport. Build them with the Rust MSVC toolchain:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-secure-transport.ps1
+```
+
 ## Interface Languages
 
 ProxyLane includes Simplified Chinese and English. By default, it follows the Windows UI language: Chinese systems use Simplified Chinese, while all other systems use English. You can also select a language on the **About & Language** page; the change takes effect the next time ProxyLane starts.
@@ -77,7 +89,7 @@ Build the Win32 and x64 Release configurations, then run the following command f
 powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 ```
 
-The script reads version information from the binaries, verifies that all four release binaries have the same version, and creates `dist/ProxyLane-version-Windows.zip`. The archive contains the Win32 and x64 applications, matching Hook DLLs, the sample configuration, and both README files.
+The script reads version information from the application and Hook binaries, verifies that they have the same version, and creates `dist/ProxyLane-version-Windows.zip`. The archive contains the Win32 and x64 applications, matching Hook DLLs, both secure-transport DLLs, the sample configuration, and both README files.
 
 The sample configuration is stored at `examples/ProxyLane.ini` and is copied to the package root as `ProxyLane.ini`.
 
@@ -91,7 +103,3 @@ To use a custom output directory, add `-OutputDirectory D:\releases`.
 - `tests`: unit tests
 - `examples`: sample configuration
 - `scripts`: release packaging scripts
-
-## Version
-
-Current version: 1.2.3

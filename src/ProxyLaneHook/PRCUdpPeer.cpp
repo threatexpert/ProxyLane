@@ -168,6 +168,12 @@ BOOL CPRCUdpPeer::AddProxyLayer(LPProxyInfo lpProxyInfo)
 			return FALSE;
 
 		pLayer->SetProxy(nProxyType, (CStringA)lpProxyInfo->strProxyHost, lpProxyInfo->nProxyPort, (CStringA)lpProxyInfo->strProxyUser, (CStringA)lpProxyInfo->strProxyPass);
+		if (lpProxyInfo->reserved == PROXY_TRANSPORT_GONC_TLS_PSK &&
+			!pLayer->SetSecureTransport(lpProxyInfo->strTransportPsk.szbuf))
+		{
+			delete pLayer;
+			return FALSE;
+		}
 
 		m_pProxyLayer = pLayer;
 		return AddLayer(m_pProxyLayer);

@@ -9,6 +9,16 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+      - name: Install Rust targets
+        shell: powershell
+        run: rustup target add i686-pc-windows-msvc x86_64-pc-windows-msvc
+      - name: Test secure transport (Win32/x64)
+        shell: powershell
+        run: |
+          cargo test --manifest-path .\src\ProxyLaneSecureTransport\Cargo.toml --locked --target i686-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --manifest-path .\src\ProxyLaneSecureTransport\Cargo.toml --locked --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build and run Win32/x64 tests
         shell: powershell
         run: .\tests\run-tests.ps1

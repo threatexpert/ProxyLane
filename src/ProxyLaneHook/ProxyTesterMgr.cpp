@@ -12,13 +12,16 @@ CProxyTester::CProxyTester(CProxyTesterMgr *pNotify)
 {
 	m_pNotify = pNotify;
 	m_pProxyLayer = NULL;
+	m_pSecureLayer = NULL;
 }
 
 CProxyTester::~CProxyTester(void)
 {
 	Close();
 	delete m_pProxyLayer;
+	delete m_pSecureLayer;
 	m_pProxyLayer = NULL;
+	m_pSecureLayer = NULL;
 }
 
 void CProxyTester::Release()
@@ -120,7 +123,21 @@ BOOL CProxyTester::AddProxyLayer(LPProxyInfo lpProxyInfo)
 	}
 
 	m_pProxyLayer = pNewLayer;
-	return AddLayer(m_pProxyLayer);
+	if (!AddLayer(m_pProxyLayer))
+		return FALSE;
+	if (lpProxyInfo && lpProxyInfo->reserved == PROXY_TRANSPORT_GONC_TLS_PSK)
+	{
+		if (m_client.sType == SOCK_DGRAM)
+			return m_pProxyLayer->SetSecureTransport(
+				lpProxyInfo->strTransportPsk.szbuf);
+		m_pSecureLayer = new CAsyncSecureSocketLayer;
+		if (!m_pSecureLayer ||
+			!m_pSecureLayer->Configure(lpProxyInfo->strTransportPsk.szbuf,
+				lpProxyInfo->strProxyHost.szbuf) ||
+			!AddLayer(m_pSecureLayer))
+			return FALSE;
+	}
+	return TRUE;
 }
 
 void CProxyTester::RemoveAllLayers()

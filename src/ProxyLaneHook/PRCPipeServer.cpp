@@ -558,6 +558,10 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 
 				if(bRet)
 				{
+					// Injected processes only need routing policy.  Keep the profile
+					// PSK inside the PRC process even though it is stored in the INI.
+					SecureZeroMemory(pi.strTransportPsk.szbuf,
+						sizeof(pi.strTransportPsk.szbuf));
 					hdr.dataSize = sizeof(pi);
 					if (! WritePipe(hPipe, &hdr, sizeof(hdr)))
 						goto SEC_ERROR;

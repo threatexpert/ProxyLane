@@ -107,6 +107,8 @@ void CPage1::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_EDIT_PORT, m_edit_Port);
 	DDX_Control(pDX, IDC_EDIT_USER, m_edit_User);
 	DDX_Control(pDX, IDC_EDIT_PASS, m_edit_Pass);
+	DDX_Control(pDX, IDC_COMBO_TRANSPORT, m_cbTransport);
+	DDX_Control(pDX, IDC_EDIT_TRANSPORT_PSK, m_editTransportPsk);
 	DDX_Control(pDX, IDC_TestProxy, m_btnTest);
 	DDX_Control(pDX, IDC_CHECK_HOOKTCP, m_btnHookTCP);
 	DDX_Control(pDX, IDC_CHECK_HOOK_UDP, m_btnHookUDP);
@@ -144,9 +146,11 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_EN_CHANGE(IDC_EDIT_PORT, &CPage1::OnProfileFieldChanged)
 	ON_EN_CHANGE(IDC_EDIT_USER, &CPage1::OnProfileFieldChanged)
 	ON_EN_CHANGE(IDC_EDIT_PASS, &CPage1::OnProfileFieldChanged)
+	ON_EN_CHANGE(IDC_EDIT_TRANSPORT_PSK, &CPage1::OnProfileFieldChanged)
 	ON_EN_CHANGE(IDC_EDIT_CHILDFILTER, &CPage1::OnProfileFieldChanged)
 	ON_EN_CHANGE(IDC_EDIT_TARGETFILTER, &CPage1::OnProfileFieldChanged)
 	ON_CBN_SELCHANGE(IDC_CB_PROXYTYPE, &CPage1::OnProfileFieldChanged)
+	ON_CBN_SELCHANGE(IDC_COMBO_TRANSPORT, &CPage1::OnProfileFieldChanged)
 	ON_CBN_EDITCHANGE(IDC_COMBO_CFGS, &CPage1::OnCbnEditchangeComboCfgs)
 	ON_BN_CLICKED(IDC_CHECK_HOOKTCP, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_CHECK_HOOK_UDP, &CPage1::OnProfileFieldChanged)
@@ -190,6 +194,10 @@ BOOL CPage1::OnInitDialog()
 	m_cbProxyType.AddString(_T("SOCKS5"));
 	m_cbProxyType.AddString(_T("HTTP10"));
 	m_cbProxyType.AddString(_T("HTTP11"));
+	m_cbTransport.AddString(Localization::Get(_T("transport.plain")));
+	m_cbTransport.AddString(Localization::Get(_T("transport.gonc_tls_psk")));
+	m_cbTransport.SetCurSel(PROXY_TRANSPORT_PLAIN);
+	UpdateTransportEnable();
 
 	g_ini.SetIniFileName(_T(""));
 #ifdef _WIN64
@@ -499,19 +507,26 @@ BOOL CPage1::GetProxySettings(LPProxySettingsInfo lpPSI)
 BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 {
 
-	CString szType, szHost, szPort, szUser, szPass;
+	CString szType, szHost, szPort, szUser, szPass, szTransportPsk;
 
 	m_cbProxyType.GetLBText(m_cbProxyType.GetCurSel(), szType);
 	m_edit_HostName.GetWindowText(szHost);
 	m_edit_Port.GetWindowText(szPort);
 	m_edit_User.GetWindowText(szUser);
 	m_edit_Pass.GetWindowText(szPass);
+	m_editTransportPsk.GetWindowText(szTransportPsk);
+	const int transportMode = m_cbTransport.GetCurSel() ==
+		PROXY_TRANSPORT_GONC_TLS_PSK
+		? PROXY_TRANSPORT_GONC_TLS_PSK : PROXY_TRANSPORT_PLAIN;
 
 	if (!szHost.GetLength() || !szPort.GetLength() || !_ttoi(szPort))
 		return FALSE;
+	if (transportMode == PROXY_TRANSPORT_GONC_TLS_PSK &&
+		(szType.CompareNoCase(_T("SOCKS5")) != 0 || szTransportPsk.IsEmpty()))
+		return FALSE;
 
 	ProxyInfo pi;
-	pi.reserved = 0;
+	pi.reserved = transportMode;
 
 	pi.szItemName = _T("myproxy");
 	pi.strProxyType = szType;
@@ -519,6 +534,23 @@ BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 	pi.nProxyPort = _ttoi(szPort);
 	pi.strProxyUser = szUser;
 	pi.strProxyPass = szPass;
+	if (transportMode == PROXY_TRANSPORT_GONC_TLS_PSK)
+	{
+#ifdef _UNICODE
+		int required = WideCharToMultiByte(CP_UTF8, 0, szTransportPsk,
+			szTransportPsk.GetLength(), NULL, 0, NULL, NULL);
+		if (required <= 0 || required >= (int)sizeof(pi.strTransportPsk.szbuf))
+			return FALSE;
+		WideCharToMultiByte(CP_UTF8, 0, szTransportPsk,
+			szTransportPsk.GetLength(), pi.strTransportPsk.szbuf, required,
+			NULL, NULL);
+		pi.strTransportPsk.szbuf[required] = '\0';
+#else
+		if (szTransportPsk.GetLength() >= (int)sizeof(pi.strTransportPsk.szbuf))
+			return FALSE;
+		strcpy_s(pi.strTransportPsk.szbuf, szTransportPsk);
+#endif
+	}
 
 	*lpPI = pi;
 	return TRUE;
@@ -562,8 +594,26 @@ void CPage1::SetProfileDirty(BOOL dirty)
 
 void CPage1::OnProfileFieldChanged()
 {
+	UpdateTransportEnable();
 	if (!m_loadingProfile)
 		SetProfileDirty(TRUE);
+}
+
+void CPage1::UpdateTransportEnable()
+{
+	if (!m_editTransportPsk.GetSafeHwnd() || !m_cbTransport.GetSafeHwnd())
+		return;
+	CString proxyType;
+	const int typeIndex = m_cbProxyType.GetCurSel();
+	if (typeIndex != CB_ERR)
+		m_cbProxyType.GetLBText(typeIndex, proxyType);
+	const BOOL supportsSecureTransport =
+		proxyType.CompareNoCase(_T("SOCKS5")) == 0;
+	if (!supportsSecureTransport)
+		m_cbTransport.SetCurSel(PROXY_TRANSPORT_PLAIN);
+	m_cbTransport.EnableWindow(supportsSecureTransport);
+	m_editTransportPsk.EnableWindow(supportsSecureTransport &&
+		m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK);
 }
 
 void CPage1::OnDnsSettingsChanged()
@@ -1009,6 +1059,8 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_edit_Port.SetWindowText(_T("1080"));
 		m_edit_User.SetWindowText(_T(""));
 		m_edit_Pass.SetWindowText(_T(""));
+		m_cbTransport.SetCurSel(PROXY_TRANSPORT_PLAIN);
+		m_editTransportPsk.SetWindowText(_T(""));
 		GetSettings(&m_ProxyInfo);
 
 		m_btnHookTCP.SetCheck(BST_CHECKED);
@@ -1043,6 +1095,10 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_edit_Port.SetWindowText(szPort);
 		m_edit_User.SetWindowText(szUser);
 		m_edit_Pass.SetWindowText(szPass);
+		m_cbTransport.SetCurSel(item->nTransportMode ==
+			PROXY_TRANSPORT_GONC_TLS_PSK ? PROXY_TRANSPORT_GONC_TLS_PSK :
+			PROXY_TRANSPORT_PLAIN);
+		m_editTransportPsk.SetWindowText(item->strTransportPsk);
 
 		GetSettings(&m_ProxyInfo);
 
@@ -1066,6 +1122,7 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		UpdateChildFilterEnable();
 	}
 	UpdateDnsRedirectEnable();
+	UpdateTransportEnable();
 	m_loadedProfileName = item ? item->strName : _T("");
 	m_draftProfileName = m_loadedProfileName;
 	m_loadingProfile = FALSE;
@@ -1076,6 +1133,10 @@ void CPage1::UIGetCfg( CfgProxyItem *item )
 {
 
 	GetSettings(&item->pi);
+	item->nTransportMode = m_cbTransport.GetCurSel() ==
+		PROXY_TRANSPORT_GONC_TLS_PSK ? PROXY_TRANSPORT_GONC_TLS_PSK :
+		PROXY_TRANSPORT_PLAIN;
+	m_editTransportPsk.GetWindowText(item->strTransportPsk);
 
 	item->bHookTCP = m_btnHookTCP.GetCheck() == BST_CHECKED;
 	item->bHookUDP = m_btnHookUDP.GetCheck() == BST_CHECKED;

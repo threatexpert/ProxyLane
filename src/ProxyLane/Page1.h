@@ -29,6 +29,8 @@ public:
 	CEdit     m_edit_Port;
 	CEdit     m_edit_User;
 	CEdit     m_edit_Pass;
+	CComboBox m_cbTransport;
+	CEdit     m_editTransportPsk;
 	CModernButton m_OK;
 	CModernButton m_Cancel;
 	CModernButton m_btnSaveProfile;
@@ -135,4 +137,5 @@ public:
 	void ShowTab(int nTab);
 	void UpdateProxyTestStatus();
 	void UpdateProxyStateUi();
+	void UpdateTransportEnable();
 };

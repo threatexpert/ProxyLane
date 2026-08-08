@@ -70,6 +70,10 @@ BOOL CProxyProfileStore::Load(CfgProxyItem& item) const
 	item.pi.nProxyPort = m_ini.GetInt(section, _T("Port"));
 	item.pi.strProxyUser = m_ini.GetString(section, _T("User"));
 	item.pi.strProxyPass = m_ini.GetString(section, _T("Pass"));
+	CString transport = m_ini.GetString(section, _T("Transport"));
+	item.nTransportMode = transport.CompareNoCase(_T("GONC_TLS_PSK")) == 0
+		? PROXY_TRANSPORT_GONC_TLS_PSK : PROXY_TRANSPORT_PLAIN;
+	item.strTransportPsk = m_ini.GetString(section, _T("PSK"));
 
 	const CString proxyType = (CString)item.pi.strProxyType;
 	const BOOL supportedType = item.pi.GetProxyType() != PROXYTYPE_NOPROXY
@@ -126,6 +130,11 @@ void CProxyProfileStore::Save(CfgProxyItem& item)
 	m_ini.SetInt(section, _T("Port"), item.pi.nProxyPort);
 	m_ini.SetString(section, _T("User"), (CString)item.pi.strProxyUser);
 	m_ini.SetString(section, _T("Pass"), (CString)item.pi.strProxyPass);
+	m_ini.SetString(section, _T("Transport"), item.nTransportMode ==
+		PROXY_TRANSPORT_GONC_TLS_PSK ? _T("GONC_TLS_PSK") : _T("PLAIN"));
+	// Initial secure-transport format intentionally stores the PSK directly
+	// in the profile, as selected by the user.
+	m_ini.SetString(section, _T("PSK"), item.strTransportPsk);
 }
 
 void CProxyProfileStore::Delete(LPCTSTR name)

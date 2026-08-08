@@ -53,6 +53,18 @@ ProxyLane 采用纯用户态的进程注入与 API Hook 技术，对应用程序
 
 打开 `src/ProxyLane.sln`，选择 `Win32` 或 `x64` 平台后构建即可。Release 输出位于 `bin/` 目录。
 
+### gonc TLS-PSK 加密传输
+
+SOCKS5 配置可以在“传输”中选择 `gonc TLS-PSK`，并填写与远端 gonc `:s5s` 服务一致的 PSK。TCP 与 UDP 均直接通过加密 SOCKS5 服务，不需要在本机另外启动 gonc 客户端或标准 SOCKS5 中转。
+
+PSK 按初版设计以明文写入所选 profile 的 `PSK=` 字段，请妥善限制 `ProxyLane.ini` 的访问权限。加密模式仅支持 SOCKS5；普通 HTTP/SOCKS5 模式不加载加密组件。
+
+加密实现位于可选的 `ProxyLaneSecureTransport32.dll` 和 `ProxyLaneSecureTransport64.dll`。主程序及 Hook DLL 仍使用 `v141_xp` 构建，未选择加密模式时不会加载这两个 DLL。构建加密组件需要 Rust MSVC 工具链：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-secure-transport.ps1
+```
+
 ## 界面语言
 
 ProxyLane 内置简体中文和英文。默认跟随 Windows 界面语言，也可以在“关于与语言”页面选择语言；修改后在下次启动时生效。
@@ -74,7 +86,7 @@ ProxyLane 内置简体中文和英文。默认跟随 Windows 界面语言，也�
 powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 ```
 
-脚本会从程序文件属性读取版本号，检查四个发行二进制文件的版本是否一致，并生成 `dist/ProxyLane-版本-Windows.zip`。压缩包包含 Win32/x64 主程序、对应的 Hook DLL、样例配置以及中英文 README。
+脚本会从程序文件属性读取版本号，检查主程序与 Hook DLL 的版本是否一致，并生成 `dist/ProxyLane-版本-Windows.zip`。压缩包包含 Win32/x64 主程序、对应的 Hook DLL、两个加密传输 DLL、样例配置以及中英文 README。
 
 样例配置保存在 `examples/ProxyLane.ini`，打包后会以 `ProxyLane.ini` 放在压缩包根目录。
 

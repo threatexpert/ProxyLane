@@ -346,6 +346,7 @@
     <ClCompile Include="token.cpp" />
     <ClCompile Include="UdpProxyTask.cpp" />
     <ClCompile Include="asynsocket\AsyncProxySocketLayer.cpp" />
+    <ClCompile Include="asynsocket\AsyncSecureSocketLayer.cpp" />
     <ClCompile Include="asynsocket\AsyncSocketEx.cpp" />
     <ClCompile Include="asynsocket\AsyncSocketExLayer.cpp" />
     <ClCompile Include="asynsocket\CBase64Coding.cpp" />
@@ -388,6 +389,7 @@
 	<ClInclude Include="UdpPayloadPolicy.h" />
     <ClInclude Include="UdpProxyTask.h" />
     <ClInclude Include="asynsocket\AsyncProxySocketLayer.h" />
+    <ClInclude Include="asynsocket\AsyncSecureSocketLayer.h" />
     <ClInclude Include="asynsocket\AsyncSocketEx.h" />
     <ClInclude Include="asynsocket\AsyncSocketExLayer.h" />
     <ClInclude Include="asynsocket\CBase64Coding.hpp" />

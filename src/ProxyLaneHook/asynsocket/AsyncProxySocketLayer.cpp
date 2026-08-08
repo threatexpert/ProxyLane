@@ -121,6 +121,7 @@ Version history
 #include "..\Socks5UdpCodec.h"
 #include "types.h"
 #include "AsyncProxySocketLayer.h"
+#include "AsyncSecureSocketLayer.h"
 //#include "atlconv.h" //Unicode<->Ascii conversion macros declared here
 #include "CBase64coding.hpp"
 //
@@ -169,12 +170,20 @@ CAsyncProxySocketLayer::CAsyncProxySocketLayer()
 	m_nAppRecvBufferPos = 0;
 	m_ProxyData.nProxyType = PROXYTYPE_NOPROXY;
 	m_pS5UC = NULL;
+	m_pSecureLayer = NULL;
 }
 
 CAsyncProxySocketLayer::~CAsyncProxySocketLayer()
 {
 	delete[] m_pProxyPeerHost;
 	delete m_pS5UC;
+	delete m_pSecureLayer;
+	if (!m_securePsk.IsEmpty())
+	{
+		LPSTR psk = m_securePsk.GetBuffer();
+		SecureZeroMemory(psk, m_securePsk.GetLength());
+		m_securePsk.ReleaseBuffer();
+	}
 	ClearBuffer();
 	ClearSendBuffer();
 	delete[] m_pAppRecvBuffer;
@@ -1411,6 +1420,17 @@ BOOL CAsyncProxySocketLayer::GetPeerName(SOCKADDR* lpSockAddr, int* lpSockAddrLe
 	return TRUE;
 }
 
+BOOL CAsyncProxySocketLayer::SetSecureTransport(const CStringA& psk)
+{
+	if (psk.IsEmpty() || m_ProxyData.nProxyType != PROXYTYPE_SOCKS5)
+	{
+		WSASetLastError(WSAEINVAL);
+		return FALSE;
+	}
+	m_securePsk = psk;
+	return TRUE;
+}
+
 int CAsyncProxySocketLayer::GetProxyType() const
 {
 	return m_ProxyData.nProxyType;
@@ -1631,6 +1651,20 @@ BOOL CAsyncProxySocketLayer::GetUdpProxyAddr()
 			delete m_pS5UC;
 			return FALSE;
 		}
+		if (!m_securePsk.IsEmpty())
+		{
+			m_pSecureLayer = new CAsyncSecureSocketLayer;
+			if (!m_pSecureLayer ||
+				!m_pSecureLayer->Configure(m_securePsk, m_ProxyData.strProxyHost) ||
+				!m_pS5UC->AddLayer(m_pSecureLayer))
+			{
+				delete m_pSecureLayer;
+				m_pSecureLayer = NULL;
+				delete m_pS5UC;
+				m_pS5UC = NULL;
+				return FALSE;
+			}
+		}
 		if (!m_pS5UC->Create())
 		{
 			delete m_pS5UC;
@@ -1720,10 +1754,26 @@ int CAsyncProxySocketLayer::SendTo(const void* lpBuf, int nBufLen, const SOCKADD
 		return SOCKET_ERROR;
 	}
 
-	int nBytesSent = SendToNext((LPBYTE)m_udpBuffer, packetLength, (SOCKADDR*)&m_udpsrvAddr, sizeof(SOCKADDR));
-	if(nBytesSent >= headerLength)
+	const BYTE* wirePacket = (LPBYTE)m_udpBuffer;
+	int wireLength = packetLength;
+	if (m_pSecureLayer)
 	{
-		nBytesSent -= headerLength;
+		if (!m_pSecureLayer->HasUdpKey() ||
+			!m_secureUdpBuffer.checkBufferSize(packetLength + 16, false) ||
+			m_pSecureLayer->EncryptUdp((LPBYTE)m_udpBuffer, packetLength,
+				m_secureUdpBuffer, packetLength + 16, &wireLength) == SOCKET_ERROR)
+		{
+			WSASetLastError(WSAEPROTONOSUPPORT);
+			return SOCKET_ERROR;
+		}
+		wirePacket = m_secureUdpBuffer;
+	}
+	int nBytesSent = m_pReal_sendto(m_pOwnerSocket->GetSocketHandle(),
+		(const char*)wirePacket, wireLength, nFlags,
+		(SOCKADDR*)&m_udpsrvAddr, sizeof(SOCKADDR));
+	if(nBytesSent == wireLength)
+	{
+		nBytesSent = nBufLen;
 	}
 	return nBytesSent;
 }
@@ -1773,11 +1823,26 @@ int CAsyncProxySocketLayer::SendTo(const void* lpBuf, int nBufLen, UINT nHostPor
 		WSASetLastError(WSAEINVAL);
 		return SOCKET_ERROR;
 	}
-	int nHdrLen = packetLength - nBufLen;
-	int nBytesSent = SendToNext((LPBYTE)m_udpBuffer, packetLength, (SOCKADDR*)&m_udpsrvAddr, sizeof(SOCKADDR));
-	if(nBytesSent >= nHdrLen)
+	const BYTE* wirePacket = (LPBYTE)m_udpBuffer;
+	int wireLength = packetLength;
+	if (m_pSecureLayer)
 	{
-		nBytesSent -= nHdrLen;
+		if (!m_pSecureLayer->HasUdpKey() ||
+			!m_secureUdpBuffer.checkBufferSize(packetLength + 16, false) ||
+			m_pSecureLayer->EncryptUdp((LPBYTE)m_udpBuffer, packetLength,
+				m_secureUdpBuffer, packetLength + 16, &wireLength) == SOCKET_ERROR)
+		{
+			WSASetLastError(WSAEPROTONOSUPPORT);
+			return SOCKET_ERROR;
+		}
+		wirePacket = m_secureUdpBuffer;
+	}
+	int nBytesSent = m_pReal_sendto(m_pOwnerSocket->GetSocketHandle(),
+		(const char*)wirePacket, wireLength, nFlags,
+		(SOCKADDR*)&m_udpsrvAddr, sizeof(SOCKADDR));
+	if(nBytesSent == wireLength)
+	{
+		nBytesSent = nBufLen;
 	}
 	return nBytesSent;
 }
@@ -1790,7 +1855,10 @@ int CAsyncProxySocketLayer::ReceiveFrom(void* lpBuf, int nBufLen, SOCKADDR* lpSo
 		return SOCKET_ERROR;
 	}
 
-	if(!m_udpBuffer.checkBufferSize(nBufLen+CSocks5UdpCodec::MAX_HEADER_SIZE, false))
+	const int plainCapacity = nBufLen + CSocks5UdpCodec::MAX_HEADER_SIZE;
+	const int wireCapacity = plainCapacity + (m_pSecureLayer ? 16 : 0);
+	if(!m_udpBuffer.checkBufferSize(plainCapacity, false) ||
+		(m_pSecureLayer && !m_secureUdpBuffer.checkBufferSize(wireCapacity, false)))
 	{
 		WSASetLastError(ERROR_NOT_ENOUGH_MEMORY);
 		return SOCKET_ERROR;
@@ -1798,8 +1866,10 @@ int CAsyncProxySocketLayer::ReceiveFrom(void* lpBuf, int nBufLen, SOCKADDR* lpSo
 
 	SOCKADDR_IN relayAddress;
 	int relayAddressLength = sizeof(relayAddress);
-	int ret = ReceiveFromNext((LPBYTE)m_udpBuffer, nBufLen + CSocks5UdpCodec::MAX_HEADER_SIZE,
-		(SOCKADDR*)&relayAddress, &relayAddressLength, nFlags);
+	BYTE* wirePacket = m_pSecureLayer ? (LPBYTE)m_secureUdpBuffer : (LPBYTE)m_udpBuffer;
+	int ret = m_pReal_recvfrom(m_pOwnerSocket->GetSocketHandle(),
+		(char*)wirePacket, wireCapacity, nFlags,
+		(SOCKADDR*)&relayAddress, &relayAddressLength);
 	if (ret == SOCKET_ERROR)
 		return ret;
 	if (relayAddress.sin_family != AF_INET ||
@@ -1808,6 +1878,18 @@ int CAsyncProxySocketLayer::ReceiveFrom(void* lpBuf, int nBufLen, SOCKADDR* lpSo
 	{
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
+	}
+	if (m_pSecureLayer)
+	{
+		int plainLength = 0;
+		if (!m_pSecureLayer->HasUdpKey() ||
+			m_pSecureLayer->DecryptUdp(wirePacket, ret, m_udpBuffer,
+				plainCapacity, &plainLength) == SOCKET_ERROR)
+		{
+			WSASetLastError(WSAEPROTONOSUPPORT);
+			return SOCKET_ERROR;
+		}
+		ret = plainLength;
 	}
 
 	CSocks5UdpCodec::DecodedPacket decoded;

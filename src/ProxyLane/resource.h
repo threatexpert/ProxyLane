@@ -82,6 +82,10 @@
 #define IDC_COMBO_LANGUAGE              1064
 #define IDC_CHECK_REDIRECT_PRIVATE_DNS  1065
 #define IDC_EDIT_REDIRECT_DNS           1066
+#define IDC_STATIC_TRANSPORT_LABEL      1067
+#define IDC_COMBO_TRANSPORT             1068
+#define IDC_STATIC_PSK_LABEL            1069
+#define IDC_EDIT_TRANSPORT_PSK          1070
 
 // Next default values for new objects
 // 
@@ -89,7 +93,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        202
 #define _APS_NEXT_COMMAND_VALUE         32771
-#define _APS_NEXT_CONTROL_VALUE         1067
+#define _APS_NEXT_CONTROL_VALUE         1071
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif
