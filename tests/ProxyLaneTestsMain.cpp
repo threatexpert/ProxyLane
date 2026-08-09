@@ -7,6 +7,7 @@ int UdpPayloadPolicyTestsMain();
 int DnsRedirectPolicyTestsMain();
 int ProxyTransportPolicyTestsMain();
 int InetCompatTestsMain();
+int Ipv6BlockPolicyTestsMain();
 
 int main()
 {
@@ -23,6 +24,8 @@ int main()
 	if (ProxyTransportPolicyTestsMain() != 0)
 		return 1;
 	if (InetCompatTestsMain() != 0)
+		return 1;
+	if (Ipv6BlockPolicyTestsMain() != 0)
 		return 1;
 	std::cout << "ProxyLane tests passed" << std::endl;
 	return 0;

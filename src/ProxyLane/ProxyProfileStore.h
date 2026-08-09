@@ -16,6 +16,7 @@ struct CfgProxyItem
 	BOOL bHookTCP;
 	BOOL bHookUDP;
 	BOOL bBlockUDP;
+	BOOL bBlockIPv6;
 	BOOL bHookChildProcess;
 	int dnsOpt;
 	BOOL bRedirectPrivateDNS;

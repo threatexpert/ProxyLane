@@ -81,7 +81,8 @@ CPage1::CPage1(CWnd* pParent /*=NULL*/)
 	m_pTestProxy = 0;
 	m_pProxyTester = 0;
 	m_bIsTesting = FALSE;
-	m_proxyTestPhase = 0;
+	m_proxyTestPhase = PROXY_TEST_NONE;
+	m_testIpv6Result = IPV6_TEST_NOT_RUN;
 	m_testUdpRequested = FALSE;
 	m_ProxyInfo.reserved = 0;
 	memset(&m_runtimeSettings, 0, sizeof(m_runtimeSettings));
@@ -118,6 +119,7 @@ void CPage1::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_CHECK_HOOKTCP, m_btnHookTCP);
 	DDX_Control(pDX, IDC_CHECK_HOOK_UDP, m_btnHookUDP);
 	DDX_Control(pDX, IDC_CHECK_BLOCKUDP, m_btnBlockUDP);
+	DDX_Control(pDX, IDC_CHECK_BLOCK_IPV6, m_btnBlockIPv6);
 	DDX_Control(pDX, IDC_RADIO_DNSLOCAL, m_btnDNSLocal);
 	DDX_Control(pDX, IDC_RADIO_DNSREMOTE, m_btnDNSRemote);
 	DDX_Control(pDX, IDC_CHECK_REDIRECT_PRIVATE_DNS, m_btnRedirectPrivateDNS);
@@ -160,6 +162,7 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_BN_CLICKED(IDC_CHECK_HOOKTCP, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_CHECK_HOOK_UDP, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_CHECK_BLOCKUDP, &CPage1::OnProfileFieldChanged)
+	ON_BN_CLICKED(IDC_CHECK_BLOCK_IPV6, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_RADIO_DNSLOCAL, &CPage1::OnDnsSettingsChanged)
 	ON_BN_CLICKED(IDC_RADIO_DNSREMOTE, &CPage1::OnDnsSettingsChanged)
 	ON_BN_CLICKED(IDC_CHECK_REDIRECT_PRIVATE_DNS, &CPage1::OnDnsSettingsChanged)
@@ -521,6 +524,7 @@ BOOL CPage1::GetProxySettingsFromUi(LPProxySettingsInfo lpPSI)
 	psi.bHookTCP = m_btnHookTCP.GetCheck() == BST_CHECKED;
 	psi.bHookUDP = m_btnHookUDP.GetCheck() == BST_CHECKED;
 	psi.bBlockUDP = m_btnBlockUDP.GetCheck() == BST_CHECKED;
+	psi.bBlockIPv6 = m_btnBlockIPv6.GetCheck() == BST_CHECKED;
 	psi.bHookCreateProcess = m_btnHookChildProcess.GetCheck();
 	psi.nDNSOption = m_btnDNSLocal.GetCheck() ? PSI_DNSOPT_LOCAL : PSI_DNSOPT_REMOTE;
 	psi.bHookLanIP = m_bHookLanIP;
@@ -981,7 +985,8 @@ void CPage1::OnBnClickedTestproxy()
 		m_pProxyTester->Release();
 		m_pProxyTester = NULL;
 		m_bIsTesting = FALSE;
-		m_proxyTestPhase = 0;
+		m_proxyTestPhase = PROXY_TEST_NONE;
+		m_testIpv6Result = IPV6_TEST_NOT_RUN;
 		m_btnTest.SetWindowText(Localization::Get(_T("action.test_current")));
 		UpdateProxyTestStatus();
 		return;
@@ -989,16 +994,11 @@ void CPage1::OnBnClickedTestproxy()
 
 	if (m_pProxyTester)
 		m_pProxyTester->Release();
+	m_pProxyTester = NULL;
 	m_bIsTesting = FALSE;
-	m_proxyTestPhase = 0;
+	m_proxyTestPhase = PROXY_TEST_NONE;
+	m_testIpv6Result = IPV6_TEST_NOT_RUN;
 	m_testUdpRequested = FALSE;
-	m_pProxyTester = m_pTestProxy->CreateTester();
-	
-	if (m_pProxyTester == NULL)
-	{
-		ATLTRACE("OnBnClickedTestproxy -> CreateTester failed.\r\n");
-		return;
-	}
 
 	ProxyInfo testProxyInfo;
 	if (!GetSettings(&testProxyInfo))
@@ -1006,13 +1006,10 @@ void CPage1::OnBnClickedTestproxy()
 		MessageBox(Localization::Get(m_settingsValidationKey),
 			Localization::Get(_T("test.invalid_title")), MB_ICONERROR);
 		m_staticTestProxy.SetStatus(Localization::Get(_T("status.invalid_config")), CStatusLabel::TONE_DANGER);
-		m_pProxyTester->Release();
-		m_pProxyTester = NULL;
-		m_proxyTestPhase = 0;
+		m_proxyTestPhase = PROXY_TEST_NONE;
 		return;
 	}
 	m_testProxyInfo = testProxyInfo;
-	m_proxyTestPhase = 1;
 	m_testUdpRequested = m_btnHookUDP.GetCheck() == BST_CHECKED &&
 		testProxyInfo.GetProxyType() == PROXYTYPE_SOCKS5;
 
@@ -1038,21 +1035,106 @@ void CPage1::OnBnClickedTestproxy()
 #endif
 	client.dstAddr.SetPort(nTestPort);
 
-	if (!m_pProxyTester->Start(this, &client, &testProxyInfo))
+	if (!StartProxyTestPhase(client, PROXY_TEST_TCP, _T("status.testing")))
 	{
 		MessageBox(Localization::Get(_T("test.start_failed")),
 			Localization::Get(_T("test.failed_title")), MB_ICONERROR);
 		m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_failed")), CStatusLabel::TONE_DANGER);
 		ATLTRACE("OnBnClickedTestproxy -> Start failed.\r\n");
-		m_pProxyTester->Release();
-		m_pProxyTester = NULL;
-		m_proxyTestPhase = 0;
+		m_proxyTestPhase = PROXY_TEST_NONE;
 		return;
 	}
 	m_btnTest.SetWindowText(Localization::Get(_T("action.cancel_test")));
-	m_staticTestProxy.SetStatus(Localization::Get(_T("status.testing")), CStatusLabel::TONE_INFO);
 	m_bIsTesting = TRUE;
 
+}
+
+BOOL CPage1::StartProxyTestPhase(const PRCClient& client, int phase,
+	LPCTSTR statusKey)
+{
+	if (!m_pTestProxy || m_pProxyTester)
+		return FALSE;
+
+	m_pProxyTester = m_pTestProxy->CreateTester();
+	if (!m_pProxyTester)
+		return FALSE;
+
+	m_proxyTestPhase = phase;
+	PRCClient mutableClient = client;
+	if (!m_pProxyTester->Start(this, &mutableClient, &m_testProxyInfo))
+	{
+		m_pProxyTester->Release();
+		m_pProxyTester = NULL;
+		m_proxyTestPhase = PROXY_TEST_NONE;
+		return FALSE;
+	}
+
+	if (statusKey && statusKey[0])
+		m_staticTestProxy.SetStatus(Localization::Get(statusKey),
+			CStatusLabel::TONE_INFO);
+	return TRUE;
+}
+
+BOOL CPage1::SupportsIpv6ProxyTest()
+{
+	const int proxyType = m_testProxyInfo.GetProxyType();
+	return proxyType == PROXYTYPE_SOCKS5 ||
+		proxyType == PROXYTYPE_HTTP10 || proxyType == PROXYTYPE_HTTP11;
+}
+
+BOOL CPage1::StartIpv6ProxyTest()
+{
+	if (!SupportsIpv6ProxyTest())
+	{
+		m_testIpv6Result = IPV6_TEST_UNSUPPORTED;
+		return FALSE;
+	}
+
+	PRCClient ipv6Client;
+	ipv6Client.zero();
+	ipv6Client.sType = SOCK_STREAM;
+	// The default is a published Google Public DNS IPv6 resolver. Keep the
+	// address configurable so deployments can replace the third-party probe
+	// without rebuilding ProxyLane. A literal IPv6 address is required: using a
+	// hostname could let the proxy select IPv4 and produce a false positive.
+	CString ipv6TestAddress = g_ini.GetString(_T("options"),
+		_T("IPv6TestAddress"), _T("2001:4860:4860::8888"));
+	ipv6TestAddress.Trim();
+	if (ipv6TestAddress.GetLength() > 2 && ipv6TestAddress[0] == _T('[') &&
+		ipv6TestAddress[ipv6TestAddress.GetLength() - 1] == _T(']'))
+	{
+		ipv6TestAddress = ipv6TestAddress.Mid(1,
+			ipv6TestAddress.GetLength() - 2);
+	}
+	CStringA ipv6TestAddressA(ipv6TestAddress);
+	if (!ipv6Client.dstAddr.SetIP(ipv6TestAddressA) ||
+		!ipv6Client.dstAddr.IsIPv6())
+	{
+		m_testIpv6Result = IPV6_TEST_INVALID_CONFIG;
+		return FALSE;
+	}
+	ipv6Client.dstAddr.SetPort(53);
+	return StartProxyTestPhase(ipv6Client, PROXY_TEST_IPV6,
+		_T("status.testing_ipv6"));
+}
+
+int CPage1::ClassifyIpv6TestResult(int errorCode) const
+{
+	if (errorCode == 0)
+		return IPV6_TEST_AVAILABLE;
+
+	// The ordinary TCP test has already proved that the proxy and its
+	// authentication/secure transport work. A target negotiation failure here
+	// therefore means the proxy could not establish this literal IPv6 target.
+	if (errorCode == PROXYERROR_REQUESTFAILED ||
+		errorCode == WSAEAFNOSUPPORT || errorCode == WSAENETUNREACH ||
+		errorCode == WSAEHOSTUNREACH)
+		return IPV6_TEST_UNAVAILABLE;
+
+	// A new connection to the proxy can still fail transiently, and a timeout
+	// cannot distinguish proxy trouble from a temporarily unreachable public
+	// probe target. Report that as unknown instead of a false negative.
+	return IPV6_TEST_UNKNOWN;
 }
 
 void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM wParam, LPARAM lParam)
@@ -1066,7 +1148,15 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 
 	if (nType == LAYERCALLBACK_STATECHANGE)
 	{
-		if(nCode == connecting)
+		if (m_proxyTestPhase == PROXY_TEST_IPV6)
+		{
+			szText = Localization::Get(_T("status.testing_ipv6"));
+		}
+		else if (m_proxyTestPhase == PROXY_TEST_UDP)
+		{
+			szText = Localization::Get(_T("status.testing_udp"));
+		}
+		else if(nCode == connecting)
 		{
 			szText = Localization::Get(_T("status.connecting"));
 		}else if (nCode == connected)
@@ -1081,41 +1171,67 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 		return;
 	}else if (nType == LAYERCALLBACK_LAYERSPECIFIC)
 	{
+		const int completedPhase = m_proxyTestPhase;
 		//关闭测试对象， 否则下面的MessageBox内部的消息循环可能导致pTester触发其他事件
 		pTester->Stop();
 
-		if (nCode == 0 && m_proxyTestPhase == 1 && m_testUdpRequested)
+		if (completedPhase == PROXY_TEST_IPV6)
+		{
+			m_testIpv6Result = ClassifyIpv6TestResult(nCode);
+			// IPv6 capability is supplementary information. The ordinary proxy
+			// test remains successful even when IPv6 is unavailable or unknown.
+			nCode = 0;
+		}
+		else if (nCode == 0 && completedPhase == PROXY_TEST_TCP &&
+			m_testUdpRequested)
 		{
 			pTester->Release();
 			m_pProxyTester = NULL;
-			m_proxyTestPhase = 2;
 
 			PRCClient udpClient;
 			udpClient.zero();
 			udpClient.sType = SOCK_DGRAM;
 			udpClient.dstAddr.SetIP("8.8.8.8");
 			udpClient.dstAddr.SetPort(53);
-			m_pProxyTester = m_pTestProxy->CreateTester();
-			if (m_pProxyTester && m_pProxyTester->Start(this, &udpClient,
-				&m_testProxyInfo))
-			{
-				m_staticTestProxy.SetStatus(
-					Localization::Get(_T("status.testing_udp")),
-					CStatusLabel::TONE_INFO);
+			if (StartProxyTestPhase(udpClient, PROXY_TEST_UDP,
+				_T("status.testing_udp")))
 				return;
-			}
-			if (m_pProxyTester)
-			{
-				m_pProxyTester->Release();
-				m_pProxyTester = NULL;
-			}
 			nCode = PROXYERROR_UDP_RELAY_FAILED;
+		}
+		else if (nCode == 0 && (completedPhase == PROXY_TEST_TCP ||
+			completedPhase == PROXY_TEST_UDP))
+		{
+			pTester->Release();
+			m_pProxyTester = NULL;
+			if (StartIpv6ProxyTest())
+				return;
+			// Unsupported protocols and a locally failed probe setup are both
+			// reported with the otherwise successful base test below.
+			nCode = 0;
 		}
 
 		if(nCode == 0)
 		{
-			szText = Localization::Get(m_proxyTestPhase == 2
+			szText = Localization::Get(m_testUdpRequested
 				? _T("test.success_tcp_udp") : _T("test.success"));
+			switch (m_testIpv6Result)
+			{
+			case IPV6_TEST_AVAILABLE:
+				szText += Localization::Get(_T("test.ipv6_available"));
+				break;
+			case IPV6_TEST_UNAVAILABLE:
+				szText += Localization::Get(_T("test.ipv6_unavailable"));
+				break;
+			case IPV6_TEST_UNSUPPORTED:
+				szText += Localization::Get(_T("test.ipv6_unsupported"));
+				break;
+			case IPV6_TEST_INVALID_CONFIG:
+				szText += Localization::Get(_T("test.ipv6_invalid_config"));
+				break;
+			default:
+				szText += Localization::Get(_T("test.ipv6_unknown"));
+				break;
+			}
 			if (m_profileDirty && m_runtimeDirty)
 			{
 				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_unsaved_unapplied")), CStatusLabel::TONE_WARNING);
@@ -1131,9 +1247,18 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_unsaved")), CStatusLabel::TONE_WARNING);
 				szText += Localization::Get(_T("test.not_saved"));
 			}
-			else
+			else if (m_testIpv6Result == IPV6_TEST_AVAILABLE)
 				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_saved")), CStatusLabel::TONE_SUCCESS);
-			MessageBox(szText, Localization::Get(_T("test.title")), MB_ICONINFORMATION);
+			else
+				m_staticTestProxy.SetStatus(Localization::Get(
+					m_testIpv6Result == IPV6_TEST_UNAVAILABLE ||
+					m_testIpv6Result == IPV6_TEST_UNSUPPORTED
+						? _T("status.test_passed_ipv6_unavailable")
+						: _T("status.test_passed_ipv6_unknown")),
+					CStatusLabel::TONE_WARNING);
+			MessageBox(szText, Localization::Get(_T("test.title")),
+				m_testIpv6Result == IPV6_TEST_AVAILABLE
+					? MB_ICONINFORMATION : MB_ICONWARNING);
 		}else
 		{
 			switch (nCode)
@@ -1189,7 +1314,7 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 		}
 		m_btnTest.SetWindowText(Localization::Get(_T("action.test_current")));
 		m_bIsTesting = FALSE;
-		m_proxyTestPhase = 0;
+		m_proxyTestPhase = PROXY_TEST_NONE;
 
 	}
 
@@ -1290,6 +1415,7 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_btnHookTCP.SetCheck(BST_CHECKED);
 		m_btnHookUDP.SetCheck(BST_CHECKED);
 		m_btnBlockUDP.SetCheck(BST_UNCHECKED);
+		m_btnBlockIPv6.SetCheck(BST_UNCHECKED);
 		m_btnDNSLocal.SetCheck(BST_CHECKED);
 		m_btnDNSRemote.SetCheck(BST_UNCHECKED);
 		m_btnRedirectPrivateDNS.SetCheck(BST_CHECKED);
@@ -1327,6 +1453,7 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_btnHookTCP.SetCheck(item->bHookTCP ? BST_CHECKED : BST_UNCHECKED);
 		m_btnHookUDP.SetCheck(item->bHookUDP ? BST_CHECKED : BST_UNCHECKED);
 		m_btnBlockUDP.SetCheck(item->bBlockUDP ? BST_CHECKED : BST_UNCHECKED);
+		m_btnBlockIPv6.SetCheck(item->bBlockIPv6 ? BST_CHECKED : BST_UNCHECKED);
 		m_btnHookChildProcess.SetCheck(item->bHookChildProcess ? BST_CHECKED : BST_UNCHECKED);
 		m_btnDNSLocal.SetCheck(item->dnsOpt==PSI_DNSOPT_LOCAL ? BST_CHECKED : BST_UNCHECKED);
 		m_btnDNSRemote.SetCheck(!m_btnDNSLocal.GetCheck());
@@ -1365,6 +1492,7 @@ void CPage1::UIGetCfg( CfgProxyItem *item )
 	item->bHookTCP = m_btnHookTCP.GetCheck() == BST_CHECKED;
 	item->bHookUDP = m_btnHookUDP.GetCheck() == BST_CHECKED;
 	item->bBlockUDP = m_btnBlockUDP.GetCheck() == BST_CHECKED;
+	item->bBlockIPv6 = m_btnBlockIPv6.GetCheck() == BST_CHECKED;
 	item->bHookChildProcess = m_btnHookChildProcess.GetCheck() == BST_CHECKED;
 	item->dnsOpt = m_btnDNSLocal.GetCheck() ? PSI_DNSOPT_LOCAL : PSI_DNSOPT_REMOTE;
 	item->bRedirectPrivateDNS =

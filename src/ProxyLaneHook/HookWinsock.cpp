@@ -11,6 +11,7 @@
 #include "ElevatedLauncher.h"
 #include "UdpPayloadPolicy.h"
 #include "UdpAssociationPolicy.h"
+#include "Ipv6BlockPolicy.h"
 
 #pragma comment(lib,"psapi.lib")
 #pragma comment(lib,"ws2_32.lib")
@@ -82,6 +83,34 @@ static BOOL IsUdpLoopbackDestination(SOCKET socketHandle,
 		return FALSE;
 	return NormalizeSocketAddress(reinterpret_cast<SOCKADDR *>(&peer),
 		peerLength, &normalized) && normalized.IsLoopback();
+}
+
+static BOOL IsBlockedIPv6Destination(SOCKET socketHandle,
+	const SOCKADDR *destination, int destinationLength)
+{
+	_SockAddr normalized;
+	if (destination)
+	{
+		if (!NormalizeSocketAddress(destination, destinationLength, &normalized))
+			return FALSE;
+	}
+	else
+	{
+		SOCKADDR_STORAGE peer;
+		ZeroMemory(&peer, sizeof(peer));
+		int peerLength = sizeof(peer);
+		if (::getpeername(socketHandle, reinterpret_cast<SOCKADDR *>(&peer),
+			&peerLength) == SOCKET_ERROR ||
+			!NormalizeSocketAddress(reinterpret_cast<SOCKADDR *>(&peer),
+				peerLength, &normalized))
+		{
+			return FALSE;
+		}
+	}
+	// IPv4-mapped IPv6 addresses are normalized to AF_INET above and remain
+	// usable. Local IPv6 IPC must also keep working when external IPv6 is
+	// disabled for an injected process.
+	return Ipv6BlockPolicy::ShouldBlock(normalized);
 }
 
 static BOOL IsMdnsDestination(const SOCKADDR *destination,
@@ -743,6 +772,11 @@ CHookWinsock::inhook_connect(SOCKET s, const struct sockaddr FAR * name, int nam
 	_SockAddr addrname;
 	if (!NormalizeSocketAddress(name, namelen, &addrname))
 		return CallTrampoline(connect)(s, name, namelen);
+	if (m_psi.bBlockIPv6 && Ipv6BlockPolicy::ShouldBlock(addrname))
+	{
+		WSASetLastError(WSAEAFNOSUPPORT);
+		return SOCKET_ERROR;
+	}
 	if (!EnsureSocketBound(s, name))
 		return SOCKET_ERROR;
 
@@ -794,6 +828,11 @@ CHookWinsock::inhook_WSAConnect(SOCKET s, const struct sockaddr* name, int namel
 	if (!NormalizeSocketAddress(name, namelen, &addrname))
 		return CallTrampoline(WSAConnect)(s, name, namelen, lpCallerData,
 			lpCalleeData, lpSQOS, lpGQOS);
+	if (m_psi.bBlockIPv6 && Ipv6BlockPolicy::ShouldBlock(addrname))
+	{
+		WSASetLastError(WSAEAFNOSUPPORT);
+		return SOCKET_ERROR;
+	}
 	if (!EnsureSocketBound(s, name))
 		return SOCKET_ERROR;
 
@@ -876,6 +915,11 @@ BOOL PASCAL CHookWinsock::inhook_ConnectEx(
 		WSASetLastError(WSAEFAULT);
 		return FALSE;
 	}
+	if (m_psi.bBlockIPv6 && Ipv6BlockPolicy::ShouldBlock(addrname))
+	{
+		WSASetLastError(WSAEAFNOSUPPORT);
+		return FALSE;
+	}
 
 	HookDecision decision = HackConnect(s, addrname);
 	if (decision == HOOK_FAILED)
@@ -922,6 +966,12 @@ INT PASCAL CHookWinsock::inhook_WSASendMsg(SOCKET s, LPWSAMSG lpMsg,
 	if (!m_pWSASendMsg)
 	{
 		WSASetLastError(WSAEOPNOTSUPP);
+		return SOCKET_ERROR;
+	}
+	if (m_psi.bBlockIPv6 && lpMsg &&
+		IsBlockedIPv6Destination(s, lpMsg->name, lpMsg->namelen))
+	{
+		WSASetLastError(WSAEAFNOSUPPORT);
 		return SOCKET_ERROR;
 	}
 	if (m_psi.bBlockUDP && (!lpMsg ||
@@ -1283,6 +1333,11 @@ MyDetourProc(has_Return, int, WSAAPI, WSASendTo, (
 
 int WSAAPI CHookWinsock::inhook_sendto(SOCKET s, const char* buf, int len, int flags, const struct sockaddr* to, int tolen)
 {
+	if (m_psi.bBlockIPv6 && IsBlockedIPv6Destination(s, to, tolen))
+	{
+		WSASetLastError(WSAEAFNOSUPPORT);
+		return SOCKET_ERROR;
+	}
 	if (m_psi.bBlockUDP &&
 		!IsUdpLoopbackDestination(s, to, tolen))
 	{
@@ -1333,6 +1388,11 @@ int WSAAPI CHookWinsock::inhook_WSASendTo(
 	LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
 	)
 {
+	if (m_psi.bBlockIPv6 && IsBlockedIPv6Destination(s, lpTo, iToLen))
+	{
+		WSASetLastError(WSAEAFNOSUPPORT);
+		return SOCKET_ERROR;
+	}
 	if (m_psi.bBlockUDP &&
 		!IsUdpLoopbackDestination(s, lpTo, iToLen))
 	{

@@ -278,7 +278,10 @@ void CStatusLabel::SetStatus(LPCTSTR text, Tone tone)
 	m_secondaryText.Empty();
 	SetWindowText(text ? text : _T(""));
 	if (GetSafeHwnd())
+	{
 		Invalidate(FALSE);
+		UpdateOverflowTooltip();
+	}
 }
 
 void CStatusLabel::SetTwoLineStatus(LPCTSTR primaryText, LPCTSTR secondaryText, Tone tone)
@@ -289,13 +292,109 @@ void CStatusLabel::SetTwoLineStatus(LPCTSTR primaryText, LPCTSTR secondaryText, 
 	m_secondaryText = secondaryText ? secondaryText : _T("");
 	SetWindowText(m_secondaryText);
 	if (GetSafeHwnd())
+	{
 		Invalidate(FALSE);
+		UpdateOverflowTooltip();
+	}
 }
 
 void CStatusLabel::PreSubclassWindow()
 {
-	ModifyStyle(0x0000001F, SS_OWNERDRAW);
+	ModifyStyle(0x0000001F, SS_OWNERDRAW | SS_NOTIFY);
 	CStatic::PreSubclassWindow();
+	CWnd* parent = GetParent();
+	if (parent && m_tooltip.Create(parent, TTS_ALWAYSTIP | TTS_NOPREFIX))
+	{
+		m_tooltip.AddTool(this, _T(" "));
+		m_tooltip.SetMaxTipWidth(UiTheme::ScaleForWindow(m_hWnd, 420));
+		m_tooltip.Activate(FALSE);
+		UpdateOverflowTooltip();
+	}
+}
+
+BEGIN_MESSAGE_MAP(CStatusLabel, CStatic)
+	ON_WM_SIZE()
+END_MESSAGE_MAP()
+
+BOOL CStatusLabel::PreTranslateMessage(MSG* message)
+{
+	if (message && m_tooltip.GetSafeHwnd())
+	{
+		if (message->message == WM_MOUSEMOVE)
+			UpdateOverflowTooltip();
+		m_tooltip.RelayEvent(message);
+	}
+	return CStatic::PreTranslateMessage(message);
+}
+
+void CStatusLabel::OnSize(UINT type, int cx, int cy)
+{
+	CStatic::OnSize(type, cx, cy);
+	UpdateOverflowTooltip();
+}
+
+void CStatusLabel::UpdateOverflowTooltip()
+{
+	if (!GetSafeHwnd() || !m_tooltip.GetSafeHwnd())
+		return;
+
+	CRect client;
+	GetClientRect(&client);
+	if (client.IsRectEmpty())
+	{
+		m_tooltip.Activate(FALSE);
+		return;
+	}
+
+	CClientDC dc(this);
+	CFont* font = GetFont();
+	CFont* oldFont = font ? dc.SelectObject(font) : NULL;
+	BOOL truncated = FALSE;
+	CString fullText;
+
+	if (m_twoLine)
+	{
+		const int horizontalPadding = UiTheme::ScaleForWindow(m_hWnd, 9);
+		const int dotSize = UiTheme::ScaleForWindow(m_hWnd, 6);
+		const int dotGap = UiTheme::ScaleForWindow(m_hWnd, 6);
+		const int innerWidth = max(0, client.Width() - horizontalPadding * 2);
+		const int primaryWidth = max(0, innerWidth - dotSize - dotGap);
+		truncated = dc.GetTextExtent(m_primaryText).cx > primaryWidth ||
+			dc.GetTextExtent(m_secondaryText).cx > innerWidth;
+		fullText = m_primaryText;
+		if (!m_secondaryText.IsEmpty())
+		{
+			if (!fullText.IsEmpty())
+				fullText += _T("\r\n");
+			fullText += m_secondaryText;
+		}
+	}
+	else
+	{
+		GetWindowText(fullText);
+		const int horizontalPadding = UiTheme::ScaleForWindow(m_hWnd, 8);
+		const int availableWidth = max(0, client.Width() -
+			UiTheme::ScaleForWindow(m_hWnd, 2) - horizontalPadding * 2);
+		truncated = dc.GetTextExtent(fullText).cx > availableWidth;
+	}
+
+	if (oldFont)
+		dc.SelectObject(oldFont);
+
+	if (!truncated || fullText.IsEmpty())
+	{
+		m_tooltip.Pop();
+		m_tooltip.Activate(FALSE);
+		m_tooltipText.Empty();
+		return;
+	}
+
+	if (m_tooltipText != fullText)
+	{
+		m_tooltipText = fullText;
+		m_tooltip.UpdateTipText(m_tooltipText, this);
+	}
+	m_tooltip.Activate(TRUE);
 }
 
 void CStatusLabel::DrawItem(LPDRAWITEMSTRUCT info)

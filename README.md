@@ -98,6 +98,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 
 样例配置保存在 `examples/ProxyLane.ini`，打包后会以 `ProxyLane.ini` 放在压缩包根目录。
 
+“测试当前设置”使用 `[options]` 下的 `IPv6TestAddress` 作为 IPv6 出口探测地址；该值必须是 IPv6 字面地址，默认使用 `2001:4860:4860::8888`，探测端口为 TCP 53。
+
+每个 profile 可使用 `BlockIPv6=1` 阻止被代理进程访问外部 IPv6 地址；IPv4、IPv4-mapped IPv6 和本机 `::1` 不受影响。界面中的“阻止 IPv6”默认关闭。
+
 如需指定输出目录，可增加参数 `-OutputDirectory D:\releases`。
 
 ## 项目结构

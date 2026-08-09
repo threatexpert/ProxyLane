@@ -94,10 +94,17 @@ public:
 
 protected:
 	virtual void PreSubclassWindow();
+	virtual BOOL PreTranslateMessage(MSG* message);
 	virtual void DrawItem(LPDRAWITEMSTRUCT drawItemStruct);
+	afx_msg void OnSize(UINT type, int cx, int cy);
+	void UpdateOverflowTooltip();
 
 	Tone m_tone;
 	BOOL m_twoLine;
 	CString m_primaryText;
 	CString m_secondaryText;
+	CString m_tooltipText;
+	CToolTipCtrl m_tooltip;
+
+	DECLARE_MESSAGE_MAP()
 };

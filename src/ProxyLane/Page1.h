@@ -38,6 +38,23 @@ public:
 	CModernButton m_btnDeleteProfile;
 
 private:
+	enum ProxyTestPhase
+	{
+		PROXY_TEST_NONE = 0,
+		PROXY_TEST_TCP,
+		PROXY_TEST_UDP,
+		PROXY_TEST_IPV6
+	};
+
+	enum Ipv6TestResult
+	{
+		IPV6_TEST_NOT_RUN = 0,
+		IPV6_TEST_AVAILABLE,
+		IPV6_TEST_UNAVAILABLE,
+		IPV6_TEST_UNKNOWN,
+		IPV6_TEST_UNSUPPORTED,
+		IPV6_TEST_INVALID_CONFIG
+	};
 
 	ProxyInfo m_ProxyInfo;
 	ProxySettingsInfo m_runtimeSettings;
@@ -50,6 +67,7 @@ private:
 	IProxyTester* m_pProxyTester;
 	BOOL m_bIsTesting;
 	int m_proxyTestPhase;
+	int m_testIpv6Result;
 	BOOL m_testUdpRequested;
 	ProxyInfo m_testProxyInfo;
 	BOOL m_profileDirty;
@@ -79,6 +97,11 @@ private:
 	CString GetCurrentProfileName();
 	BOOL SaveCurrentProfile(LPCTSTR profileName = NULL);
 	void RestoreProfileSelection();
+	BOOL StartProxyTestPhase(const PRCClient& client, int phase,
+		LPCTSTR statusKey);
+	BOOL StartIpv6ProxyTest();
+	BOOL SupportsIpv6ProxyTest();
+	int ClassifyIpv6TestResult(int errorCode) const;
 
 public:
 
@@ -112,6 +135,7 @@ public:
 	CButton m_btnHookTCP;
 	CButton m_btnHookUDP;
 	CButton m_btnBlockUDP;
+	CButton m_btnBlockIPv6;
 	CButton m_btnDNSLocal;
 	CButton m_btnDNSRemote;
 	CButton m_btnRedirectPrivateDNS;

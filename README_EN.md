@@ -93,6 +93,10 @@ The script reads version information from the application and Hook binaries, ver
 
 The sample configuration is stored at `examples/ProxyLane.ini` and is copied to the package root as `ProxyLane.ini`.
 
+“Test Current” uses `IPv6TestAddress` under `[options]` as its IPv6 egress probe address. It must be an IPv6 literal; the default is `2001:4860:4860::8888`, probed over TCP port 53.
+
+Each profile can set `BlockIPv6=1` to prevent injected processes from reaching external IPv6 destinations. IPv4, IPv4-mapped IPv6, and local `::1` remain available. The “Block IPv6” UI option is off by default.
+
 To use a custom output directory, add `-OutputDirectory D:\releases`.
 
 ## Project Structure

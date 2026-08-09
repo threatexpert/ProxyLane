@@ -53,6 +53,7 @@ BOOL CProxyProfileStore::Load(CfgProxyItem& item) const
 	item.bHookTCP = !!m_ini.GetDWORD(section, _T("HookTCP"), TRUE);
 	item.bHookUDP = !!m_ini.GetDWORD(section, _T("HookUDP"), TRUE);
 	item.bBlockUDP = !!m_ini.GetDWORD(section, _T("BlockUDP"), FALSE);
+	item.bBlockIPv6 = !!m_ini.GetDWORD(section, _T("BlockIPv6"), FALSE);
 	item.dnsOpt = m_ini.GetDWORD(section, _T("dnsOpt"), PSI_DNSOPT_REMOTE);
 	item.bRedirectPrivateDNS = !!m_ini.GetDWORD(section,
 		_T("RedirectPrivateDNS"), TRUE);
@@ -117,6 +118,7 @@ void CProxyProfileStore::Save(CfgProxyItem& item)
 	m_ini.SetDWORD(section, _T("HookTCP"), item.bHookTCP);
 	m_ini.SetDWORD(section, _T("HookUDP"), item.bHookUDP);
 	m_ini.SetDWORD(section, _T("BlockUDP"), item.bBlockUDP);
+	m_ini.SetDWORD(section, _T("BlockIPv6"), item.bBlockIPv6);
 	m_ini.DeleteKeyName(section, _T("UDPAddr"));
 	m_ini.SetDWORD(section, _T("dnsOpt"), item.dnsOpt);
 	m_ini.SetDWORD(section, _T("RedirectPrivateDNS"), item.bRedirectPrivateDNS);
