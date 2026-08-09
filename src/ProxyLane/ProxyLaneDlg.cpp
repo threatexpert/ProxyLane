@@ -154,6 +154,11 @@ END_MESSAGE_MAP()
 BOOL CProxyLaneDlg::OnInitDialog()
 {
 	CModernDialog::OnInitDialog();
+	// Do not expose a half-initialized child-dialog tree. On a busy machine
+	// Windows can otherwise compose individual controls before page creation,
+	// localization and profile loading have all completed.
+	ShowWindow(SW_HIDE);
+	SetRedraw(FALSE);
 
 	SetIcon(m_hIcon, TRUE);			// 设置大图标
 	SetIcon(m_hIcon, FALSE);		// 设置小图标
@@ -168,7 +173,12 @@ BOOL CProxyLaneDlg::OnInitDialog()
 	//	return FALSE;
 	//}
 
-	m_MainTab.CreateTabCtrl(this);
+	if (!m_MainTab.CreateTabCtrl(this))
+	{
+		SetRedraw(TRUE);
+		EndDialog(IDCANCEL);
+		return FALSE;
+	}
 	DragAcceptFiles(TRUE);
 
 	SetWindowText(AppVersion::DisplayTitle());
@@ -176,11 +186,19 @@ BOOL CProxyLaneDlg::OnInitDialog()
 	s_uTaskbarRestart = RegisterWindowMessage(TEXT("TaskbarCreated"));
 
 	AddTaskbarIcons();
+	m_MainTab.FinalizeLayout(FALSE);
+	SetRedraw(TRUE);
 
 	if (theApp.GetAutomationOptions().enabled)
 	{
 		ShowWindow(SW_HIDE);
 		PostMessage(WM_AUTOMATION_START);
+	}
+	else
+	{
+		ShowWindow(SW_SHOW);
+		RedrawWindow(NULL, NULL,
+			RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
 	}
 
 	return TRUE;  // 除非将焦点设置到控件，否则返回 TRUE

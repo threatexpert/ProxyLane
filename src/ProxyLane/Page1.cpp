@@ -81,6 +81,8 @@ CPage1::CPage1(CWnd* pParent /*=NULL*/)
 	m_pTestProxy = 0;
 	m_pProxyTester = 0;
 	m_bIsTesting = FALSE;
+	m_proxyTestPhase = 0;
+	m_testUdpRequested = FALSE;
 	m_ProxyInfo.reserved = 0;
 	memset(&m_runtimeSettings, 0, sizeof(m_runtimeSettings));
 }
@@ -239,6 +241,7 @@ BOOL CPage1::OnInitDialog()
 
 	m_bHookLanIP = g_ini.GetInt(_T("options"), _T("HookLanIP"), 1);
 	m_bDisableLLMNR = g_ini.GetInt(_T("options"), _T("DisableLLMNR"), 1);
+	m_bDisableMDNS = g_ini.GetInt(_T("options"), _T("DisableMDNS"), 1);
 
 	ShowTab(0);
 	m_loadingProfile = FALSE;
@@ -522,6 +525,7 @@ BOOL CPage1::GetProxySettingsFromUi(LPProxySettingsInfo lpPSI)
 	psi.nDNSOption = m_btnDNSLocal.GetCheck() ? PSI_DNSOPT_LOCAL : PSI_DNSOPT_REMOTE;
 	psi.bHookLanIP = m_bHookLanIP;
 	psi.bDisableLLMNR = m_bDisableLLMNR;
+	psi.bDisableMDNS = m_bDisableMDNS;
 	psi.bRedirectPrivateDNS = m_btnDNSRemote.GetCheck() == BST_CHECKED &&
 		m_btnRedirectPrivateDNS.GetCheck() == BST_CHECKED;
 	psi.redirectDNSAddr.Clear();
@@ -977,6 +981,7 @@ void CPage1::OnBnClickedTestproxy()
 		m_pProxyTester->Release();
 		m_pProxyTester = NULL;
 		m_bIsTesting = FALSE;
+		m_proxyTestPhase = 0;
 		m_btnTest.SetWindowText(Localization::Get(_T("action.test_current")));
 		UpdateProxyTestStatus();
 		return;
@@ -985,6 +990,8 @@ void CPage1::OnBnClickedTestproxy()
 	if (m_pProxyTester)
 		m_pProxyTester->Release();
 	m_bIsTesting = FALSE;
+	m_proxyTestPhase = 0;
+	m_testUdpRequested = FALSE;
 	m_pProxyTester = m_pTestProxy->CreateTester();
 	
 	if (m_pProxyTester == NULL)
@@ -1001,8 +1008,13 @@ void CPage1::OnBnClickedTestproxy()
 		m_staticTestProxy.SetStatus(Localization::Get(_T("status.invalid_config")), CStatusLabel::TONE_DANGER);
 		m_pProxyTester->Release();
 		m_pProxyTester = NULL;
+		m_proxyTestPhase = 0;
 		return;
 	}
+	m_testProxyInfo = testProxyInfo;
+	m_proxyTestPhase = 1;
+	m_testUdpRequested = m_btnHookUDP.GetCheck() == BST_CHECKED &&
+		testProxyInfo.GetProxyType() == PROXYTYPE_SOCKS5;
 
 	PRCClient client;
 
@@ -1034,9 +1046,9 @@ void CPage1::OnBnClickedTestproxy()
 		ATLTRACE("OnBnClickedTestproxy -> Start failed.\r\n");
 		m_pProxyTester->Release();
 		m_pProxyTester = NULL;
+		m_proxyTestPhase = 0;
 		return;
 	}
-
 	m_btnTest.SetWindowText(Localization::Get(_T("action.cancel_test")));
 	m_staticTestProxy.SetStatus(Localization::Get(_T("status.testing")), CStatusLabel::TONE_INFO);
 	m_bIsTesting = TRUE;
@@ -1072,9 +1084,38 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 		//关闭测试对象， 否则下面的MessageBox内部的消息循环可能导致pTester触发其他事件
 		pTester->Stop();
 
+		if (nCode == 0 && m_proxyTestPhase == 1 && m_testUdpRequested)
+		{
+			pTester->Release();
+			m_pProxyTester = NULL;
+			m_proxyTestPhase = 2;
+
+			PRCClient udpClient;
+			udpClient.zero();
+			udpClient.sType = SOCK_DGRAM;
+			udpClient.dstAddr.SetIP("8.8.8.8");
+			udpClient.dstAddr.SetPort(53);
+			m_pProxyTester = m_pTestProxy->CreateTester();
+			if (m_pProxyTester && m_pProxyTester->Start(this, &udpClient,
+				&m_testProxyInfo))
+			{
+				m_staticTestProxy.SetStatus(
+					Localization::Get(_T("status.testing_udp")),
+					CStatusLabel::TONE_INFO);
+				return;
+			}
+			if (m_pProxyTester)
+			{
+				m_pProxyTester->Release();
+				m_pProxyTester = NULL;
+			}
+			nCode = PROXYERROR_UDP_RELAY_FAILED;
+		}
+
 		if(nCode == 0)
 		{
-			szText = Localization::Get(_T("test.success"));
+			szText = Localization::Get(m_proxyTestPhase == 2
+				? _T("test.success_tcp_udp") : _T("test.success"));
 			if (m_profileDirty && m_runtimeDirty)
 			{
 				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_unsaved_unapplied")), CStatusLabel::TONE_WARNING);
@@ -1119,6 +1160,12 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 			case PROXYERROR_SECURE_HANDSHAKE:
 				szText = Localization::Get(_T("test.secure_handshake_failed"));
 				break;
+			case PROXYERROR_UDP_UNSUPPORTED:
+				szText = Localization::Get(_T("test.udp_unsupported"));
+				break;
+			case PROXYERROR_UDP_RELAY_FAILED:
+				szText = Localization::Get(_T("test.udp_relay_failed"));
+				break;
 
 			default:
 				szText = Localization::Format(_T("test.negotiation_failed"), nCode);
@@ -1135,10 +1182,14 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 			MessageBox(szText);
 		}
 
-		pTester->Release();
-		m_pProxyTester = NULL;
+		if (m_pProxyTester)
+		{
+			m_pProxyTester->Release();
+			m_pProxyTester = NULL;
+		}
 		m_btnTest.SetWindowText(Localization::Get(_T("action.test_current")));
 		m_bIsTesting = FALSE;
+		m_proxyTestPhase = 0;
 
 	}
 

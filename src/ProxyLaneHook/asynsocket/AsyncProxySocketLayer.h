@@ -353,6 +353,8 @@ private:
 #define PROXYERROR_CANTRESOLVEHOST	7
 #define PROXYERROR_SECURE_UNAVAILABLE	20
 #define PROXYERROR_SECURE_HANDSHAKE	21
+#define PROXYERROR_UDP_UNSUPPORTED	22
+#define PROXYERROR_UDP_RELAY_FAILED	23
 
 //Status messages
 #define PROXYSTATUS_LISTENSOCKETCREATED 8	//Called when a listen socket was created successfully. Unlike the normal listen function,

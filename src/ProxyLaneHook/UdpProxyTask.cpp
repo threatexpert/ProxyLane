@@ -144,7 +144,7 @@ BOOL CUdpProxyTask::AddRoute(LPPRCClient lpPRCClient)
 				it->client = *lpPRCClient;
 				it->client.udpAddr = routeAddress;
 				lpPRCClient->udpAddr = routeAddress;
-				PrintText(_T("UDP route reused: PID %d, socket %Iu, route %s:%d.\r\n"),
+				ATLTRACE(_T("UDP route reused: PID %d, socket %Iu, route %s:%d.\r\n"),
 					lpPRCClient->dwPid, (ULONG_PTR)lpPRCClient->s,
 					lpPRCClient->udpAddr.IsIPv6() ? _T("[::1]") : _T("127.0.0.1"),
 					lpPRCClient->udpAddr.GetPort());
@@ -201,7 +201,7 @@ BOOL CUdpProxyTask::AddRoute(LPPRCClient lpPRCClient)
 			m_pServer->SetPartner(peer);
 		m_LocalProxyUdpPort = routeAddress.GetPort();
 	}
-	PrintText(_T("UDP route reserved: PID %d, socket %Iu, route %s:%d.\r\n"),
+	ATLTRACE(_T("UDP route reserved: PID %d, socket %Iu, route %s:%d.\r\n"),
 		lpPRCClient->dwPid, (ULONG_PTR)lpPRCClient->s,
 		routeAddress.IsIPv6() ? _T("[::1]") : _T("127.0.0.1"),
 		routeAddress.GetPort());
@@ -270,7 +270,19 @@ VOID CUdpProxyTask::OnPeerClosed(CPRCUdpPeer *pPeer, int errorCode)
 		// Keep every application-facing route bound.  Deletion/recreation of
 		// the closed server peer is deferred to the task timer so this callback
 		// never deletes the object currently executing OnClose().
-		ScheduleServerReconnect(errorCode);
+		if (m_pTaskmgr->ReportUdpAssociationFailure(&m_ProxyInfo,
+			errorCode))
+		{
+			if (m_pTaskmgr->IsUdpPermanentlyUnsupported())
+				CloseTask();
+			else
+			{
+				ScheduleServerReconnect(errorCode);
+				m_nextServerReconnect = GetTickCount() + 60 * 1000;
+			}
+		}
+		else
+			ScheduleServerReconnect(errorCode);
 		return;
 	}
 
@@ -285,6 +297,7 @@ VOID CUdpProxyTask::OnServerReady(CPRCUdpPeer *pPeer)
 		pPeer != m_pServer)
 		return;
 	m_upstreamState = UdpAssociationPolicy::UPSTREAM_READY;
+	m_pTaskmgr->ReportUdpAssociationReady(&m_ProxyInfo);
 	m_serverReconnectDelay = 250;
 	m_lastServerError = 0;
 	PrintText(_T("UDP SOCKS5 association ready; local route %d.\r\n"),
@@ -337,6 +350,21 @@ VOID CUdpProxyTask::OnServerWritable()
 
 		if (!CreateServerPeer())
 		{
+			int errorCode = WSAGetLastError();
+			if (!errorCode)
+				errorCode = WSAECONNREFUSED;
+			if (m_pTaskmgr->ReportUdpAssociationFailure(
+				&m_ProxyInfo, errorCode))
+			{
+				if (m_pTaskmgr->IsUdpPermanentlyUnsupported())
+					CloseTask();
+				else
+				{
+					m_upstreamState = UdpAssociationPolicy::UPSTREAM_RECONNECT_WAIT;
+					m_nextServerReconnect = now + 60 * 1000;
+				}
+				return;
+			}
 			m_upstreamState = UdpAssociationPolicy::UPSTREAM_RECONNECT_WAIT;
 			m_serverReconnectDelay = min(m_serverReconnectDelay * 2, (DWORD)5000);
 			m_nextServerReconnect = now + m_serverReconnectDelay;
@@ -470,7 +498,7 @@ VOID CUdpProxyTask::WakeServerAssociation()
 		m_upstreamState == UdpAssociationPolicy::UPSTREAM_ROUTE_RESERVED;
 	m_upstreamState = UdpAssociationPolicy::UPSTREAM_ASSOCIATING;
 	m_serverReconnectDelay = 250;
-	PrintText(firstActivation
+	ATLTRACE(firstActivation
 		? _T("UDP upstream starting after first datagram; local route %d was ready.\r\n")
 		: _T("UDP association waking; local route %d was preserved.\r\n"),
 		m_LocalProxyUdpPort);
@@ -480,7 +508,19 @@ VOID CUdpProxyTask::WakeServerAssociation()
 		int errorCode = WSAGetLastError();
 		if (!errorCode)
 			errorCode = WSAECONNREFUSED;
-		ScheduleServerReconnect(errorCode);
+		if (m_pTaskmgr->ReportUdpAssociationFailure(&m_ProxyInfo,
+			errorCode))
+		{
+			if (m_pTaskmgr->IsUdpPermanentlyUnsupported())
+				CloseTask();
+			else
+			{
+				ScheduleServerReconnect(errorCode);
+				m_nextServerReconnect = GetTickCount() + 60 * 1000;
+			}
+		}
+		else
+			ScheduleServerReconnect(errorCode);
 		return;
 	}
 

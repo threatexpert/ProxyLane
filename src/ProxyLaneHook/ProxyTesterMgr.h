@@ -34,8 +34,10 @@ public:
 	void OnSend(int nErrorCode);
 
 	int OnLayerCallback(const CAsyncSocketExLayer *pLayer, int nType, int nCode, WPARAM wParam, LPARAM lParam);
+	void OnTimeout();
 
 private:
+	void Complete(int nCode, WPARAM wParam = 0, LPARAM lParam = 0);
 	CAsyncProxySocketLayer *m_pProxyLayer;
 	CAsyncSecureSocketLayer *m_pSecureLayer;
 
@@ -44,6 +46,8 @@ private:
 
 	CProxyTesterMgr *m_pNotify;
 	IProxyTesterCallback *m_pCallback;
+	BOOL m_completed;
+	WORD m_dnsTransactionId;
 };
 
 class CProxyTesterMgr
@@ -57,6 +61,9 @@ public:
 	IProxyTester* CreateTester();
 
 	void OnDestroyTester(CProxyTester *pTester);
+	void ArmTester(CProxyTester *pTester, UINT timeoutMilliseconds);
+	void DisarmTester(CProxyTester *pTester);
+	VOID OnTimer(UINT_PTR nIDEvent);
 	void RemoveAll();
 
 	VOID OnMessage(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);

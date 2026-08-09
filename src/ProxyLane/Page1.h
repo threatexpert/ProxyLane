@@ -49,12 +49,16 @@ private:
 	IGlobalProxy* m_pTestProxy;
 	IProxyTester* m_pProxyTester;
 	BOOL m_bIsTesting;
+	int m_proxyTestPhase;
+	BOOL m_testUdpRequested;
+	ProxyInfo m_testProxyInfo;
 	BOOL m_profileDirty;
 	BOOL m_loadingProfile;
 	CString m_loadedProfileName;
 	CString m_draftProfileName;
 
 	BOOL m_bDisableLLMNR;
+	BOOL m_bDisableMDNS;
 	BOOL m_bHookLanIP;
 	CProxyController m_proxyController;
 	CProxyProfileStore m_profileStore;

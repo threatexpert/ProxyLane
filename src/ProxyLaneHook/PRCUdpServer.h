@@ -33,7 +33,7 @@ protected:
 	BOOL DestroyWnd();
 	static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
-	BOOL OnLocalThreadRegister(LPPRCClient lpPRCClient);
+	INT OnLocalThreadRegister(LPPRCClient lpPRCClient);
 	BOOL OnLocalThreadUnregister(LPPRCClient lpPRCClient);
 
 private:

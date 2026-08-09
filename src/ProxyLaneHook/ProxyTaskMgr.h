@@ -78,13 +78,21 @@ public:
 	virtual BOOL GetTaskCount(DWORD *pCount);
 
 	BOOL GetUDPPortState(UDPLocalProxyAddrInfo *pLPAI);
+	BOOL CanStartUdpAssociation(LPProxyInfo lpProxyInfo);
+	BOOL ReportUdpAssociationFailure(LPProxyInfo lpProxyInfo, int errorCode);
+	VOID ReportUdpAssociationReady(LPProxyInfo lpProxyInfo);
+	BOOL IsUdpPermanentlyUnsupported() const;
 
 private:
+	VOID EnsureUdpCapabilityProfile(LPProxyInfo lpProxyInfo);
+	VOID FlushUdpCapabilitySummary();
 	VOID RegisterRoutePort(const LPPRCClient lpPRCClient);
 	VOID ClearTaskPortStates(CUdpProxyTask *pTask);
 	CTSList<CUdpProxyTask*> m_tasklist;
 
 
 	UDPLocalProxyAddrInfo m_PortState[0x10000];
+	CStringA m_udpCapabilityKey;
+	UdpAssociationPolicy::CapabilityCircuit m_udpCapability;
 
 };

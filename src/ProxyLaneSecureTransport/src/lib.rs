@@ -670,4 +670,89 @@ mod tests {
             plst_session_free(session);
         }
     }
+
+    #[test]
+    fn large_stream_succeeds_when_plaintext_is_drained_between_tls_feeds() {
+        unsafe {
+            let psk = b"large-stream-test";
+            let server_name = b"localhost\0";
+            let mut session = ptr::null_mut();
+            assert_eq!(
+                plst_session_create(
+                    psk.as_ptr(),
+                    psk.len(),
+                    server_name.as_ptr().cast(),
+                    &mut session,
+                ),
+                OK
+            );
+
+            let mut server = create_test_server(psk);
+            for _ in 0..16 {
+                let client_tls = drain_client_tls(session);
+                if !client_tls.is_empty() {
+                    feed_server_tls(&mut server, &client_tls);
+                }
+                let server_tls = drain_server_tls(&mut server);
+                if !server_tls.is_empty() {
+                    feed_client_tls(session, &server_tls);
+                }
+                if plst_session_is_ready(session) == 1 && !server.is_handshaking() {
+                    break;
+                }
+            }
+            assert_eq!(plst_session_is_ready(session), 1);
+
+            let expected: Vec<u8> = (0..2 * 1024 * 1024)
+                .map(|index| ((index * 17 + 31) & 0xff) as u8)
+                .collect();
+            let mut sent = 0usize;
+            let mut actual = Vec::with_capacity(expected.len());
+            while sent < expected.len() {
+                let count = server.writer().write(&expected[sent..]).unwrap();
+                assert!(count > 0);
+                sent += count;
+
+                let server_tls = drain_server_tls(&mut server);
+                assert!(!server_tls.is_empty());
+                for tls_chunk in server_tls.chunks(16 * 1024) {
+                    let mut tls_offset = 0usize;
+                    while tls_offset < tls_chunk.len() {
+                        let mut consumed = 0usize;
+                        assert_eq!(
+                            plst_session_feed_tls(
+                                session,
+                                tls_chunk[tls_offset..].as_ptr(),
+                                tls_chunk.len() - tls_offset,
+                                &mut consumed,
+                            ),
+                            OK
+                        );
+                        assert!(consumed > 0);
+                        tls_offset += consumed;
+
+                        loop {
+                            let mut output = [0u8; 16 * 1024];
+                            let mut read = 0usize;
+                            let result = plst_session_read_plain(
+                                session,
+                                output.as_mut_ptr(),
+                                output.len(),
+                                &mut read,
+                            );
+                            if result == WOULD_BLOCK {
+                                break;
+                            }
+                            assert_eq!(result, OK);
+                            assert!(read > 0);
+                            actual.extend_from_slice(&output[..read]);
+                        }
+                    }
+                }
+            }
+
+            assert_eq!(actual, expected);
+            plst_session_free(session);
+        }
+    }
 }

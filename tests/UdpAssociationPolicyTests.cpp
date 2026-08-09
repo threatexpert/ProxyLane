@@ -60,5 +60,35 @@ int main()
 	assert(!UdpAssociationPolicy::ShouldEnterDormant(6000, 0, 5000, TRUE));
 	assert(UdpAssociationPolicy::ShouldEnterDormant(
 		0x00000020, 0xfffffff0, 0x30, FALSE));
+
+	DWORD mdns4 = 0;
+	BYTE *mdns4Bytes = reinterpret_cast<BYTE *>(&mdns4);
+	mdns4Bytes[0] = 224;
+	mdns4Bytes[1] = 0;
+	mdns4Bytes[2] = 0;
+	mdns4Bytes[3] = 251;
+	BYTE mdns6[16] = { 0xff, 0x02 };
+	mdns6[15] = 0xfb;
+	assert(UdpAssociationPolicy::IsMdnsDestination(AF_INET, mdns4, NULL, 5353));
+	assert(UdpAssociationPolicy::IsMdnsDestination(AF_INET6, 0, mdns6, 5353));
+	assert(!UdpAssociationPolicy::IsMdnsDestination(AF_INET, mdns4, NULL, 53));
+	mdns4Bytes[3] = 250;
+	assert(!UdpAssociationPolicy::IsMdnsDestination(AF_INET, mdns4, NULL, 5353));
+
+	UdpAssociationPolicy::CapabilityCircuit circuit;
+	assert(circuit.CanAttempt(100));
+	assert(!circuit.ReportFailure(100, FALSE));
+	assert(!circuit.ReportFailure(101, FALSE));
+	assert(circuit.ReportFailure(102, FALSE));
+	assert(!circuit.CanAttempt(103));
+	assert(circuit.CanAttempt(60102));
+	circuit.ReportSuccess();
+	assert(circuit.state == UdpAssociationPolicy::CAPABILITY_SUPPORTED);
+	assert(circuit.ReportFailure(70000, TRUE));
+	assert(!circuit.CanAttempt(0xffffffff));
+	circuit.Reset();
+	assert(circuit.ReportFailure(0xfffffff0, FALSE, 1, 0x30));
+	assert(!circuit.CanAttempt(0x00000010));
+	assert(circuit.CanAttempt(0x00000020));
 	return 0;
 }

@@ -15,6 +15,19 @@
 #define TIMER_IS_TASK_ALIVE 101
 #define TIMER_IS_TASK_ALIVE_INTERVAL 30000
 
+static DWORD HashUdpCapabilityCredential(const char *value)
+{
+	DWORD hash = 2166136261u;
+	if (!value)
+		return hash;
+	while (*value)
+	{
+		hash ^= (BYTE)*value++;
+		hash *= 16777619u;
+	}
+	return hash;
+}
+
 //////////////////////////////////////////////////////////////////////////
 
 CProxyXTaskMgr::CProxyXTaskMgr(CProxyReceptionCentre *pPRC)
@@ -236,9 +249,100 @@ CProxyUDPTaskMgr::~CProxyUDPTaskMgr(void)
 {
 }
 
+VOID CProxyUDPTaskMgr::FlushUdpCapabilitySummary()
+{
+	if (m_udpCapability.suppressedAttempts)
+	{
+		PrintText(_T("Suppressed %lu UDP association attempts while UDP was unavailable.\r\n"),
+			m_udpCapability.suppressedAttempts);
+		m_udpCapability.suppressedAttempts = 0;
+	}
+}
+
+VOID CProxyUDPTaskMgr::EnsureUdpCapabilityProfile(LPProxyInfo lpProxyInfo)
+{
+	CStringA key;
+	if (lpProxyInfo)
+		key.Format("%d|%d|%d|%s|%s|%08lx|%08lx",
+			lpProxyInfo->GetProxyType(),
+			lpProxyInfo->nProxyPort, lpProxyInfo->reserved,
+			lpProxyInfo->strProxyHost.szbuf,
+			lpProxyInfo->strProxyUser.szbuf,
+			HashUdpCapabilityCredential(lpProxyInfo->strProxyPass.szbuf),
+			HashUdpCapabilityCredential(lpProxyInfo->strTransportPsk.szbuf));
+	if (key == m_udpCapabilityKey)
+		return;
+	FlushUdpCapabilitySummary();
+	m_udpCapability.Reset();
+	m_udpCapabilityKey = key;
+}
+
+BOOL CProxyUDPTaskMgr::CanStartUdpAssociation(LPProxyInfo lpProxyInfo)
+{
+	EnsureUdpCapabilityProfile(lpProxyInfo);
+	if (!lpProxyInfo || lpProxyInfo->GetProxyType() == PROXYTYPE_NOPROXY)
+		return TRUE;
+	if (lpProxyInfo->GetProxyType() != PROXYTYPE_SOCKS5)
+	{
+		if (m_udpCapability.state != UdpAssociationPolicy::CAPABILITY_UNSUPPORTED)
+			PrintText(_T("The selected proxy protocol does not support UDP; UDP is blocked for this runtime.\r\n"));
+		m_udpCapability.ReportFailure(GetTickCount(), TRUE);
+		WSASetLastError(WSAEOPNOTSUPP);
+		return FALSE;
+	}
+	if (!m_udpCapability.CanAttempt(GetTickCount()))
+	{
+		++m_udpCapability.suppressedAttempts;
+		WSASetLastError(m_udpCapability.state ==
+			UdpAssociationPolicy::CAPABILITY_UNSUPPORTED
+				? WSAEOPNOTSUPP : WSAEHOSTUNREACH);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+BOOL CProxyUDPTaskMgr::ReportUdpAssociationFailure(LPProxyInfo lpProxyInfo,
+	int errorCode)
+{
+	EnsureUdpCapabilityProfile(lpProxyInfo);
+	const BOOL permanent = errorCode == WSAEOPNOTSUPP;
+	const UdpAssociationPolicy::CapabilityState oldState =
+		m_udpCapability.state;
+	const BOOL blocked = m_udpCapability.ReportFailure(
+		GetTickCount(), permanent);
+	if (blocked && m_udpCapability.state != oldState)
+	{
+		CString endpoint;
+		endpoint.Format(_T("%S:%d"), lpProxyInfo->strProxyHost.szbuf,
+			lpProxyInfo->nProxyPort);
+		if (permanent)
+			PrintText(_T("SOCKS5 proxy %s does not support UDP ASSOCIATE; UDP is blocked for this runtime.\r\n"),
+				(LPCTSTR)endpoint);
+		else
+			PrintText(_T("SOCKS5 UDP temporarily unavailable after 3 failures; blocking new attempts for 60 seconds (%s).\r\n"),
+				(LPCTSTR)endpoint);
+	}
+	return blocked;
+}
+
+VOID CProxyUDPTaskMgr::ReportUdpAssociationReady(LPProxyInfo lpProxyInfo)
+{
+	EnsureUdpCapabilityProfile(lpProxyInfo);
+	FlushUdpCapabilitySummary();
+	m_udpCapability.ReportSuccess();
+}
+
+BOOL CProxyUDPTaskMgr::IsUdpPermanentlyUnsupported() const
+{
+	return m_udpCapability.state ==
+		UdpAssociationPolicy::CAPABILITY_UNSUPPORTED;
+}
+
 BOOL CProxyUDPTaskMgr::OnNewTask(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo)
 {
 	if (!lpPRCClient || !lpProxyInfo)
+		return FALSE;
+	if (!CanStartUdpAssociation(lpProxyInfo))
 		return FALSE;
 	CTSList<CUdpProxyTask*>::critical lc = m_tasklist;
 	for(list<CUdpProxyTask*>::iterator it = m_tasklist.begin(); it != m_tasklist.end(); )
@@ -368,6 +472,9 @@ VOID CProxyUDPTaskMgr::RemoveAllTasks()
 	}
 	KillTimer(TIMER_TCPPERTASK);
 	KillTimer(TIMER_IS_TASK_ALIVE);
+	FlushUdpCapabilitySummary();
+	m_udpCapability.Reset();
+	m_udpCapabilityKey.Empty();
 }
 
 VOID CProxyUDPTaskMgr::RemoveTask(CUdpProxyTask* pTask)

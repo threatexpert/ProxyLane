@@ -275,6 +275,7 @@ typedef struct  _tagProxySettingsInfo
 	BOOL bHookCreateProcess;
 	BOOL bHookLanIP;
 	BOOL bDisableLLMNR;
+	BOOL bDisableMDNS;          // 静默禁止 224.0.0.251/[ff02::fb]:5353
 	BOOL bBlockUDP;            // 禁止非 loopback UDP；127.0.0.0/8 和 ::1 始终允许
 	BOOL bRedirectPrivateDNS;  // 服务器解析时将内网 :53 替换为公共 DNS
 	_SockAddr redirectDNSAddr;

@@ -14,6 +14,9 @@ CProxyTester::CProxyTester(CProxyTesterMgr *pNotify)
 	m_pNotify = pNotify;
 	m_pProxyLayer = NULL;
 	m_pSecureLayer = NULL;
+	m_pCallback = NULL;
+	m_completed = FALSE;
+	m_dnsTransactionId = 0;
 }
 
 CProxyTester::~CProxyTester(void)
@@ -36,6 +39,7 @@ BOOL CProxyTester::Start(IProxyTesterCallback *pCallback, const LPPRCClient lpPR
 	m_pCallback = pCallback;
 	m_client = *lpPRCClient;
 	m_proxyinfo = *lpPI;
+	m_completed = FALSE;
 
 	if (!AddProxyLayer(lpPI))
 		return FALSE;
@@ -104,6 +108,8 @@ BOOL CProxyTester::AddProxyLayer(LPProxyInfo lpProxyInfo)
 		WSASetLastError(WSAEINVAL);
 		return FALSE;
 	}
+	if (!m_completed)
+		m_pNotify->ArmTester(this, 10000);
 
 	CAsyncProxySocketLayer *pNewLayer = new CAsyncProxySocketLayer;
 	if(pNewLayer == NULL)
@@ -158,14 +164,28 @@ void CProxyTester::RemoveAllLayers()
 
 void CProxyTester::Stop()
 {
+	m_pNotify->DisarmTester(this);
 	Close();
+}
+
+void CProxyTester::Complete(int nCode, WPARAM wParam, LPARAM lParam)
+{
+	if (m_completed || !m_pCallback)
+		return;
+	m_completed = TRUE;
+	m_pNotify->DisarmTester(this);
+	m_pCallback->OnProxyTesterCallback(this,
+		MAKEWPARAM(nCode, LAYERCALLBACK_LAYERSPECIFIC), wParam, lParam);
 }
 
 void CProxyTester::OnClose(int nErrorCode)
 {
 	if(nErrorCode == 0)
 		nErrorCode = ~0;
-	m_pCallback->OnProxyTesterCallback(this, MAKEWPARAM(nErrorCode, LAYERCALLBACK_LAYERSPECIFIC), 0, 0);
+	Complete(m_client.sType == SOCK_DGRAM
+		? (nErrorCode == WSAEOPNOTSUPP ? PROXYERROR_UDP_UNSUPPORTED :
+			PROXYERROR_UDP_RELAY_FAILED)
+		: nErrorCode);
 }
 
 void CProxyTester::OnConnect(int nErrorCode)
@@ -175,15 +195,56 @@ void CProxyTester::OnConnect(int nErrorCode)
 		OnClose(nErrorCode);
 	}else
 	{
-		//OK!
-		m_pCallback->OnProxyTesterCallback(this, MAKEWPARAM(nErrorCode, LAYERCALLBACK_LAYERSPECIFIC), 0, 0);
+		if (m_client.sType == SOCK_STREAM)
+		{
+			Complete(0);
+			return;
+		}
+
+		BYTE query[] = {
+			0, 0, 0x01, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0,
+			7, 'e', 'x', 'a', 'm', 'p', 'l', 'e',
+			3, 'c', 'o', 'm', 0, 0, 1, 0, 1
+		};
+		m_dnsTransactionId = (WORD)(GetTickCount() & 0xffff);
+		query[0] = (BYTE)(m_dnsTransactionId >> 8);
+		query[1] = (BYTE)m_dnsTransactionId;
+		int sent = SendTo(query, sizeof(query), &m_client.dstAddr,
+			m_client.dstAddr.Size());
+		if (sent != sizeof(query))
+		{
+			Complete(WSAGetLastError() == WSAEOPNOTSUPP
+				? PROXYERROR_UDP_UNSUPPORTED : PROXYERROR_UDP_RELAY_FAILED);
+			return;
+		}
+		m_pNotify->ArmTester(this, 5000);
 	}
 
 }
 
 void CProxyTester::OnReceive(int nErrorCode)
 {
-
+	if (m_client.sType != SOCK_DGRAM || m_completed)
+		return;
+	if (nErrorCode)
+	{
+		Complete(PROXYERROR_UDP_RELAY_FAILED);
+		return;
+	}
+	BYTE reply[2048];
+	_SockAddr source;
+	int sourceLength = sizeof(source);
+	int received = ReceiveFrom(reply, sizeof(reply), &source, &sourceLength);
+	if (received == SOCKET_ERROR)
+	{
+		if (WSAGetLastError() != WSAEWOULDBLOCK)
+			Complete(WSAGetLastError() == WSAEOPNOTSUPP
+				? PROXYERROR_UDP_UNSUPPORTED : PROXYERROR_UDP_RELAY_FAILED);
+		return;
+	}
+	if (received >= 12 && reply[0] == (BYTE)(m_dnsTransactionId >> 8) &&
+		reply[1] == (BYTE)m_dnsTransactionId && (reply[2] & 0x80))
+		Complete(0);
 }
 
 void CProxyTester::OnSend(int nErrorCode)
@@ -199,9 +260,23 @@ int CProxyTester::OnLayerCallback(const CAsyncSocketExLayer *pLayer, int nType, 
 	}
 
 	//nType: LAYERCALLBACK_STATECHANGE | LAYERCALLBACK_LAYERSPECIFIC
-	m_pCallback->OnProxyTesterCallback(this, MAKEWPARAM(nCode, nType), wParam, lParam);
+	if (nType == LAYERCALLBACK_LAYERSPECIFIC && nCode != 0 &&
+		nCode != PROXYSTATUS_LISTENSOCKETCREATED)
+		Complete(m_client.sType == SOCK_DGRAM &&
+			nCode == PROXYERROR_REQUESTFAILED
+				? PROXYERROR_UDP_RELAY_FAILED : nCode,
+			wParam, lParam);
+	else if (!m_completed)
+		m_pCallback->OnProxyTesterCallback(this, MAKEWPARAM(nCode, nType),
+			wParam, lParam);
 
 	return 1;
+}
+
+void CProxyTester::OnTimeout()
+{
+	Complete(m_client.sType == SOCK_DGRAM
+		? PROXYERROR_UDP_RELAY_FAILED : PROXYERROR_NOCONN);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -235,6 +310,7 @@ IProxyTester* CProxyTesterMgr::CreateTester()
 
 void CProxyTesterMgr::OnDestroyTester(CProxyTester *pTester)
 {
+	DisarmTester(pTester);
 	CTSList<CProxyTester*>::critical lc(m_testerlist);
 
 	for (CTSList<CProxyTester*>::iterator it=m_testerlist.begin(); it!=m_testerlist.end(); it++)
@@ -276,4 +352,41 @@ VOID CProxyTesterMgr::OnMessage(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& b
 		bHandled = TRUE;
 		break;
 	}
+}
+
+void CProxyTesterMgr::ArmTester(CProxyTester *pTester,
+	UINT timeoutMilliseconds)
+{
+	if (!pTester)
+		return;
+	KillTimer((UINT_PTR)pTester);
+	SetTimer((UINT_PTR)pTester, timeoutMilliseconds);
+}
+
+void CProxyTesterMgr::DisarmTester(CProxyTester *pTester)
+{
+	if (pTester)
+		KillTimer((UINT_PTR)pTester);
+}
+
+VOID CProxyTesterMgr::OnTimer(UINT_PTR nIDEvent)
+{
+	KillTimer(nIDEvent);
+	CProxyTester *tester = reinterpret_cast<CProxyTester *>(nIDEvent);
+	{
+		BOOL found = FALSE;
+		CTSList<CProxyTester*>::critical lc(m_testerlist);
+		for (CTSList<CProxyTester*>::iterator it = m_testerlist.begin();
+			it != m_testerlist.end(); ++it)
+		{
+			if (*it == tester)
+			{
+				found = TRUE;
+				break;
+			}
+		}
+		if (!found)
+			return;
+	}
+	tester->OnTimeout();
 }

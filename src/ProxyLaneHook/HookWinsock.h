@@ -136,8 +136,10 @@ class CHookWinsock
 			DWORD dummyip = GetDummyIP(name);
 			buflen = min(sizeof(hostent), buflen);
 			memcpy(buf, GetHostent(dummyip), buflen);
-
+#pragma warning(push)
+#pragma warning(disable : 4312)
 			return (HANDLE)m_DummyHandle++;
+#pragma warning(pop)
 		}
 
 		DWORD GetDummyIP(const char *lpHost)

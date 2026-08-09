@@ -355,7 +355,19 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 
 				//将数据注册到PRC
 				if (! m_pPRC->RegisterClient(&client))
-					goto SEC_ERROR;
+				{
+					DWORD registrationError = WSAGetLastError();
+					if (!registrationError)
+						registrationError = WSAEFAULT;
+					hdr.action = PRCPD_REPLY;
+					hdr.flag = 0;
+					hdr.dataSize = sizeof(registrationError);
+					if (!WritePipe(hPipe, &hdr, sizeof(hdr)) ||
+						!WritePipe(hPipe, &registrationError,
+							sizeof(registrationError)))
+						goto SEC_ERROR;
+					break;
+				}
 
 				//回复成功消息
 				hdr.action = PRCPD_REPLY;

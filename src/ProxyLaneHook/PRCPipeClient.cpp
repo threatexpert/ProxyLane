@@ -128,6 +128,7 @@ BOOL CPRCPipeClient::GetPRCStartupInfo(LPPRCINFO lpStartupInfo)
 BOOL CPRCPipeClient::PRCRegisterClient(LPPRCClient lpClientInfo)
 {
 	PRCPipeDataHead hdr;
+	WSASetLastError(0);
 
 	hdr.action = PRCPD_REGISTERCLIENT;
 	hdr.flag = 0;
@@ -142,8 +143,25 @@ BOOL CPRCPipeClient::PRCRegisterClient(LPPRCClient lpClientInfo)
 	if(!ReadPipe(&hdr, sizeof(hdr)))
 		return FALSE;
 
-	if(hdr.action != PRCPD_REPLY || hdr.flag != 1)
+	if(hdr.action != PRCPD_REPLY)
+	{
+		WSASetLastError(WSAEPROTONOSUPPORT);
 		return FALSE;
+	}
+	if (hdr.flag == 0)
+	{
+		DWORD registrationError = WSAEFAULT;
+		if (hdr.dataSize != sizeof(registrationError) ||
+			!ReadPipe(&registrationError, sizeof(registrationError)))
+			return FALSE;
+		WSASetLastError(registrationError);
+		return FALSE;
+	}
+	if (hdr.flag != 1)
+	{
+		WSASetLastError(WSAEPROTONOSUPPORT);
+		return FALSE;
+	}
 
 	//TCP Client 注册后无需返回其他数据
 	if(lpClientInfo->sType == SOCK_STREAM && hdr.dataSize == 0)

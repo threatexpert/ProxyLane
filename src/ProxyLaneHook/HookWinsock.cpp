@@ -10,6 +10,7 @@
 #include "token.h"
 #include "ElevatedLauncher.h"
 #include "UdpPayloadPolicy.h"
+#include "UdpAssociationPolicy.h"
 
 #pragma comment(lib,"psapi.lib")
 #pragma comment(lib,"ws2_32.lib")
@@ -81,6 +82,20 @@ static BOOL IsUdpLoopbackDestination(SOCKET socketHandle,
 		return FALSE;
 	return NormalizeSocketAddress(reinterpret_cast<SOCKADDR *>(&peer),
 		peerLength, &normalized) && normalized.IsLoopback();
+}
+
+static BOOL IsMdnsDestination(const SOCKADDR *destination,
+	int destinationLength)
+{
+	_SockAddr normalized;
+	if (!NormalizeSocketAddress(destination, destinationLength, &normalized))
+		return FALSE;
+	return UdpAssociationPolicy::IsMdnsDestination(
+		normalized.sa_family,
+		normalized.GetdwIP(),
+		normalized.IsIPv6() && normalized.GetAddr6()
+			? normalized.GetAddr6()->u.Byte : NULL,
+		normalized.GetPort());
 }
 
 static BOOL GetSocketEndpoint(SOCKET socketHandle, int destinationFamily,
@@ -915,6 +930,12 @@ INT PASCAL CHookWinsock::inhook_WSASendMsg(SOCKET s, LPWSAMSG lpMsg,
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
 	}
+	if (m_psi.bDisableMDNS && lpMsg && lpMsg->name &&
+		IsMdnsDestination(lpMsg->name, lpMsg->namelen))
+	{
+		WSASetLastError(WSAEHOSTUNREACH);
+		return SOCKET_ERROR;
+	}
 	if (!m_psi.bHookUDP || !lpMsg)
 		return m_pWSASendMsg(s, lpMsg, dwFlags, lpNumberOfBytesSent,
 			lpOverlapped, lpCompletionRoutine);
@@ -1004,6 +1025,16 @@ HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 
 	if (nSockType != SOCK_DGRAM && nSockType != SOCK_STREAM)
 		return HOOK_BYPASS;
+	if (nSockType == SOCK_DGRAM && m_psi.bDisableMDNS &&
+		UdpAssociationPolicy::IsMdnsDestination(addrname.sa_family,
+			addrname.GetdwIP(),
+			addrname.IsIPv6() && addrname.GetAddr6()
+				? addrname.GetAddr6()->u.Byte : NULL,
+			addrname.GetPort()))
+	{
+		WSASetLastError(WSAEHOSTUNREACH);
+		return HOOK_FAILED;
+	}
 	if (nSockType == SOCK_DGRAM && !m_psi.bHookUDP)
 		return HOOK_BYPASS;
 	if (nSockType == SOCK_STREAM && !m_psi.bHookTCP)
@@ -1095,7 +1126,10 @@ HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 	//将原请求登记到PRC
 	if (!m_RequestPipe.PRCRegisterClient(&prcc))
 	{
-		m_RequestPipe.Disconnect();
+		const int registrationError = WSAGetLastError();
+		if (registrationError != WSAEOPNOTSUPP &&
+			registrationError != WSAEHOSTUNREACH)
+			m_RequestPipe.Disconnect();
 		return HOOK_FAILED;
 	}
 
@@ -1255,6 +1289,11 @@ int WSAAPI CHookWinsock::inhook_sendto(SOCKET s, const char* buf, int len, int f
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
 	}
+	if (m_psi.bDisableMDNS && IsMdnsDestination(to, tolen))
+	{
+		WSASetLastError(WSAEHOSTUNREACH);
+		return SOCKET_ERROR;
+	}
 	if (!m_psi.bHookUDP)
 	{
 		return CallTrampoline(sendto)(s, buf, len, flags, to, tolen);
@@ -1298,6 +1337,11 @@ int WSAAPI CHookWinsock::inhook_WSASendTo(
 		!IsUdpLoopbackDestination(s, lpTo, iToLen))
 	{
 		WSASetLastError(WSAEACCES);
+		return SOCKET_ERROR;
+	}
+	if (m_psi.bDisableMDNS && IsMdnsDestination(lpTo, iToLen))
+	{
+		WSASetLastError(WSAEHOSTUNREACH);
 		return SOCKET_ERROR;
 	}
 	if (!m_psi.bHookUDP)
@@ -1489,7 +1533,10 @@ HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname,
 
 	if (!m_RequestPipe.PRCRegisterClient(&prcc))
 	{
-		m_RequestPipe.Disconnect();
+		const int registrationError = WSAGetLastError();
+		if (registrationError != WSAEOPNOTSUPP &&
+			registrationError != WSAEHOSTUNREACH)
+			m_RequestPipe.Disconnect();
 		return HOOK_FAILED;
 	}
 

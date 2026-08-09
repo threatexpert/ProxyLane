@@ -13,6 +13,33 @@ import time
 import psutil
 
 
+TCP_STREAM_SIZE = 8 * 1024 * 1024
+TCP_STREAM_CHUNK = bytes(range(256)) * 64
+
+
+def local_ipv4():
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        # UDP connect selects the default-route source address without sending
+        # a packet. This keeps the E2E target local while avoiding loopback's
+        # intentional transparent-proxy bypass.
+        try:
+            probe.connect(("8.8.8.8", 53))
+            address = probe.getsockname()[0]
+            if not address.startswith("127."):
+                return address
+        except OSError:
+            pass
+    finally:
+        probe.close()
+    for addresses in psutil.net_if_addrs().values():
+        for address in addresses:
+            if (address.family == socket.AF_INET and
+                    not address.address.startswith(("127.", "169.254."))):
+                return address.address
+    raise RuntimeError("no non-loopback IPv4 address is available for E2E testing")
+
+
 def owner_for_flow(kind, local_port, remote_port):
     deadline = time.monotonic() + 2
     while time.monotonic() < deadline:
@@ -39,7 +66,11 @@ def tcp_echo(listener, observation):
         except Exception as error:
             observation.append(f"error: {error}")
         time.sleep(0.2)
-        conn.sendall(data)
+        remaining = TCP_STREAM_SIZE
+        while remaining:
+            chunk = TCP_STREAM_CHUNK[:min(len(TCP_STREAM_CHUNK), remaining)]
+            conn.sendall(chunk)
+            remaining -= len(chunk)
 
 
 def udp_echo(sock, observation):
@@ -56,18 +87,21 @@ def main():
     parser.add_argument("--bin", required=True)
     parser.add_argument("--gonc", required=True)
     parser.add_argument("--plain", action="store_true")
+    parser.add_argument("--proxy-type", choices=("SOCKS5", "HTTP10", "HTTP11"),
+                        default="SOCKS5")
     args = parser.parse_args()
+    test_udp = args.proxy_type == "SOCKS5"
 
-    # lvh.me resolves to loopback, but remote-DNS mode presents it to the Hook
-    # as a dummy address and sends the hostname through SOCKS.  This prevents
-    # a direct loopback bypass while keeping the target entirely local.
-    target_host = "lvh.me"
+    # Hook a LAN destination so the target stays entirely local and the test
+    # does not depend on external DNS. The observed target PID below proves
+    # that gonc, rather than the proxied client, established the connection.
+    target_host = local_ipv4()
 
     tcp_listener = socket.socket()
-    tcp_listener.bind(("127.0.0.1", 0))
+    tcp_listener.bind(("0.0.0.0", 0))
     tcp_listener.listen(1)
     udp_server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    udp_server.bind(("127.0.0.1", 0))
+    udp_server.bind(("0.0.0.0", 0))
     probe = socket.socket()
     probe.bind(("127.0.0.1", 0))
     gonc_port = probe.getsockname()[1]
@@ -86,12 +120,13 @@ def main():
 lastselected=SecureTest
 HookLanIP=1
 DisableLLMNR=1
+DisableMDNS=1
 language=en-US
 
 [proxy_SecureTest]
 HookChildProcess=0
 HookTCP=1
-HookUDP=1
+HookUDP={1 if test_udp else 0}
 BlockUDP=0
 dnsOpt=1
 RedirectPrivateDNS=0
@@ -99,7 +134,7 @@ ChildFilter=
 ChildFilterMode=1
 TargetFilter=
 TargetFilterMode=0
-Type=SOCKS5
+Type={args.proxy_type}
 Host=127.0.0.1
 Port={gonc_port}
 User=
@@ -113,7 +148,7 @@ PSK={' ' if args.plain else '123'}
         trace_path = os.path.join(temp, "secure-trace.log")
         client_path = os.path.abspath(os.path.join(os.path.dirname(__file__),
                                                    "ProxyLaneSecureE2EClient.py"))
-        gonc_arguments = [args.gonc, "-e", ":s5s -u", "-l", "-k"]
+        gonc_arguments = [args.gonc, "-e", ":s5s -u -http", "-l", "-k"]
         if not args.plain:
             gonc_arguments += ["-psk", "123", "-tls"]
         gonc_arguments += ["127.0.0.1", str(gonc_port)]
@@ -124,13 +159,17 @@ PSK={' ' if args.plain else '123'}
         time.sleep(0.5)
         environment = os.environ.copy()
         environment["PROXYLANE_SECURE_TRACE"] = trace_path
+        client_arguments = [
+            client_path, target_host, str(tcp_listener.getsockname()[1]),
+            str(udp_server.getsockname()[1]), result_path]
+        if not test_udp:
+            client_arguments.append("tcp-only")
         proxylane = subprocess.Popen(
             [os.path.join(temp, "ProxyLane64.exe"), "--auto", "--profile",
-             "SecureTest", "--run", sys.executable, "--", client_path, target_host,
-             str(tcp_listener.getsockname()[1]), str(udp_server.getsockname()[1]),
-             result_path], cwd=temp, env=environment)
+             "SecureTest", "--run", sys.executable, "--"] + client_arguments,
+            cwd=temp, env=environment)
         try:
-            deadline = time.monotonic() + 20
+            deadline = time.monotonic() + 45
             while time.monotonic() < deadline and not os.path.exists(result_path):
                 if proxylane.poll() is not None:
                     raise RuntimeError(f"ProxyLane exited early with {proxylane.returncode}")
@@ -145,9 +184,11 @@ PSK={' ' if args.plain else '123'}
             tcp_pids = [item for item in tcp_owner if isinstance(item, int)]
             if tcp_pids != [gonc.pid]:
                 raise RuntimeError(f"TCP target owner was {tcp_owner}, expected gonc {gonc.pid}")
-            if udp_owner != [gonc.pid]:
+            if test_udp and udp_owner != [gonc.pid]:
                 raise RuntimeError(f"UDP target owner was {udp_owner}, expected gonc {gonc.pid}")
-            print("PASS: x64 ProxyLane Hook/PRC gonc TLS-PSK TCP and UDP path")
+            suffix = "TCP and UDP" if test_udp else "TCP"
+            print(f"PASS: x64 ProxyLane {args.proxy_type} Hook/PRC gonc "
+                  f"TLS-PSK {suffix} path")
         finally:
             proxylane.terminate()
             try:

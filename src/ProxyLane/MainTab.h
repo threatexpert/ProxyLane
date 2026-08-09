@@ -7,6 +7,7 @@
 #include "Page5.h"
 
 #define WM_PROXY_STATUS_CHANGED (WM_APP + 102)
+#define WM_MAIN_TAB_FINALIZE_LAYOUT (WM_APP + 103)
 
 class CMainTab;
 extern CMainTab* g_MainTab;
@@ -31,6 +32,7 @@ public:
 
 	BOOL CreateTabCtrl(CWnd* parent);
 	void PositionWnd();
+	void FinalizeLayout(BOOL updateNow = TRUE);
 	void SelectPage(int pageIndex);
 	void SetPageAttention(int pageIndex, BOOL attention);
 	void ShowTransientStatus(LPCTSTR text, CStatusLabel::Tone tone);
@@ -76,6 +78,7 @@ protected:
 	afx_msg void OnMouseMove(UINT flags, CPoint point);
 	afx_msg void OnTimer(UINT_PTR eventId);
 	afx_msg LRESULT OnMouseLeave(WPARAM, LPARAM);
+	afx_msg LRESULT OnFinalizeLayout(WPARAM, LPARAM);
 
 	DECLARE_MESSAGE_MAP()
 };

@@ -354,7 +354,8 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 				int nErrorCode = WSAGetLastError();
 				if (nErrorCode != WSAEWOULDBLOCK) {
 					DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, PROXYERROR_REQUESTFAILED, nErrorCode);
-					if (m_nProxyOpID == PROXYOP_CONNECT)
+					if (m_nProxyOpID == PROXYOP_CONNECT ||
+						m_nProxyOpID == PROXYOP_UDPASSOCIATE)
 						TriggerEvent(FD_CONNECT, nErrorCode, TRUE);
 					else
 						TriggerEvent(FD_ACCEPT, nErrorCode, TRUE);
@@ -390,7 +391,8 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 				TRACE("SOCKS4 response: VN=%u  CD=%u  DSTPORT=%u  DSTIP=%s\n", (BYTE)m_pRecvBuffer[0], (BYTE)m_pRecvBuffer[1], ntohs(*(u_short*)&m_pRecvBuffer[2]), ipstrA(*(u_long*)&m_pRecvBuffer[4]));
 				if (m_pRecvBuffer[0] != 0 || m_pRecvBuffer[1] != 90) {
 					DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, PROXYERROR_REQUESTFAILED, 0, (LPARAM)(LPCSTR)GetSocks4Error(m_pRecvBuffer[0], m_pRecvBuffer[1]));
-					if (m_nProxyOpID == PROXYOP_CONNECT)
+					if (m_nProxyOpID == PROXYOP_CONNECT ||
+						m_nProxyOpID == PROXYOP_UDPASSOCIATE)
 						TriggerEvent(FD_CONNECT, WSAECONNABORTED, TRUE);
 					else
 						TriggerEvent(FD_ACCEPT, WSAECONNABORTED, TRUE);
@@ -459,7 +461,8 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 				int nErrorCode = WSAGetLastError();
 				if (nErrorCode != WSAEWOULDBLOCK) {
 					DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, PROXYERROR_REQUESTFAILED, nErrorCode);
-					if (m_nProxyOpID == PROXYOP_CONNECT)
+					if (m_nProxyOpID == PROXYOP_CONNECT ||
+						m_nProxyOpID == PROXYOP_UDPASSOCIATE)
 						TriggerEvent(FD_CONNECT, nErrorCode, TRUE);
 					else
 						TriggerEvent(FD_ACCEPT, nErrorCode, TRUE);
@@ -481,7 +484,8 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 				bool bAuthReqFailed = m_nProxyOpState == 2 && m_pRecvBuffer[1] != 0; // Response to authentication request
 				if (bIniReqFailed || bAuthReqFailed) {
 					DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, bAuthReqFailed ? PROXYERROR_AUTHFAILED : PROXYERROR_REQUESTFAILED, 0);
-					if (m_nProxyOpID == PROXYOP_CONNECT)
+					if (m_nProxyOpID == PROXYOP_CONNECT ||
+						m_nProxyOpID == PROXYOP_UDPASSOCIATE)
 						TriggerEvent(FD_CONNECT, WSAECONNABORTED, TRUE);
 					else
 						TriggerEvent(FD_ACCEPT, WSAECONNABORTED, TRUE);
@@ -494,7 +498,8 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 				{
 					if (m_pRecvBuffer[1] != 2) { // Unknown authentication type
 						DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, PROXYERROR_AUTHTYPEUNKNOWN, 0);
-						if (m_nProxyOpID == PROXYOP_CONNECT)
+						if (m_nProxyOpID == PROXYOP_CONNECT ||
+							m_nProxyOpID == PROXYOP_UDPASSOCIATE)
 							TriggerEvent(FD_CONNECT, WSAECONNABORTED, TRUE);
 						else
 							TriggerEvent(FD_ACCEPT, WSAECONNABORTED, TRUE);
@@ -505,7 +510,8 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 
 					if (!m_ProxyData.bUseLogon) {
 						DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, PROXYERROR_AUTHNOLOGON, 0);
-						if (m_nProxyOpID == PROXYOP_CONNECT)
+						if (m_nProxyOpID == PROXYOP_CONNECT ||
+							m_nProxyOpID == PROXYOP_UDPASSOCIATE)
 							TriggerEvent(FD_CONNECT, WSAECONNABORTED, TRUE);
 						else
 							TriggerEvent(FD_ACCEPT, WSAECONNABORTED, TRUE);
@@ -544,7 +550,8 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 						int nErrorCode = WSAGetLastError();
 						if (nErrorCode != WSAEWOULDBLOCK || res < iLen) {
 							DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, PROXYERROR_REQUESTFAILED, nErrorCode);
-							if (m_nProxyOpID == PROXYOP_CONNECT)
+							if (m_nProxyOpID == PROXYOP_CONNECT ||
+								m_nProxyOpID == PROXYOP_UDPASSOCIATE)
 								TriggerEvent(FD_CONNECT, nErrorCode, TRUE);
 							else
 								TriggerEvent(FD_ACCEPT, nErrorCode, TRUE);
@@ -619,7 +626,8 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 					int nErrorCode = WSAGetLastError();
 					if (nErrorCode != WSAEWOULDBLOCK || res < iReqLen) {
 						DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, PROXYERROR_REQUESTFAILED, nErrorCode);
-						if (m_nProxyOpID == PROXYOP_CONNECT)
+						if (m_nProxyOpID == PROXYOP_CONNECT ||
+							m_nProxyOpID == PROXYOP_UDPASSOCIATE)
 							TriggerEvent(FD_CONNECT, nErrorCode, TRUE);
 						else
 							TriggerEvent(FD_ACCEPT, nErrorCode, TRUE);
@@ -653,7 +661,8 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 				int nErrorCode = WSAGetLastError();
 				if (nErrorCode != WSAEWOULDBLOCK) {
 					DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, PROXYERROR_REQUESTFAILED, nErrorCode);
-					if (m_nProxyOpID == PROXYOP_CONNECT)
+					if (m_nProxyOpID == PROXYOP_CONNECT ||
+						m_nProxyOpID == PROXYOP_UDPASSOCIATE)
 						TriggerEvent(FD_CONNECT, nErrorCode, TRUE);
 					else
 						TriggerEvent(FD_ACCEPT, nErrorCode, TRUE);
@@ -701,11 +710,20 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 			if (m_nRecvBufferPos == responseLength && responseLength >= 4)
 			{
 				if (m_pRecvBuffer[0] != 5 || m_pRecvBuffer[1] != 0) {
-					DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, PROXYERROR_REQUESTFAILED, 0, (LPARAM)(LPCSTR)GetSocks5Error(m_pRecvBuffer[1]));
-					if (m_nProxyOpID == PROXYOP_CONNECT)
-						TriggerEvent(FD_CONNECT, WSAECONNABORTED, TRUE);
-					else
-						TriggerEvent(FD_ACCEPT, WSAECONNABORTED, TRUE);
+					const BOOL udpUnsupported =
+						m_nProxyOpID == PROXYOP_UDPASSOCIATE &&
+						(BYTE)m_pRecvBuffer[1] == 7;
+					const int operationError = udpUnsupported
+						? WSAEOPNOTSUPP : WSAECONNABORTED;
+					DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC,
+						udpUnsupported ? PROXYERROR_UDP_UNSUPPORTED :
+							PROXYERROR_REQUESTFAILED,
+						operationError,
+						(LPARAM)(LPCSTR)GetSocks5Error(m_pRecvBuffer[1]));
+					TriggerEvent(m_nProxyOpID == PROXYOP_CONNECT ||
+						m_nProxyOpID == PROXYOP_UDPASSOCIATE
+							? FD_CONNECT : FD_ACCEPT,
+						operationError, TRUE);
 					Reset();
 					ClearBuffer();
 					return;

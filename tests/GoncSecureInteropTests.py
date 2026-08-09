@@ -15,6 +15,7 @@ import time
 
 class Transport:
     OK = 0
+    EOF = 1
     WOULD_BLOCK = -2
 
     def __init__(self, path):
@@ -92,13 +93,33 @@ class Session:
         data = sock.recv(65536)
         if not data:
             raise RuntimeError("unexpected TLS EOF")
-        source = self.t.array(data)
-        consumed = ctypes.c_size_t()
-        result = self.t.dll.plst_session_feed_tls(
-            self.handle, source, len(data), ctypes.byref(consumed))
-        if result != self.t.OK or consumed.value != len(data):
-            raise RuntimeError(f"TLS feed failed: {result}/{consumed.value}")
-        self.flush(sock)
+        plaintext = bytearray()
+        offset = 0
+        while offset < len(data):
+            source = self.t.array(data[offset:])
+            consumed = ctypes.c_size_t()
+            result = self.t.dll.plst_session_feed_tls(
+                self.handle, source, len(source), ctypes.byref(consumed))
+            if result != self.t.OK or not consumed.value:
+                raise RuntimeError(f"TLS feed failed: {result}/{consumed.value}")
+            offset += consumed.value
+
+            # Mirror the C++ receive pump: rustls may consume only part of a
+            # network read, so plaintext must be drained before feeding the
+            # remainder of that same read.
+            while True:
+                output = (ctypes.c_ubyte * 65536)()
+                count = ctypes.c_size_t()
+                status = self.t.dll.plst_session_read_plain(
+                    self.handle, output, len(output), ctypes.byref(count))
+                if status == self.t.OK:
+                    plaintext.extend(output[:count.value])
+                    continue
+                if status in (self.t.WOULD_BLOCK, self.t.EOF):
+                    break
+                raise RuntimeError(f"plain read failed during TLS feed: {status}")
+            self.flush(sock)
+        return bytes(plaintext)
 
     def handshake(self, sock):
         self.flush(sock)
@@ -120,9 +141,9 @@ class Session:
             offset += written.value
             self.flush(sock)
 
-    def read(self, sock, minimum):
+    def read(self, sock, minimum, delay=0):
         result = bytearray()
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 30
         while len(result) < minimum:
             output = (ctypes.c_ubyte * 65536)()
             count = ctypes.c_size_t()
@@ -130,12 +151,14 @@ class Session:
                 self.handle, output, len(output), ctypes.byref(count))
             if status == self.t.OK:
                 result.extend(output[:count.value])
+                if delay:
+                    time.sleep(delay)
                 continue
             if status != self.t.WOULD_BLOCK:
                 raise RuntimeError(f"plain read failed: {status}")
             if time.monotonic() > deadline:
                 raise TimeoutError("plain read timed out")
-            self.feed(sock)
+            result.extend(self.feed(sock))
         return bytes(result)
 
     def export_key(self):
@@ -154,12 +177,20 @@ def free_port(kind=socket.SOCK_STREAM):
     return port
 
 
-def tcp_echo_server(listener, stop):
+def tcp_echo_server(listener, stop, expected_size):
     listener.settimeout(5)
     try:
         conn, _ = listener.accept()
         with conn:
-            data = conn.recv(65536)
+            data = bytearray()
+            while len(data) < expected_size:
+                chunk = conn.recv(min(65536, expected_size - len(data)))
+                if not chunk:
+                    break
+                data.extend(chunk)
+            if len(data) != expected_size:
+                raise RuntimeError(
+                    f"TCP echo received {len(data)} of {expected_size} bytes")
             conn.sendall(data)
     finally:
         stop.set()
@@ -216,18 +247,21 @@ def main():
         tcp_listener.bind(("127.0.0.1", 0))
         tcp_listener.listen(1)
         tcp_port = tcp_listener.getsockname()[1]
+        # Sustained traffic catches receive-pump regressions that the small
+        # SOCKS negotiation packets cannot expose. The delayed reader also
+        # covers a consumer that is temporarily slower than the network.
+        payload = bytes(range(256)) * (8 * 1024 * 1024 // 256)
         tcp_done = threading.Event()
         threading.Thread(target=tcp_echo_server,
-                         args=(tcp_listener, tcp_done), daemon=True).start()
+                         args=(tcp_listener, tcp_done, len(payload)), daemon=True).start()
 
         control, session = connect_secure(transport, gonc_port)
         request = b"\x05\x01\x00\x01\x7f\x00\x00\x01" + struct.pack("!H", tcp_port)
         session.send(control, request)
         if session.read(control, 10)[1] != 0:
             raise RuntimeError("SOCKS5 CONNECT failed")
-        payload = b"ProxyLane secure TCP interoperability"
         session.send(control, payload)
-        if session.read(control, len(payload)) != payload:
+        if session.read(control, len(payload), delay=0.001) != payload:
             raise RuntimeError("TCP echo mismatch")
         session.close()
         control.close()
@@ -268,7 +302,7 @@ def main():
         udp_client.close()
         udp_server.close()
         tcp_listener.close()
-        print("PASS: gonc TLS-PSK SOCKS5 TCP and UDP interoperability")
+        print("PASS: gonc TLS-PSK SOCKS5 8 MiB TCP and UDP interoperability")
     finally:
         process.terminate()
         try:

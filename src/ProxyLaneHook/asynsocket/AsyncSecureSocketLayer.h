@@ -59,6 +59,8 @@ private:
 	BOOL PumpTls();
 	BOOL DrainPlaintext();
 	BOOL FinishHandshake();
+	size_t BufferedPlaintext() const;
+	void ResumeTlsReceive();
 	void ReportFailure(LPCTSTR prefix);
 	void ResetTransport();
 	BOOL HasPendingTls() const;
@@ -78,6 +80,7 @@ private:
 	BOOL m_bConnectNotified;
 	BOOL m_bPeerReadClosed;
 	BOOL m_bPeerEofDelivered;
+	BOOL m_bReceivePaused;
 	int m_pendingShutdown;
 
 	PFN_SESSION_FREE m_sessionFree;

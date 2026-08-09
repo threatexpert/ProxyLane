@@ -72,8 +72,11 @@ BOOL CMainTab::CreateTabCtrl(CWnd* parent)
 	m_pages[PAGE_MONITOR] = &m_page4;
 	m_pages[PAGE_ABOUT] = &m_page5;
 
+	// Keep every page hidden until all controls, profiles and dynamic cards
+	// have finished initialization. Showing page 0 here can expose a partially
+	// painted dialog when startup is slow.
 	for (int i = 0; i < PAGE_COUNT; ++i)
-		m_pages[i]->ShowWindow(i == 0 ? SW_SHOW : SW_HIDE);
+		m_pages[i]->ShowWindow(SW_HIDE);
 
 	CString stoppedText = Localization::Get(_T("status.proxy_stopped"));
 	if (!m_sidebarStatus.Create(stoppedText,
@@ -99,7 +102,10 @@ BOOL CMainTab::CreateTabCtrl(CWnd* parent)
 	}
 	m_transientStatus.SetFont(&m_navigationFont, FALSE);
 
-	PositionWnd();
+	FinalizeLayout(FALSE);
+	// Run once more after WM_INITDIALOG returns and the normal message loop is
+	// active. This covers delayed theme/font realization on a busy machine.
+	PostMessage(WM_MAIN_TAB_FINALIZE_LAYOUT);
 	return TRUE;
 }
 
@@ -111,6 +117,7 @@ BEGIN_MESSAGE_MAP(CMainTab, CWnd)
 	ON_WM_MOUSEMOVE()
 	ON_WM_TIMER()
 	ON_MESSAGE(WM_MOUSELEAVE, OnMouseLeave)
+	ON_MESSAGE(WM_MAIN_TAB_FINALIZE_LAYOUT, OnFinalizeLayout)
 END_MESSAGE_MAP()
 
 int CMainTab::NavigationWidth() const
@@ -290,8 +297,33 @@ void CMainTab::PositionWnd()
 			SWP_NOACTIVATE);
 	}
 
-	if (m_pages[m_currentPage])
-		m_pages[m_currentPage]->PostMessage(WM_SIZE);
+	if (m_pages[m_currentPage] && m_pages[m_currentPage]->GetSafeHwnd())
+	{
+		CRect pageClient;
+		m_pages[m_currentPage]->GetClientRect(&pageClient);
+		m_pages[m_currentPage]->SendMessage(WM_SIZE, SIZE_RESTORED,
+			MAKELPARAM(pageClient.Width(), pageClient.Height()));
+	}
+}
+
+void CMainTab::FinalizeLayout(BOOL updateNow)
+{
+	if (!GetSafeHwnd())
+		return;
+	PositionWnd();
+	if (m_pages[m_currentPage] && m_pages[m_currentPage]->GetSafeHwnd())
+		m_pages[m_currentPage]->ShowWindow(SW_SHOW);
+
+	UINT redrawFlags = RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN;
+	if (updateNow)
+		redrawFlags |= RDW_UPDATENOW;
+	RedrawWindow(NULL, NULL, redrawFlags);
+}
+
+LRESULT CMainTab::OnFinalizeLayout(WPARAM, LPARAM)
+{
+	FinalizeLayout(TRUE);
+	return 0;
 }
 
 void CMainTab::SelectPage(int pageIndex)

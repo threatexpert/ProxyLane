@@ -92,10 +92,15 @@ BOOL CPRCUdpServer::ShutdownServer()
 
 BOOL CPRCUdpServer::OnRegister(LPPRCClient lpPRCClient)
 {
-	return SendMessage(m_hWnd, WM_PRC_REG_CLIENT, 0, (LPARAM)lpPRCClient);
+	LRESULT result = SendMessage(m_hWnd, WM_PRC_REG_CLIENT, 0,
+		(LPARAM)lpPRCClient);
+	if (result == TRUE)
+		return TRUE;
+	WSASetLastError(result < 0 ? (int)-result : WSAEFAULT);
+	return FALSE;
 }
 
-BOOL CPRCUdpServer::OnLocalThreadRegister(LPPRCClient lpPRCClient)
+INT CPRCUdpServer::OnLocalThreadRegister(LPPRCClient lpPRCClient)
 {
 	ATLASSERT(m_hWnd);
 
@@ -108,20 +113,23 @@ BOOL CPRCUdpServer::OnLocalThreadRegister(LPPRCClient lpPRCClient)
 	if(!pProxySettings->GetProxyInfo(lpPRCClient, &pisetting))
 	{
 		PrintText(_T("Failed to get proxy information.\r\n"));
-		return FALSE;
+		return -WSAEINVAL;
 	}
 	if (!pProxySettings->GetProxySettings(&settings))
 	{
 		PrintText(_T("Failed to get proxy settings.\r\n"));
-		return FALSE;
+		return -WSAEINVAL;
 	}
 
 	DnsRedirectPolicy::Apply(*lpPRCClient, settings, pisetting);
 
 	if(!m_ProxyTaskMgr.OnNewTask(lpPRCClient, &pisetting))
 	{
-		PrintText(_T("Failed to add UDP proxy task.\r\n"));
-		return FALSE;
+		const int errorCode = WSAGetLastError();
+		if (errorCode != WSAEOPNOTSUPP && errorCode != WSAEHOSTUNREACH)
+			PrintText(_T("Failed to add UDP proxy task (error: %d).\r\n"),
+				errorCode);
+		return -(errorCode ? errorCode : WSAEFAULT);
 	}
 
 	LogNewProxyTask(lpPRCClient);

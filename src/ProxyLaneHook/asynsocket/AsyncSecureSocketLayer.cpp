@@ -9,6 +9,8 @@ namespace
 	const int PLST_WOULD_BLOCK = -2;
 	const unsigned int PLST_ABI_VERSION = 2;
 	const size_t TLS_CHUNK = 16 * 1024;
+	const size_t PLAINTEXT_LOW_WATER = 256 * 1024;
+	const size_t PLAINTEXT_HIGH_WATER = 512 * 1024;
 	const size_t MAX_BUFFERED_DATA = 1024 * 1024;
 
 	void SecureTrace(LPCTSTR format, int value1 = 0, int value2 = 0)
@@ -49,7 +51,8 @@ CAsyncSecureSocketLayer::CAsyncSecureSocketLayer()
 	  m_plaintextOffset(0), m_bUdpKeyReady(FALSE),
 	  m_bHandshakeStarted(FALSE), m_bHandshakeReady(FALSE),
 	  m_bConnectNotified(FALSE), m_bPeerReadClosed(FALSE),
-	  m_bPeerEofDelivered(FALSE), m_pendingShutdown(-1),
+	  m_bPeerEofDelivered(FALSE), m_bReceivePaused(FALSE),
+	  m_pendingShutdown(-1),
 	  m_sessionFree(NULL), m_sessionIsReady(NULL), m_sessionFeedTls(NULL),
 	  m_sessionDrainTls(NULL), m_sessionWritePlain(NULL),
 	  m_sessionReadPlain(NULL), m_sessionCloseNotify(NULL),
@@ -160,8 +163,14 @@ BOOL CAsyncSecureSocketLayer::HasPendingTls() const
 
 BOOL CAsyncSecureSocketLayer::HasPendingRead() const
 {
-	return m_plaintextOffset < m_plaintext.size() ||
+	return BufferedPlaintext() != 0 ||
 		(m_bPeerReadClosed && !m_bPeerEofDelivered);
+}
+
+size_t CAsyncSecureSocketLayer::BufferedPlaintext() const
+{
+	return m_plaintextOffset < m_plaintext.size() ?
+		m_plaintext.size() - m_plaintextOffset : 0;
 }
 
 BOOL CAsyncSecureSocketLayer::FlushTls()
@@ -187,7 +196,10 @@ BOOL CAsyncSecureSocketLayer::FlushTls()
 		BYTE chunk[TLS_CHUNK];
 		size_t written = 0;
 		if (m_sessionDrainTls(m_session, chunk, sizeof(chunk), &written) != PLST_OK)
+		{
+			WSASetLastError(WSAECONNABORTED);
 			return FALSE;
+		}
 		if (!written)
 			break;
 		m_pendingTls.assign(chunk, chunk + written);
@@ -197,39 +209,73 @@ BOOL CAsyncSecureSocketLayer::FlushTls()
 
 BOOL CAsyncSecureSocketLayer::DrainPlaintext()
 {
+	if (m_plaintextOffset)
+	{
+		m_plaintext.erase(m_plaintext.begin(),
+			m_plaintext.begin() + m_plaintextOffset);
+		m_plaintextOffset = 0;
+	}
+
 	BYTE chunk[TLS_CHUNK];
 	for (;;)
 	{
+		const size_t buffered = BufferedPlaintext();
+		if (buffered >= MAX_BUFFERED_DATA)
+		{
+			WSASetLastError(WSAENOBUFS);
+			return FALSE;
+		}
+		const size_t capacity = min(sizeof(chunk),
+			MAX_BUFFERED_DATA - buffered);
 		size_t count = 0;
-		int result = m_sessionReadPlain(m_session, chunk, sizeof(chunk), &count);
+		int result = m_sessionReadPlain(m_session, chunk, capacity, &count);
 		if (result == PLST_EOF)
 		{
 			m_bPeerReadClosed = TRUE;
 			return TRUE;
 		}
 		if (result == PLST_WOULD_BLOCK)
+		{
+			if (BufferedPlaintext() >= PLAINTEXT_HIGH_WATER)
+				m_bReceivePaused = TRUE;
 			return TRUE;
+		}
 		if (result != PLST_OK)
+		{
+			WSASetLastError(WSAECONNABORTED);
 			return FALSE;
+		}
 		if (!count)
 			return TRUE;
-		if (m_plaintext.size() - m_plaintextOffset + count > MAX_BUFFERED_DATA)
-		{
-			WSASetLastError(WSAENOBUFS);
-			return FALSE;
-		}
-		if (m_plaintextOffset)
-		{
-			m_plaintext.erase(m_plaintext.begin(),
-				m_plaintext.begin() + m_plaintextOffset);
-			m_plaintextOffset = 0;
-		}
 		m_plaintext.insert(m_plaintext.end(), chunk, chunk + count);
 	}
 }
 
+void CAsyncSecureSocketLayer::ResumeTlsReceive()
+{
+	if (!m_bReceivePaused || !m_session || m_bPeerReadClosed ||
+		BufferedPlaintext() > PLAINTEXT_LOW_WATER)
+		return;
+
+	// PumpTls deliberately stops before recv() reaches WSAEWOULDBLOCK when
+	// decrypted data reaches the high-water mark.  WSAAsyncSelect is therefore
+	// not guaranteed to post another FD_READ.  Re-enter this layer through the
+	// helper window after the upper layer has consumed enough plaintext.
+	m_bReceivePaused = FALSE;
+	if (!TriggerEvent(FD_READ, 0))
+		m_bReceivePaused = TRUE;
+}
+
 BOOL CAsyncSecureSocketLayer::PumpTls()
 {
+	// Always empty rustls before accepting more TLS records.  rustls limits its
+	// internal received-plaintext queue to 16 KiB and requires callers to read
+	// processed plaintext before calling read_tls() again.
+	if (!DrainPlaintext() || !FlushTls() || !FinishHandshake())
+		return FALSE;
+	if (m_bReceivePaused)
+		return TRUE;
+
 	BYTE chunk[TLS_CHUNK];
 	for (;;)
 	{
@@ -249,13 +295,21 @@ BOOL CAsyncSecureSocketLayer::PumpTls()
 		while (offset < (size_t)received)
 		{
 			size_t consumed = 0;
-			if (m_sessionFeedTls(m_session, chunk + offset,
-				received - offset, &consumed) != PLST_OK || !consumed)
+			const int result = m_sessionFeedTls(m_session, chunk + offset,
+				received - offset, &consumed);
+			if (result != PLST_OK || !consumed)
+			{
+				WSASetLastError(WSAECONNABORTED);
 				return FALSE;
+			}
 			offset += consumed;
+			if (!DrainPlaintext() || !FlushTls() || !FinishHandshake())
+				return FALSE;
 		}
+		if (m_bReceivePaused)
+			return TRUE;
 	}
-	return FlushTls() && DrainPlaintext() && FinishHandshake();
+	return TRUE;
 }
 
 BOOL CAsyncSecureSocketLayer::FinishHandshake()
@@ -264,7 +318,10 @@ BOOL CAsyncSecureSocketLayer::FinishHandshake()
 		return TRUE;
 	int ready = m_sessionIsReady(m_session);
 	if (ready < 0)
+	{
+		WSASetLastError(WSAECONNABORTED);
 		return FALSE;
+	}
 	if (!ready)
 		return TRUE;
 	m_bHandshakeReady = TRUE;
@@ -281,14 +338,23 @@ BOOL CAsyncSecureSocketLayer::FinishHandshake()
 
 void CAsyncSecureSocketLayer::ReportFailure(LPCTSTR prefix)
 {
-	SecureTrace(_T("TLS failure winsock=%d\r\n"), WSAGetLastError());
+	int winsockError = WSAGetLastError();
+	if (!winsockError)
+		winsockError = WSAECONNABORTED;
+	SecureTrace(_T("TLS failure winsock=%d\r\n"), winsockError);
 	char detail[512] = { 0 };
 	if (m_session && m_sessionLastError)
 		m_sessionLastError(m_session, detail, sizeof(detail));
 	CString detailText(detail);
-	PrintText(_T("%s: %s (Winsock %d).\r\n"), prefix,
-		detailText.IsEmpty() ? _T("secure transport error") : (LPCTSTR)detailText,
-		WSAGetLastError());
+	const BOOL routineEstablishedClose = m_bHandshakeReady &&
+		(winsockError == WSAECONNRESET ||
+		 winsockError == WSAECONNABORTED ||
+		 winsockError == WSAESHUTDOWN);
+	if (!routineEstablishedClose)
+		PrintText(_T("%s: %s (Winsock %d).\r\n"), prefix,
+			detailText.IsEmpty() ? _T("secure transport error") : (LPCTSTR)detailText,
+			winsockError);
+	WSASetLastError(winsockError);
 	const BOOL wasConnected = m_bConnectNotified;
 	if (!wasConnected)
 		TriggerEvent(FD_CONNECT,
@@ -371,14 +437,23 @@ void CAsyncSecureSocketLayer::OnClose(int nErrorCode)
 				if (m_sessionFeedTls(m_session, chunk + offset,
 					received - offset, &consumed) != PLST_OK || !consumed)
 				{
+					WSASetLastError(WSAECONNABORTED);
 					drainSucceeded = FALSE;
 					offset = received;
 					break;
 				}
 				offset += consumed;
+				if (!DrainPlaintext())
+				{
+					drainSucceeded = FALSE;
+					offset = received;
+					break;
+				}
 			}
+			if (!drainSucceeded)
+				break;
 		}
-		if (!DrainPlaintext())
+		if (drainSucceeded && !DrainPlaintext())
 			drainSucceeded = FALSE;
 		// A clean TCP FIN is also an EOF for the decrypted stream.  It may
 		// follow close_notify later, or be the only close signal from a peer
@@ -474,6 +549,10 @@ int CAsyncSecureSocketLayer::Receive(void* lpBuf, int nBufLen, int nFlags)
 		// will arrive from the kernel.  Re-post it while decrypted bytes remain.
 		TriggerEvent(FD_READ, 0, TRUE);
 	}
+	// Resume raw TLS reads only after the upper layer has relieved pressure.
+	// If plaintext remains, its pass-through FD_READ was queued above first so
+	// existing data is consumed before the resumed pump can refill the queue.
+	ResumeTlsReceive();
 	return count;
 }
 
@@ -549,5 +628,6 @@ void CAsyncSecureSocketLayer::ResetTransport()
 	m_bConnectNotified = FALSE;
 	m_bPeerReadClosed = FALSE;
 	m_bPeerEofDelivered = FALSE;
+	m_bReceivePaused = FALSE;
 	m_pendingShutdown = -1;
 }
