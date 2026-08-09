@@ -1,4 +1,4 @@
-/*CAsyncSocketEx by Tim Kosse (Tim.Kosse@gmx.de)
+﻿/*CAsyncSocketEx by Tim Kosse (Tim.Kosse@gmx.de)
             Version 1.2 (2003-03-28)
 --------------------------------------------------------
 
@@ -292,7 +292,7 @@ public:
 						return 0;
 
 					int nEvent = lParam & 0xFFFF;
-					int nErrorCode = lParam >> 16;
+					int nErrorCode = (int)(lParam >> 16);
 
 					//Dispatch notification
 	#ifndef NOLAYERS
@@ -437,7 +437,7 @@ public:
 				if (i == pWnd->m_nWindowDataSize)
 					return 0;
 
-				int nErrorCode = lParam >> 16;
+				int nErrorCode = (int)(lParam >> 16);
 				if (nErrorCode) {
 					pSocket->OnConnect(nErrorCode);
 					// Do *NOT* access 'pSocket', it may already have been deleted (CServerConnect)

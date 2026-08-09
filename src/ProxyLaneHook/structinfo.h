@@ -214,7 +214,7 @@ typedef struct _tagProxyInfo
 
 			while(i<sizeof(szbuf)-1 && lpsz[i])
 			{
-				szbuf[i] = lpsz[i];
+				szbuf[i] = (char)lpsz[i];
 				i++;
 			}
 			szbuf[i] = '\0';
@@ -396,12 +396,15 @@ typedef struct _tagHookWSockResult
 	DWORD err;
 }HookWSockResult, *LPHookWSockResult;
 
+#pragma warning(push)
+#pragma warning(disable : 4200)
 typedef struct _tagHookLogtext
 {
 	DWORD dwProcessId;
 	int len;
 	WCHAR str[];
 }HookLogtext, *LPHookLogtext;
+#pragma warning(pop)
 
 //action
 #define PRCPD_REPLY 0

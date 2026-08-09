@@ -293,46 +293,6 @@ BOOL CWindowFinderButton::OnSetCursor(CWnd* window, UINT hitTest, UINT message)
 }
 
 
-int compareApiName(char *p1, char *p2)
-{
-	while (*p1 && *p2)
-	{
-		if (*p1 != *p2)
-			return 0;
-
-		p1++;
-		p2++;
-	}
-	return *p1 == *p2;
-}
-
-DWORD get_proc_address2(LPVOID pBase, char *pApiName)
-{
-	PIMAGE_DOS_HEADER        pDosHeader;
-	PIMAGE_FILE_HEADER        pFileHeader;
-	PIMAGE_OPTIONAL_HEADER    pOptionalHeader;
-
-	pDosHeader=(PIMAGE_DOS_HEADER)pBase;
-	pFileHeader=(PIMAGE_FILE_HEADER)(((PBYTE)pBase)+pDosHeader->e_lfanew+4);
-	pOptionalHeader=(PIMAGE_OPTIONAL_HEADER)(pFileHeader+1);
-
-	DWORD dwExpRVA = pOptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
-	PIMAGE_EXPORT_DIRECTORY pExportDir=(PIMAGE_EXPORT_DIRECTORY)((PBYTE)pBase+dwExpRVA);
-	PDWORD pNamesRVA=(PDWORD)((PBYTE)pBase+pExportDir->AddressOfNames);
-	PDWORD pFuncRVA=(PDWORD)((PBYTE)pBase+pExportDir->AddressOfFunctions);
-	PWORD ord=(PWORD)((PBYTE)pBase+pExportDir->AddressOfNameOrdinals);
-
-	DWORD dwFunc=pExportDir->NumberOfNames;
-	for (DWORD i=0; i<dwFunc; i++)
-	{
-		PCHAR name =((PCHAR)((PBYTE)pBase+pNamesRVA[i]));
-		if (compareApiName((CHAR*)name, pApiName))
-			return (DWORD)((PBYTE)pBase+pFuncRVA[ord[i]]);
-	}
-
-	return 0;
-}
-
 BOOL DebugPrivilege(TCHAR *PName,BOOL bEnable)
 {
 	BOOL              bResult = TRUE;
@@ -2208,7 +2168,7 @@ void CPage3::OnTimer(UINT_PTR nIDEvent)
 
 LRESULT CPage3::OnRefreshPslist(WPARAM w, LPARAM l)
 {
-	UpdatePslist(w);
+	UpdatePslist(w!=0);
 
 	return 1;
 }
@@ -2425,7 +2385,7 @@ GetLinkInfo( HWND    hWnd,
 
 BOOL IsLnk(LPCTSTR pFileName)
 {
-	int nLen = _tcslen(pFileName);
+	size_t nLen = _tcslen(pFileName);
 
 	if (nLen > 3)
 	{

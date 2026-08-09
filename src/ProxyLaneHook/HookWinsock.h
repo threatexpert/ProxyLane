@@ -380,7 +380,7 @@ class CHookWinsock
 			}
 			UDP_PAYLOAD_LIMIT item;
 			ZeroMemory(&item, sizeof(item));
-			item.s = pCI->s;
+			item.s = (SOCKET)pCI->s;
 			item.generation = pCI->socketGeneration;
 			item.destination = pCI->dstAddr;
 			item.destinationPort = pCI->dstAddr.GetPort();

@@ -1,4 +1,4 @@
-/*CAsyncProxySocketLayer by Tim Kosse (Tim.Kosse@gmx.de)
+﻿/*CAsyncProxySocketLayer by Tim Kosse (Tim.Kosse@gmx.de)
                  Version 1.6 (2003-03-26)
 --------------------------------------------------------
 
@@ -553,7 +553,7 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 						Reset();
 						return;
 					}
-					iLenAsciiProxyPeerHost = strlen(pszAsciiProxyPeerHost);
+					iLenAsciiProxyPeerHost = (int)strlen(pszAsciiProxyPeerHost);
 				}
 				else {
 					pszAsciiProxyPeerHost = 0;
@@ -1032,7 +1032,7 @@ void CAsyncProxySocketLayer::OnConnect(int nErrorCode)
 			int iSizeAsciiProxyPeerHost;
 			if (m_nProxyPeerIP == 0) {
 				pszAsciiProxyPeerHost = m_pProxyPeerHost;
-				iSizeAsciiProxyPeerHost = strlen(pszAsciiProxyPeerHost) + 1;
+				iSizeAsciiProxyPeerHost = (int)strlen(pszAsciiProxyPeerHost) + 1;
 			}
 			else {
 				pszAsciiProxyPeerHost = 0;
@@ -1791,7 +1791,7 @@ int CAsyncProxySocketLayer::SendTo(const void* lpBuf, int nBufLen, UINT nHostPor
 	const char* pszAsciiProxyPeerHost;
 	int iLenAsciiProxyPeerHost;
 	pszAsciiProxyPeerHost = szIP.GetBuffer();
-	iLenAsciiProxyPeerHost = strlen(pszAsciiProxyPeerHost);
+	iLenAsciiProxyPeerHost = (int)strlen(pszAsciiProxyPeerHost);
 
 	if (inet_addr(pszAsciiProxyPeerHost) != INADDR_NONE)
 	{
@@ -1997,7 +1997,7 @@ int CAsyncProxySocketLayer::WSASendTo(
 	const char* pszAsciiProxyPeerHost;
 	int iLenAsciiProxyPeerHost;
 	pszAsciiProxyPeerHost = szIP.GetBuffer();
-	iLenAsciiProxyPeerHost = strlen(pszAsciiProxyPeerHost);
+	iLenAsciiProxyPeerHost = (int)strlen(pszAsciiProxyPeerHost);
 
 	if (inet_addr(pszAsciiProxyPeerHost) != INADDR_NONE)
 	{

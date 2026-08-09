@@ -1,4 +1,4 @@
-// IniFile.cpp: implementation of the CIniFile class.
+﻿// IniFile.cpp: implementation of the CIniFile class.
 //
 //////////////////////////////////////////////////////////////////////
 
@@ -33,12 +33,12 @@ void CIniFile::SetIniFileName(CString FileName)
 	}else
 	{
 		TCHAR szAppName[MAX_PATH] = { 0 };
-		int  len;
+		size_t  len;
 
 		::GetModuleFileName(AfxGetApp()->m_hInstance, szAppName, _countof(szAppName));
 		szAppName[_countof(szAppName) - 1] = _T('\0');
 		len = _tcslen(szAppName);
-		for(int i=len; i>0; i--)
+		for(size_t i=len; i>0; i--)
 		{
 			if(szAppName[i] == '.')
 			{

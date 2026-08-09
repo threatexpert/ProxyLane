@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "token.h"
 
 #include <accctrl.h>
@@ -111,7 +111,7 @@ BOOL SetSecurityDescriptorDaclAccess(PSECURITY_DESCRIPTOR pSD, LPCTSTR pUserName
 	PSECURITY_DESCRIPTOR psd            = NULL;
 	BOOL bRet = FALSE;
 	TCHAR          szUser[128];
-	ACL_SIZE_INFORMATION aclsi;
+	//ACL_SIZE_INFORMATION aclsi;
 
 	lstrcpyn(szUser, pUserName, sizeof(szUser));
 	*ppNewAcl = NULL;

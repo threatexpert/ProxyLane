@@ -3,20 +3,6 @@
 #include "../remotecode/remoteCode.h"
 
 
-
-int compareApiName(const char *p1, const char *p2)
-{
-	while (*p1 && *p2)
-	{
-		if (*p1 != *p2)
-			return 0;
-
-		p1++;
-		p2++;
-	}
-	return *p1 == *p2;
-}
-
 FARPROC get_proc_address2(void* hDll, LPCSTR fname)
 {
 	PIMAGE_DOS_HEADER        pDosHeader = NULL;
@@ -40,7 +26,7 @@ FARPROC get_proc_address2(void* hDll, LPCSTR fname)
 		for (DWORD i = 0; i < dwFunc; i++)
 		{
 			PCHAR name = ((PCHAR)(pb + pNamesRVA[i]));
-			if (compareApiName(fname, name))
+			if (!strcmp(fname, name))
 				return (FARPROC)(pb + pFuncRVA[ord[i]]);
 		}
 	}
