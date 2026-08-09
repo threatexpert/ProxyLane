@@ -5,6 +5,7 @@ int BoundedLogQueueTestsMain();
 int UdpAssociationPolicyTestsMain();
 int UdpPayloadPolicyTestsMain();
 int DnsRedirectPolicyTestsMain();
+int ProxyTransportPolicyTestsMain();
 
 int main()
 {
@@ -17,6 +18,8 @@ int main()
 	if (UdpPayloadPolicyTestsMain() != 0)
 		return 1;
 	if (DnsRedirectPolicyTestsMain() != 0)
+		return 1;
+	if (ProxyTransportPolicyTestsMain() != 0)
 		return 1;
 	std::cout << "ProxyLane tests passed" << std::endl;
 	return 0;

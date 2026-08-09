@@ -43,6 +43,7 @@ private:
 	ProxySettingsInfo m_runtimeSettings;
 	CCriticalSection m_runtimeLock;
 	BOOL m_runtimeSettingsValid;
+	CString m_settingsValidationKey;
 	BOOL m_runtimeDirty;
 
 	IGlobalProxy* m_pTestProxy;

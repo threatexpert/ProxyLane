@@ -136,6 +136,8 @@
   "profile.name_required": "Enter a profile name first.",
   "profile.save_failed_title": "Cannot Save Profile",
   "profile.invalid_endpoint": "Check that the proxy address and port are valid.",
+  "profile.psk_required": "A PSK is required when gonc TLS-PSK encryption is selected.",
+  "profile.secure_transport_unsupported": "gonc TLS-PSK supports SOCKS5, HTTP10, and HTTP11 only.",
   "profile.unsaved_prompt": "The current proxy settings have not been saved.\r\n\r\nChoose Yes to save or No to discard the changes.",
   "profile.unsaved_title": "Unsaved Proxy Settings",
   "profile.delete_confirm": "Delete profile \"%s\"?\r\n\r\nThe current settings will remain as an unsaved draft.",

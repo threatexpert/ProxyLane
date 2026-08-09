@@ -233,6 +233,7 @@ private:
 	void Reset();
 	void ClearBuffer();		//Clears the receive buffer
 	void ClearSendBuffer();
+	void FailPendingProxyOperation(int errorCode);
 	BOOL QueueProxyRequest(const void *data, int length);
 	BOOL FlushProxyRequest();
 

@@ -55,9 +55,11 @@ ProxyLane 采用纯用户态的进程注入与 API Hook 技术，对应用程序
 
 ### gonc TLS-PSK 加密传输
 
-SOCKS5 配置可以在“加密模式”中选择 `gonc TLS-PSK`，并填写与远端 gonc `:s5s` 服务一致的 PSK。TCP 与 UDP 均直接通过加密 SOCKS5 服务，不需要在本机另外启动 gonc 客户端或标准 SOCKS5 中转。
+SOCKS5、HTTP10 和 HTTP11 配置都可以在“加密模式”中选择 `gonc TLS-PSK`，并填写与远端 gonc `:s5s` 服务一致的 PSK。SOCKS5 支持加密 TCP 与 UDP；HTTP10/HTTP11 使用加密的 HTTP CONNECT，仅支持 TCP，不需要在本机另外启动 gonc 客户端或标准代理中转。
 
-PSK 按初版设计以明文写入所选 profile 的 `PSK=` 字段，请妥善限制 `ProxyLane.ini` 的访问权限。加密模式仅支持 SOCKS5；普通 HTTP/SOCKS5 模式不加载加密组件。
+远端 gonc 默认只启用 SOCKS5。若要让同一个 TLS-PSK 端口同时接受 SOCKS5 和 HTTP，请在内置服务参数中增加 `-http`，例如 `gonc -e ":s5s -u -http" -l -k -psk 123 -tls 1083`。
+
+PSK 按初版设计以明文写入所选 profile 的 `PSK=` 字段，请妥善限制 `ProxyLane.ini` 的访问权限。标准（不加密）模式不加载加密组件。
 
 加密实现位于可选的 `ProxyLaneSecureTransport32.dll` 和 `ProxyLaneSecureTransport64.dll`。主程序及 Hook DLL 仍使用 `v141_xp` 构建，未选择加密模式时不会加载这两个 DLL。构建加密组件需要 Rust MSVC 工具链：
 

@@ -136,6 +136,8 @@
   "profile.name_required": "请先输入一个配置名称。",
   "profile.save_failed_title": "无法保存配置",
   "profile.invalid_endpoint": "请检查代理地址和端口是否填写正确。",
+  "profile.psk_required": "选择 gonc TLS-PSK 加密模式后必须填写 PSK。",
+  "profile.secure_transport_unsupported": "gonc TLS-PSK 仅支持 SOCKS5、HTTP10 和 HTTP11。",
   "profile.unsaved_prompt": "当前代理设置尚未保存。\r\n\r\n选择“是”保存，选择“否”放弃更改。",
   "profile.unsaved_title": "未保存的代理设置",
   "profile.delete_confirm": "确定要删除配置“%s”吗？\r\n\r\n当前设置将保留为未保存草稿。",

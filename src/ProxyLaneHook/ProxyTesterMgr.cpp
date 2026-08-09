@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "ProxyTesterMgr.h"
+#include "ProxyTransportPolicy.h"
 
 
 
@@ -94,6 +95,16 @@ BOOL CProxyTester::Start(IProxyTesterCallback *pCallback, const LPPRCClient lpPR
 
 BOOL CProxyTester::AddProxyLayer(LPProxyInfo lpProxyInfo)
 {
+	if (lpProxyInfo &&
+		lpProxyInfo->reserved == PROXY_TRANSPORT_GONC_TLS_PSK &&
+		(!ProxyTransportPolicy::SupportsGoncTlsPsk(
+			lpProxyInfo->GetProxyType()) ||
+		 !lpProxyInfo->strTransportPsk.szbuf[0]))
+	{
+		WSASetLastError(WSAEINVAL);
+		return FALSE;
+	}
+
 	CAsyncProxySocketLayer *pNewLayer = new CAsyncProxySocketLayer;
 	if(pNewLayer == NULL)
 		return FALSE;

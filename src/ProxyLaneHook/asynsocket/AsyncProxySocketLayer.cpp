@@ -282,6 +282,11 @@ CStringA GetSocks5Error(UINT rep)
 
 void CAsyncProxySocketLayer::OnClose(int nErrorCode)
 {
+	if (m_nProxyOpID)
+	{
+		FailPendingProxyOperation(nErrorCode);
+		return;
+	}
 	// We must route that event with the same functionality (PostMessage) which is used by
 	// the 'OnReceive' and 'OnConnect' event handlers. Otherwise the socket event queue of
 	// the underlying 'CAsyncSocketEx' may get out of sync.
@@ -329,7 +334,10 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 	}
 
 	if (nErrorCode)
-		TriggerEvent(FD_READ, nErrorCode, TRUE);
+	{
+		FailPendingProxyOperation(nErrorCode);
+		return;
+	}
 
 	if (m_nProxyOpState == 0) //We should not receive a response yet!
 		return;
@@ -353,6 +361,11 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 					Reset();
 					ClearBuffer();
 				}
+				return;
+			}
+			if (numread == 0)
+			{
+				FailPendingProxyOperation(WSAECONNABORTED);
 				return;
 			}
 			m_nRecvBufferPos += numread;
@@ -452,6 +465,11 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 						TriggerEvent(FD_ACCEPT, nErrorCode, TRUE);
 					Reset();
 				}
+				return;
+			}
+			if (numread == 0)
+			{
+				FailPendingProxyOperation(WSAECONNABORTED);
 				return;
 			}
 			m_nRecvBufferPos += numread;
@@ -643,6 +661,11 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 				}
 				return;
 			}
+			if (numread == 0)
+			{
+				FailPendingProxyOperation(WSAECONNABORTED);
+				return;
+			}
 			m_nRecvBufferPos += numread;
 
 			// responseLength above is the amount that was safe to request with
@@ -797,7 +820,10 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 				return;
 			}
 			else if (iRead == 0)
+			{
+				FailPendingProxyOperation(WSAECONNABORTED);
 				return;
+			}
 
 			// Safety check: Don't allow buffer to grow too large
 			if (    m_iStrBuffSize + iRead > 4096
@@ -1512,6 +1538,23 @@ void CAsyncProxySocketLayer::ClearSendBuffer()
 	delete[] m_pSendBuffer;
 	m_pSendBuffer = NULL;
 	m_nSendBufferLen = m_nSendBufferPos = 0;
+}
+
+void CAsyncProxySocketLayer::FailPendingProxyOperation(int errorCode)
+{
+	if (!m_nProxyOpID)
+		return;
+	if (!errorCode)
+		errorCode = WSAECONNABORTED;
+
+	const int event = m_nProxyOpID == PROXYOP_CONNECT ||
+		m_nProxyOpID == PROXYOP_UDPASSOCIATE ? FD_CONNECT : FD_ACCEPT;
+	DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC,
+		PROXYERROR_REQUESTFAILED, errorCode);
+	Reset();
+	ClearBuffer();
+	ClearSendBuffer();
+	TriggerEvent(event, errorCode, TRUE);
 }
 
 BOOL CAsyncProxySocketLayer::QueueProxyRequest(const void *data, int length)

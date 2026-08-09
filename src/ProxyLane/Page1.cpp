@@ -12,6 +12,7 @@
 #include "Base64.h"
 #include "Localization.h"
 #include "..\ProxyLaneHook\DnsRedirectPolicy.h"
+#include "..\ProxyLaneHook\ProxyTransportPolicy.h"
 #include <vector>
 #include <shlwapi.h>
 #pragma comment(lib, "shlwapi.lib")
@@ -540,6 +541,7 @@ BOOL CPage1::GetProxySettingsFromUi(LPProxySettingsInfo lpPSI)
 
 BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 {
+	m_settingsValidationKey = _T("profile.invalid_endpoint");
 
 	CString szType, szHost, szPort, szUser, szPass, szTransportPsk;
 
@@ -552,22 +554,30 @@ BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 	const int transportMode = m_cbTransport.GetCurSel() ==
 		PROXY_TRANSPORT_GONC_TLS_PSK
 		? PROXY_TRANSPORT_GONC_TLS_PSK : PROXY_TRANSPORT_PLAIN;
-
-	if (!szHost.GetLength() || !szPort.GetLength() || !_ttoi(szPort))
-		return FALSE;
-	if (transportMode == PROXY_TRANSPORT_GONC_TLS_PSK &&
-		(szType.CompareNoCase(_T("SOCKS5")) != 0 || szTransportPsk.IsEmpty()))
-		return FALSE;
-
 	ProxyInfo pi;
-	pi.reserved = transportMode;
-
 	pi.szItemName = _T("myproxy");
 	pi.strProxyType = szType;
 	pi.strProxyHost = szHost;
 	pi.nProxyPort = _ttoi(szPort);
 	pi.strProxyUser = szUser;
 	pi.strProxyPass = szPass;
+	pi.reserved = transportMode;
+
+	if (!szHost.GetLength() || !szPort.GetLength() || !_ttoi(szPort))
+		return FALSE;
+	if (transportMode == PROXY_TRANSPORT_GONC_TLS_PSK)
+	{
+		if (!ProxyTransportPolicy::SupportsGoncTlsPsk(pi.GetProxyType()))
+		{
+			m_settingsValidationKey = _T("profile.secure_transport_unsupported");
+			return FALSE;
+		}
+		if (szTransportPsk.IsEmpty())
+		{
+			m_settingsValidationKey = _T("profile.psk_required");
+			return FALSE;
+		}
+	}
 	if (transportMode == PROXY_TRANSPORT_GONC_TLS_PSK)
 	{
 #ifdef _UNICODE
@@ -655,13 +665,24 @@ void CPage1::UpdateTransportEnable()
 	const int typeIndex = m_cbProxyType.GetCurSel();
 	if (typeIndex != CB_ERR)
 		m_cbProxyType.GetLBText(typeIndex, proxyType);
+	ProxyInfo selectedProxy;
+	selectedProxy.strProxyType = proxyType;
+	const int selectedProxyType = selectedProxy.GetProxyType();
 	const BOOL supportsSecureTransport =
-		proxyType.CompareNoCase(_T("SOCKS5")) == 0;
+		ProxyTransportPolicy::SupportsGoncTlsPsk(selectedProxyType);
 	if (!supportsSecureTransport)
 		m_cbTransport.SetCurSel(PROXY_TRANSPORT_PLAIN);
 	m_cbTransport.EnableWindow(supportsSecureTransport);
 	m_editTransportPsk.EnableWindow(supportsSecureTransport &&
 		m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK);
+	if (m_btnHookUDP.GetSafeHwnd())
+	{
+		const BOOL supportsUdp =
+			ProxyTransportPolicy::SupportsUdpProxy(selectedProxyType);
+		if (!supportsUdp)
+			m_btnHookUDP.SetCheck(BST_UNCHECKED);
+		m_btnHookUDP.EnableWindow(supportsUdp);
+	}
 }
 
 void CPage1::OnDnsSettingsChanged()
@@ -728,7 +749,7 @@ BOOL CPage1::SaveCurrentProfile(LPCTSTR profileName)
 	}
 	if (!GetSettings(&item.pi))
 	{
-		MessageBox(Localization::Get(_T("profile.invalid_endpoint")),
+		MessageBox(Localization::Get(m_settingsValidationKey),
 			Localization::Get(_T("profile.save_failed_title")), MB_ICONERROR);
 		return FALSE;
 	}
@@ -788,7 +809,7 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 	if (!GetSettings(&proxyInfo))
 	{
 		if (showErrors)
-			MessageBox(Localization::Get(_T("profile.invalid_endpoint")),
+			MessageBox(Localization::Get(m_settingsValidationKey),
 				Localization::Get(_T("proxy.start_failed_title")), MB_ICONERROR);
 		return FALSE;
 	}
@@ -802,7 +823,7 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 
 	if (!GetProxySettingsFromUi(&runtimeSettings))
 		return FALSE;
-	if (proxyInfo.GetProxyType() != PROXYTYPE_SOCKS5)
+	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()))
 		runtimeSettings.bHookUDP = FALSE;
 
 	PublishProfileSnapshots();
@@ -853,7 +874,7 @@ BOOL CPage1::ApplyRuntimeSettings()
 	ProxySettingsInfo runtimeSettings;
 	if (!GetSettings(&proxyInfo))
 	{
-		MessageBox(Localization::Get(_T("profile.invalid_endpoint")),
+		MessageBox(Localization::Get(m_settingsValidationKey),
 			Localization::Get(_T("apply.failed_title")), MB_ICONERROR);
 		return FALSE;
 	}
@@ -862,7 +883,7 @@ BOOL CPage1::ApplyRuntimeSettings()
 
 	if (!GetProxySettingsFromUi(&runtimeSettings))
 		return FALSE;
-	if (proxyInfo.GetProxyType() != PROXYTYPE_SOCKS5)
+	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()))
 		runtimeSettings.bHookUDP = FALSE;
 
 	PublishProfileSnapshots();
@@ -965,7 +986,7 @@ void CPage1::OnBnClickedTestproxy()
 	ProxyInfo testProxyInfo;
 	if (!GetSettings(&testProxyInfo))
 	{
-		MessageBox(Localization::Get(_T("profile.invalid_endpoint")),
+		MessageBox(Localization::Get(m_settingsValidationKey),
 			Localization::Get(_T("test.invalid_title")), MB_ICONERROR);
 		m_staticTestProxy.SetStatus(Localization::Get(_T("status.invalid_config")), CStatusLabel::TONE_DANGER);
 		m_pProxyTester->Release();
