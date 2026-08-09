@@ -6,6 +6,7 @@
 #include "ModernUI.h"
 #include "ProxyController.h"
 #include "ProxyProfileStore.h"
+#include <afxmt.h>
 
 
 // CPage1 对话框
@@ -39,6 +40,10 @@ public:
 private:
 
 	ProxyInfo m_ProxyInfo;
+	ProxySettingsInfo m_runtimeSettings;
+	CCriticalSection m_runtimeLock;
+	BOOL m_runtimeSettingsValid;
+	BOOL m_runtimeDirty;
 
 	IGlobalProxy* m_pTestProxy;
 	IProxyTester* m_pProxyTester;
@@ -63,6 +68,10 @@ private:
 	void LayoutWorkflowCard();
 	void UpdateWorkflowCard();
 	void SetProfileDirty(BOOL dirty);
+	void SetRuntimeDirty(BOOL dirty);
+	BOOL GetProxySettingsFromUi(LPProxySettingsInfo lpPSI);
+	BOOL ApplyRuntimeSettings();
+	CString GetCurrentProfileName();
 	BOOL SaveCurrentProfile(LPCTSTR profileName = NULL);
 	void RestoreProfileSelection();
 

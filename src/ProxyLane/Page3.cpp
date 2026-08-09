@@ -45,6 +45,7 @@ struct ChildInjectFilterSnapshot
 	std::vector<CString> patterns;
 };
 extern ChildInjectFilterSnapshot g_ChildInjectFilter;
+extern CCriticalSection g_childFilterLock;
 
 
 using namespace ATL;
@@ -2222,6 +2223,7 @@ BOOL CPage3::OnNewProcess(LPHookNewProcessInfo lphnpi)
 BOOL CPage3::ShouldProxyChildProcess(LPHookNewProcessInfo lphnpi)
 {
 	// 子进程注入过滤：按 profile 配置决定是否调用 InjectDll
+	CSingleLock filterLock(&g_childFilterLock, TRUE);
 	if (g_ChildInjectFilter.bEnabled && !g_ChildInjectFilter.patterns.empty())
 	{
 		BOOL bMatched = FALSE;

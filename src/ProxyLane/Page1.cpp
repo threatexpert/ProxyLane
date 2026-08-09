@@ -19,7 +19,7 @@
 
 CIniFile g_ini;
 
-// 子进程注入过滤运行时快照（OnBnClickedOk 时由 UI 提交）
+// 子进程注入过滤运行时快照（启动代理或“保存并应用”时由 UI 提交）
 struct ChildInjectFilterSnapshot
 {
 	BOOL bEnabled;                       // 等同于 bHookChildProcess
@@ -35,8 +35,7 @@ struct TargetInjectFilterSnapshot
 	std::vector<CString> patterns;       // 通配符行（host:port 或 ip:port）
 };
 TargetInjectFilterSnapshot g_TargetInjectFilter = { TARGETFILTER_MODE_BYPASS };
-CRITICAL_SECTION g_csTargetFilter;
-BOOL g_bTargetFilterCsInit = FALSE;
+CCriticalSection g_childFilterLock;
 
 
 // 把多行规则文本拆为 patterns 数组（trim、跳空行、跳 '#' 注释）
@@ -71,6 +70,8 @@ IMPLEMENT_DYNAMIC(CPage1, CModernDialog)
 
 CPage1::CPage1(CWnd* pParent /*=NULL*/)
 	: CModernDialog(CPage1::IDD, pParent)
+	, m_runtimeSettingsValid(FALSE)
+	, m_runtimeDirty(FALSE)
 	, m_profileDirty(FALSE)
 	, m_loadingProfile(TRUE)
 	, m_profileStore(g_ini)
@@ -80,6 +81,7 @@ CPage1::CPage1(CWnd* pParent /*=NULL*/)
 	m_pProxyTester = 0;
 	m_bIsTesting = FALSE;
 	m_ProxyInfo.reserved = 0;
+	memset(&m_runtimeSettings, 0, sizeof(m_runtimeSettings));
 }
 
 CPage1::~CPage1()
@@ -348,8 +350,16 @@ void CPage1::UpdateWorkflowCard()
 	const BOOL running = m_proxyController.IsRunning();
 	if (running)
 	{
-		m_workflowStatus.SetStatus(Localization::Get(_T("workflow.running")), CStatusLabel::TONE_SUCCESS);
-		m_workflowText.SetWindowText(Localization::Get(_T("workflow.running_text")));
+		if (m_runtimeDirty)
+		{
+			m_workflowStatus.SetStatus(Localization::Get(_T("workflow.unapplied")), CStatusLabel::TONE_WARNING);
+			m_workflowText.SetWindowText(Localization::Get(_T("workflow.unapplied_text")));
+		}
+		else
+		{
+			m_workflowStatus.SetStatus(Localization::Get(_T("workflow.running")), CStatusLabel::TONE_SUCCESS);
+			m_workflowText.SetWindowText(Localization::Get(_T("workflow.running_text")));
+		}
 	}
 	else
 	{
@@ -405,6 +415,13 @@ void CPage1::LayoutFilterEditor(UINT groupId, CEdit& editor, UINT hintId)
 
 BOOL CPage1::GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI)
 {
+	if (!pPRCC || !lpPI)
+		return FALSE;
+
+	CSingleLock runtimeLock(&m_runtimeLock, TRUE);
+	if (!m_runtimeSettingsValid)
+		return FALSE;
+
 	*lpPI = m_ProxyInfo;
 
 	// RFC 1928 permits an all-zero endpoint when the client cannot reliably
@@ -478,7 +495,24 @@ BOOL CPage1::GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI)
 
 BOOL CPage1::GetProxySettings(LPProxySettingsInfo lpPSI)
 {
+	if (!lpPSI)
+		return FALSE;
+
+	CSingleLock runtimeLock(&m_runtimeLock, TRUE);
+	if (!m_runtimeSettingsValid)
+		return FALSE;
+
+	*lpPSI = m_runtimeSettings;
+	return TRUE;
+}
+
+BOOL CPage1::GetProxySettingsFromUi(LPProxySettingsInfo lpPSI)
+{
+	if (!lpPSI)
+		return FALSE;
+
 	ProxySettingsInfo psi;
+	memset(&psi, 0, sizeof(psi));
 
 	psi.bHookTCP = m_btnHookTCP.GetCheck() == BST_CHECKED;
 	psi.bHookUDP = m_btnHookUDP.GetCheck() == BST_CHECKED;
@@ -583,20 +617,34 @@ BOOL CPage1::LoadProfileByName(LPCTSTR profileName)
 void CPage1::SetProfileDirty(BOOL dirty)
 {
 	m_profileDirty = dirty;
-	if (m_btnSaveProfile.GetSafeHwnd())
-		m_btnSaveProfile.EnableWindow(dirty);
 	if (m_btnDeleteProfile.GetSafeHwnd())
 		m_btnDeleteProfile.EnableWindow(m_cfgls.GetCurSel() != CB_ERR);
+	if (m_OK.GetSafeHwnd())
+		UpdateProxyStateUi();
+	else if (m_btnSaveProfile.GetSafeHwnd())
+		m_btnSaveProfile.EnableWindow(dirty);
 
 	if (!m_bIsTesting && m_staticTestProxy.GetSafeHwnd())
 		UpdateProxyTestStatus();
+}
+
+void CPage1::SetRuntimeDirty(BOOL dirty)
+{
+	m_runtimeDirty = m_proxyController.IsRunning() ? dirty : FALSE;
+	if (!m_bIsTesting && m_staticTestProxy.GetSafeHwnd())
+		UpdateProxyTestStatus();
+	if (m_OK.GetSafeHwnd())
+		UpdateProxyStateUi();
 }
 
 void CPage1::OnProfileFieldChanged()
 {
 	UpdateTransportEnable();
 	if (!m_loadingProfile)
+	{
 		SetProfileDirty(TRUE);
+		SetRuntimeDirty(TRUE);
+	}
 }
 
 void CPage1::UpdateTransportEnable()
@@ -735,7 +783,9 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 	if (m_proxyController.IsRunning())
 		return TRUE;
 
-	if (!GetSettings(&m_ProxyInfo))
+	ProxyInfo proxyInfo;
+	ProxySettingsInfo runtimeSettings;
+	if (!GetSettings(&proxyInfo))
 	{
 		if (showErrors)
 			MessageBox(Localization::Get(_T("profile.invalid_endpoint")),
@@ -750,28 +800,86 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 	CPage3 *pPage3 = pParent->GetPage3();
 	CPage4 *pPage4 = pParent->GetPage4();
 
-	if (m_ProxyInfo.GetProxyType() != PROXYTYPE_SOCKS5)
-	{
-		m_btnHookUDP.SetCheck(BST_UNCHECKED);
-	}
+	if (!GetProxySettingsFromUi(&runtimeSettings))
+		return FALSE;
+	if (proxyInfo.GetProxyType() != PROXYTYPE_SOCKS5)
+		runtimeSettings.bHookUDP = FALSE;
 
 	PublishProfileSnapshots();
+	{
+		CSingleLock runtimeLock(&m_runtimeLock, TRUE);
+		m_ProxyInfo = proxyInfo;
+		m_runtimeSettings = runtimeSettings;
+		m_runtimeSettingsValid = TRUE;
+	}
 
 	if (m_proxyController.Start(this, pPage2, pPage3))
 	{
-		CString runningProfileName;
-		const int selectedProfile = m_cfgls.GetCurSel();
-		if (selectedProfile != CB_ERR)
-			m_cfgls.GetLBText(selectedProfile, runningProfileName);
-		else
-			m_cfgls.GetWindowText(runningProfileName);
+		CString runningProfileName = GetCurrentProfileName();
 		pParent->SetRunningProfile(runningProfileName, TRUE);
 		pPage4->UpdateMonitorStatus();
+		m_runtimeDirty = FALSE;
 		UpdateProxyStateUi();
+		UpdateProxyTestStatus();
 		return TRUE;
 	}
 
+	{
+		CSingleLock runtimeLock(&m_runtimeLock, TRUE);
+		m_runtimeSettingsValid = FALSE;
+	}
+
 	return FALSE;
+}
+
+CString CPage1::GetCurrentProfileName()
+{
+	CString profileName;
+	const int selectedProfile = m_cfgls.GetCurSel();
+	if (selectedProfile != CB_ERR)
+		m_cfgls.GetLBText(selectedProfile, profileName);
+	else
+		m_cfgls.GetWindowText(profileName);
+	profileName.Trim();
+	return profileName;
+}
+
+BOOL CPage1::ApplyRuntimeSettings()
+{
+	if (!m_proxyController.IsRunning())
+		return FALSE;
+
+	ProxyInfo proxyInfo;
+	ProxySettingsInfo runtimeSettings;
+	if (!GetSettings(&proxyInfo))
+	{
+		MessageBox(Localization::Get(_T("profile.invalid_endpoint")),
+			Localization::Get(_T("apply.failed_title")), MB_ICONERROR);
+		return FALSE;
+	}
+	if (!ValidateDnsRedirectSettings(TRUE))
+		return FALSE;
+
+	if (!GetProxySettingsFromUi(&runtimeSettings))
+		return FALSE;
+	if (proxyInfo.GetProxyType() != PROXYTYPE_SOCKS5)
+		runtimeSettings.bHookUDP = FALSE;
+
+	PublishProfileSnapshots();
+	{
+		CSingleLock runtimeLock(&m_runtimeLock, TRUE);
+		m_ProxyInfo = proxyInfo;
+		m_runtimeSettings = runtimeSettings;
+		m_runtimeSettingsValid = TRUE;
+	}
+
+	if (g_MainTab)
+		g_MainTab->SetRunningProfile(GetCurrentProfileName(), TRUE);
+	m_runtimeDirty = FALSE;
+	UpdateProxyStateUi();
+	UpdateProxyTestStatus();
+
+	return TRUE;
 }
 
 void CPage1::OnBnClickedCancel()
@@ -793,6 +901,11 @@ BOOL CPage1::StopProxy()
 
 	if (m_proxyController.Stop())
 	{
+		{
+			CSingleLock runtimeLock(&m_runtimeLock, TRUE);
+			m_runtimeSettingsValid = FALSE;
+		}
+		m_runtimeDirty = FALSE;
 		pParent->SetRunningProfile(NULL, FALSE);
 		pPage4->UpdateMonitorStatus();
 		UpdateProxyStateUi();
@@ -838,9 +951,6 @@ void CPage1::OnBnClickedTestproxy()
 		return;
 	}
 
-	// 测试按钮也以界面所见为准，更新内存中的过滤快照（即便已启动也能即时生效）
-	PublishProfileSnapshots();
-
 	if (m_pProxyTester)
 		m_pProxyTester->Release();
 	m_bIsTesting = FALSE;
@@ -852,11 +962,14 @@ void CPage1::OnBnClickedTestproxy()
 		return;
 	}
 
-	if (!GetSettings(&m_ProxyInfo))
+	ProxyInfo testProxyInfo;
+	if (!GetSettings(&testProxyInfo))
 	{
 		MessageBox(Localization::Get(_T("profile.invalid_endpoint")),
 			Localization::Get(_T("test.invalid_title")), MB_ICONERROR);
 		m_staticTestProxy.SetStatus(Localization::Get(_T("status.invalid_config")), CStatusLabel::TONE_DANGER);
+		m_pProxyTester->Release();
+		m_pProxyTester = NULL;
 		return;
 	}
 
@@ -882,12 +995,14 @@ void CPage1::OnBnClickedTestproxy()
 #endif
 	client.dstAddr.SetPort(nTestPort);
 
-	if (!m_pProxyTester->Start(this, &client, &m_ProxyInfo))
+	if (!m_pProxyTester->Start(this, &client, &testProxyInfo))
 	{
 		MessageBox(Localization::Get(_T("test.start_failed")),
 			Localization::Get(_T("test.failed_title")), MB_ICONERROR);
 		m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_failed")), CStatusLabel::TONE_DANGER);
 		ATLTRACE("OnBnClickedTestproxy -> Start failed.\r\n");
+		m_pProxyTester->Release();
+		m_pProxyTester = NULL;
 		return;
 	}
 
@@ -929,10 +1044,20 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 		if(nCode == 0)
 		{
 			szText = Localization::Get(_T("test.success"));
-			if (m_profileDirty)
-		{
+			if (m_profileDirty && m_runtimeDirty)
+			{
+				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_unsaved_unapplied")), CStatusLabel::TONE_WARNING);
+				szText += Localization::Get(_T("test.not_saved_or_applied"));
+			}
+			else if (m_runtimeDirty)
+			{
+				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_unapplied")), CStatusLabel::TONE_WARNING);
+				szText += Localization::Get(_T("test.not_applied"));
+			}
+			else if (m_profileDirty)
+			{
 				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_unsaved")), CStatusLabel::TONE_WARNING);
-				szText += Localization::Get(_T("test.applied_unsaved"));
+				szText += Localization::Get(_T("test.not_saved"));
 			}
 			else
 				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_saved")), CStatusLabel::TONE_SUCCESS);
@@ -962,8 +1087,14 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 				szText = Localization::Format(_T("test.negotiation_failed"), nCode);
 				break;
 			}
-			m_staticTestProxy.SetStatus(Localization::Get(m_profileDirty
-				? _T("status.test_failed_unsaved") : _T("status.test_failed")), CStatusLabel::TONE_DANGER);
+			LPCTSTR statusKey = _T("status.test_failed");
+			if (m_profileDirty && m_runtimeDirty)
+				statusKey = _T("status.test_failed_unsaved_unapplied");
+			else if (m_runtimeDirty)
+				statusKey = _T("status.test_failed_unapplied");
+			else if (m_profileDirty)
+				statusKey = _T("status.test_failed_unsaved");
+			m_staticTestProxy.SetStatus(Localization::Get(statusKey), CStatusLabel::TONE_DANGER);
 			MessageBox(szText);
 		}
 
@@ -1017,7 +1148,14 @@ void CPage1::OnCfgoptSave()
 {
 	m_cfgls.GetWindowText(m_draftProfileName);
 	m_draftProfileName.Trim();
-	SaveCurrentProfile(m_draftProfileName);
+	if (!SaveCurrentProfile(m_draftProfileName))
+		return;
+
+	if (m_proxyController.IsRunning() && ApplyRuntimeSettings())
+	{
+		MessageBox(Localization::Get(_T("apply.saved_success")),
+			Localization::Get(_T("apply.saved_success_title")), MB_ICONINFORMATION);
+	}
 }
 
 void CPage1::OnCfgoptDelete()
@@ -1061,8 +1199,6 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_edit_Pass.SetWindowText(_T(""));
 		m_cbTransport.SetCurSel(PROXY_TRANSPORT_PLAIN);
 		m_editTransportPsk.SetWindowText(_T(""));
-		GetSettings(&m_ProxyInfo);
-
 		m_btnHookTCP.SetCheck(BST_CHECKED);
 		m_btnHookUDP.SetCheck(BST_CHECKED);
 		m_btnBlockUDP.SetCheck(BST_UNCHECKED);
@@ -1100,8 +1236,6 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 			PROXY_TRANSPORT_PLAIN);
 		m_editTransportPsk.SetWindowText(item->strTransportPsk);
 
-		GetSettings(&m_ProxyInfo);
-
 		m_btnHookTCP.SetCheck(item->bHookTCP ? BST_CHECKED : BST_UNCHECKED);
 		m_btnHookUDP.SetCheck(item->bHookUDP ? BST_CHECKED : BST_UNCHECKED);
 		m_btnBlockUDP.SetCheck(item->bBlockUDP ? BST_CHECKED : BST_UNCHECKED);
@@ -1127,6 +1261,8 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 	m_draftProfileName = m_loadedProfileName;
 	m_loadingProfile = FALSE;
 	SetProfileDirty(FALSE);
+	if (m_proxyController.IsRunning())
+		SetRuntimeDirty(TRUE);
 }
 
 void CPage1::UIGetCfg( CfgProxyItem *item )
@@ -1184,6 +1320,7 @@ void CPage1::PublishChildFilterSnapshot()
 {
 	CfgProxyItem cur;
 	UIGetCfg(&cur);
+	CSingleLock filterLock(&g_childFilterLock, TRUE);
 	g_ChildInjectFilter.bEnabled = cur.bHookChildProcess;
 	g_ChildInjectFilter.nMode = cur.nChildFilterMode;
 	SplitFilterPatterns(cur.strChildFilter, g_ChildInjectFilter.patterns);
@@ -1194,6 +1331,7 @@ void CPage1::PublishTargetFilterSnapshot()
 {
 	CfgProxyItem cur;
 	UIGetCfg(&cur);
+	CSingleLock runtimeLock(&m_runtimeLock, TRUE);
 	g_TargetInjectFilter.nMode = cur.nTargetFilterMode;
 	SplitFilterPatterns(cur.strTargetFilter, g_TargetInjectFilter.patterns);
 }
@@ -1262,7 +1400,11 @@ void CPage1::UpdateProxyTestStatus()
 	if (m_bIsTesting || !m_staticTestProxy.GetSafeHwnd())
 		return;
 
-	if (m_profileDirty)
+	if (m_profileDirty && m_runtimeDirty)
+		m_staticTestProxy.SetStatus(Localization::Get(_T("status.changes_unsaved_unapplied")), CStatusLabel::TONE_WARNING);
+	else if (m_runtimeDirty)
+		m_staticTestProxy.SetStatus(Localization::Get(_T("status.changes_unapplied")), CStatusLabel::TONE_WARNING);
+	else if (m_profileDirty)
 		m_staticTestProxy.SetStatus(Localization::Get(_T("status.changes_unsaved")), CStatusLabel::TONE_WARNING);
 	else
 		m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_not_run")), CStatusLabel::TONE_NEUTRAL);
@@ -1271,7 +1413,15 @@ void CPage1::UpdateProxyTestStatus()
 void CPage1::UpdateProxyStateUi()
 {
 	BOOL running = m_proxyController.IsRunning();
+	m_OK.SetWindowText(Localization::Get(_T("action.start_proxy")));
 	m_OK.EnableWindow(!running);
 	m_Cancel.EnableWindow(running);
+	if (m_btnSaveProfile.GetSafeHwnd())
+	{
+		m_btnSaveProfile.SetWindowText(Localization::Get(running
+			? _T("action.save_apply") : _T("common.save_profile")));
+		m_btnSaveProfile.EnableWindow(running
+			? (m_profileDirty || m_runtimeDirty) : m_profileDirty);
+	}
 	UpdateWorkflowCard();
 }
