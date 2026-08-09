@@ -7,6 +7,7 @@
 #include "ProxyReceptionCentre.h"
 #include "GlobalProxy.h"
 #include "ProxyDataHandle.h"
+#include "ProxyLog.h"
 
 #define TIMER_CHECK_REGISTERED_CLIENT 0x100
 #define TIMER_CHECK_REGISTERED_CLIENT_INTERVAL 30*1000
@@ -259,7 +260,8 @@ BOOL CProxyReceptionCentre::StartupPRCServer()
 
 		if(!m_pTcpServer->StartupServer())
 		{
-			m_szLastError = _T("Failed to start PRCTcpServer.");
+			m_szLastError.Format(_T("Failed to start the IPv4 TCP listener (Winsock %d)."),
+				WSAGetLastError());
 			break;
 		}
 
@@ -272,8 +274,23 @@ BOOL CProxyReceptionCentre::StartupPRCServer()
 		}
 		if(!m_pTcpServer6->StartupServer())
 		{
-			m_szLastError = _T("Failed to start IPv6 PRCTcpServer.");
-			break;
+			const int ipv6Error = WSAGetLastError();
+			if (ipv6Error == WSAEAFNOSUPPORT ||
+				ipv6Error == WSAEPROTONOSUPPORT ||
+				ipv6Error == WSAEADDRNOTAVAIL ||
+				ipv6Error == WSAEINVAL)
+			{
+				delete m_pTcpServer6;
+				m_pTcpServer6 = NULL;
+				PrintText(_T("IPv6 loopback is unavailable (Winsock %d); continuing with IPv4 only.\r\n"),
+					ipv6Error);
+			}
+			else
+			{
+				m_szLastError.Format(_T("Failed to start the IPv6 TCP listener (Winsock %d)."),
+					ipv6Error);
+				break;
+			}
 		}
 
 		m_pUdpServer = new CPRCUdpServer(this);
@@ -424,6 +441,10 @@ BOOL CProxyReceptionCentre::GetProcessIdentity(
 
 BOOL CProxyReceptionCentre::GetStartupInfo(LPPRCINFO lpStartupInfo)
 {
+	if (!lpStartupInfo)
+		return FALSE;
+	ZeroMemory(lpStartupInfo, sizeof(*lpStartupInfo));
+
 	if(m_pTcpServer == NULL)
 	{
 		m_szLastError = _T("PRCTcpServer has not been created.");
@@ -436,12 +457,14 @@ BOOL CProxyReceptionCentre::GetStartupInfo(LPPRCINFO lpStartupInfo)
 		m_szLastError = _T("GetSockName failed.");
 		return FALSE;
 	}
-	addlen = sizeof(lpStartupInfo->tcpaddr6);
-	if(!m_pTcpServer6 ||
-		!m_pTcpServer6->GetSockName(&lpStartupInfo->tcpaddr6, &addlen))
+	if (m_pTcpServer6)
 	{
-		m_szLastError = _T("Get IPv6 SockName failed.");
-		return FALSE;
+		addlen = sizeof(lpStartupInfo->tcpaddr6);
+		if(!m_pTcpServer6->GetSockName(&lpStartupInfo->tcpaddr6, &addlen))
+		{
+			m_szLastError = _T("Get IPv6 SockName failed.");
+			return FALSE;
+		}
 	}
 
 	//udp

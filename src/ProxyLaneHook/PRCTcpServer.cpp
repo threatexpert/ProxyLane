@@ -249,7 +249,7 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 		if (PRCC.dstAddr.IsIPv6())
 		{
 			WCHAR addressText[INET6_ADDRSTRLEN] = L"";
-			InetNtopW(AF_INET6, (PVOID)PRCC.dstAddr.GetAddr6(), addressText,
+			ProxyInetNtopW(AF_INET6, (PVOID)PRCC.dstAddr.GetAddr6(), addressText,
 				_countof(addressText));
 			PrintText(_T("Failed to add proxy task. PID: %d(%s), [%s]:%d, domain: %S:%d\r\n"),
 				PRCC.dwPid, ppszName ? ppszName : L"", addressText,
@@ -281,7 +281,7 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 		if (PRCC.dstAddr.IsIPv6())
 		{
 			WCHAR addressText[INET6_ADDRSTRLEN] = L"";
-			InetNtopW(AF_INET6, (PVOID)PRCC.dstAddr.GetAddr6(), addressText,
+			ProxyInetNtopW(AF_INET6, (PVOID)PRCC.dstAddr.GetAddr6(), addressText,
 				_countof(addressText));
 			PrintText(_T("%sPID: %d(%s), connect to: [%s]:%d\r\n"),
 				szTag, PRCC.dwPid, ppszName ? ppszName : L"", addressText,

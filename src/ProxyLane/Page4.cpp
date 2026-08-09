@@ -16,10 +16,10 @@ static CString FormatProxyEndpoint(const _SockAddr &address)
 	{
 		TCHAR addressText[INET6_ADDRSTRLEN] = { 0 };
 #ifdef _UNICODE
-		InetNtopW(AF_INET6, (PVOID)address.GetAddr6(), addressText,
+		ProxyInetNtopW(AF_INET6, (PVOID)address.GetAddr6(), addressText,
 			_countof(addressText));
 #else
-		InetNtopA(AF_INET6, (PVOID)address.GetAddr6(), addressText,
+		ProxyInetNtopA(AF_INET6, (PVOID)address.GetAddr6(), addressText,
 			_countof(addressText));
 #endif
 		text.Format(_T("[%s]:%d"), addressText, address.GetPort());

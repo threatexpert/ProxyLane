@@ -217,6 +217,8 @@ protected:
 #define PROXYERROR_AUTHFAILED		5 //Authentication failed
 #define PROXYERROR_AUTHNOLOGON		6
 #define PROXYERROR_CANTRESOLVEHOST	7
+#define PROXYERROR_SECURE_UNAVAILABLE	20
+#define PROXYERROR_SECURE_HANDSHAKE	21
 
 public:
 	virtual ~IProxyTesterCallback(void){}

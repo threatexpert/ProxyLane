@@ -13,12 +13,16 @@ BOOL CProxyController::Start(
 	IProxyLog* logView,
 	IProxyLog* processView)
 {
+	m_lastError.Empty();
 	if (g_GlobalProxy)
 		return TRUE;
 
 	g_GlobalProxy = GetGlobalProxyInstance();
 	if (!g_GlobalProxy)
+	{
+		m_lastError = _T("The proxy module could not be loaded.");
 		return FALSE;
+	}
 
 	IProxyLog* proxyLog = g_GlobalProxy->GetLogInstance();
 	if (proxyLog)
@@ -36,6 +40,7 @@ BOOL CProxyController::Start(
 	if (g_GlobalProxy->EnableProxy())
 		return TRUE;
 
+	m_lastError = g_GlobalProxy->GetLastErrorW();
 	ReleaseGlobalProxyInstance();
 	g_GlobalProxy = NULL;
 	return FALSE;

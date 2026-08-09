@@ -1025,7 +1025,12 @@ void CAsyncProxySocketLayer::OnConnect(int nErrorCode)
 
 	if (nErrorCode) {
 		// Can't connect to proxy
-		DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, PROXYERROR_NOCONN, nErrorCode);
+		int proxyError = PROXYERROR_NOCONN;
+		if (nErrorCode == PROXYLANE_SECURE_LOAD_FAILED)
+			proxyError = PROXYERROR_SECURE_UNAVAILABLE;
+		else if (nErrorCode == PROXYLANE_SECURE_HANDSHAKE_FAILED)
+			proxyError = PROXYERROR_SECURE_HANDSHAKE;
+		DoLayerCallback(LAYERCALLBACK_LAYERSPECIFIC, proxyError, nErrorCode);
 		//udp������ʱ����Ҫtcp����, ����PROXYOP_UDPASSOCIATEʧ��ʱ����һ��FD_CONNECT
 		if (m_nProxyOpID == PROXYOP_CONNECT || m_nProxyOpID == PROXYOP_UDPASSOCIATE)
 			TriggerEvent(FD_CONNECT, nErrorCode, TRUE);
@@ -1198,7 +1203,7 @@ void CAsyncProxySocketLayer::OnConnect(int nErrorCode)
 				pszHost = m_pProxyPeerHost;
 			else if (m_proxyPeerAddress.IsIPv6())
 			{
-				pszHost = InetNtopA(AF_INET6, (PVOID)m_proxyPeerAddress.GetAddr6(),
+				pszHost = ProxyInetNtopA(AF_INET6, (PVOID)m_proxyPeerAddress.GetAddr6(),
 					ipv6Host, _countof(ipv6Host));
 			}
 			else
@@ -1397,10 +1402,10 @@ BOOL CAsyncProxySocketLayer::GetPeerName(CString &rPeerAddress, UINT &rPeerPort)
 		{
 			TCHAR address[INET6_ADDRSTRLEN] = { 0 };
 #ifdef _UNICODE
-			InetNtopW(AF_INET6, (PVOID)m_proxyPeerAddress.GetAddr6(), address,
+			ProxyInetNtopW(AF_INET6, (PVOID)m_proxyPeerAddress.GetAddr6(), address,
 				_countof(address));
 #else
-			InetNtopA(AF_INET6, (PVOID)m_proxyPeerAddress.GetAddr6(), address,
+			ProxyInetNtopA(AF_INET6, (PVOID)m_proxyPeerAddress.GetAddr6(), address,
 				_countof(address));
 #endif
 			rPeerAddress = address;

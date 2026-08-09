@@ -25,6 +25,7 @@ public:
 	//
 	BOOL CreatePRC();
 	BOOL DestroyPRC();
+	CString GetLastErrorText() const { return m_szLastError; }
 
 
 	VOID OnTimer(UINT_PTR nIDEvent);

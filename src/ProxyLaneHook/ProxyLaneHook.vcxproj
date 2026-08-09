@@ -387,6 +387,7 @@
 	<ClInclude Include="UdpAssociationPolicy.h" />
 	<ClInclude Include="DnsRedirectPolicy.h" />
 	<ClInclude Include="UdpPayloadPolicy.h" />
+	<ClInclude Include="InetCompat.h" />
     <ClInclude Include="UdpProxyTask.h" />
     <ClInclude Include="asynsocket\AsyncProxySocketLayer.h" />
     <ClInclude Include="asynsocket\AsyncSecureSocketLayer.h" />

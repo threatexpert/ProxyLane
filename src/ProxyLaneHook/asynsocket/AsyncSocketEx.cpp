@@ -590,7 +590,7 @@ BOOL CAsyncSocketEx::Create(UINT nSocketPort /*=0*/, int nSocketType /*=SOCK_STR
 			local6.sin6_family = AF_INET6;
 			local6.sin6_port = htons((u_short)nSocketPort);
 			if (lpszSocketAddress &&
-				InetPtonA(AF_INET6, lpszSocketAddress, &local6.sin6_addr) != 1)
+				ProxyInetPtonA(AF_INET6, lpszSocketAddress, &local6.sin6_addr) != 1)
 			{
 				Close();
 				WSASetLastError(WSAEINVAL);

@@ -200,6 +200,9 @@
 	<ClInclude Include="UdpPayloadPolicy.h">
 	  <Filter>Header Files</Filter>
 	</ClInclude>
+	<ClInclude Include="InetCompat.h">
+	  <Filter>Header Files</Filter>
+	</ClInclude>
     <ClInclude Include="UdpProxyTask.h">
       <Filter>Header Files</Filter>
     </ClInclude>

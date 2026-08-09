@@ -155,7 +155,7 @@ void LogUdpFirstDatagram(CProxyReceptionCentre *receptionCentre,
 	if (lpC->dstAddr.IsIPv6())
 	{
 		WCHAR addressText[INET6_ADDRSTRLEN] = L"";
-		InetNtopW(AF_INET6, (PVOID)lpC->dstAddr.GetAddr6(), addressText,
+		ProxyInetNtopW(AF_INET6, (PVOID)lpC->dstAddr.GetAddr6(), addressText,
 			_countof(addressText));
 		PrintText(_T("%sUDP PID: %d(%s), send to: [%s]:%d\r\n"), tag,
 			lpC->dwPid, processName ? processName : L"", addressText,
@@ -178,9 +178,9 @@ static CString FormatDnsEndpoint(const _SockAddr& address)
 	if (address.IsIPv6())
 	{
 #ifdef _UNICODE
-		InetNtopW(AF_INET6, (PVOID)address.GetAddr6(), text, _countof(text));
+		ProxyInetNtopW(AF_INET6, (PVOID)address.GetAddr6(), text, _countof(text));
 #else
-		InetNtopA(AF_INET6, (PVOID)address.GetAddr6(), text, _countof(text));
+		ProxyInetNtopA(AF_INET6, (PVOID)address.GetAddr6(), text, _countof(text));
 #endif
 		CString endpoint;
 		endpoint.Format(_T("[%s]:%d"), text, address.GetPort());

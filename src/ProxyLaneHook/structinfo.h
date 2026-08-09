@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include "InetCompat.h"
 
 #pragma pack(push, 1)
 
@@ -104,7 +105,7 @@ public:
 		if (!lpszIP)
 			return FALSE;
 		IN_ADDR address4;
-		if (InetPtonA(AF_INET, lpszIP, &address4) == 1)
+		if (ProxyInetPtonA(AF_INET, lpszIP, &address4) == 1)
 		{
 			WORD port = (IsIPv4() || IsIPv6()) ? (WORD)GetPort() : 0;
 			Clear();
@@ -114,7 +115,7 @@ public:
 			return TRUE;
 		}
 		IN6_ADDR address6;
-		if (InetPtonA(AF_INET6, lpszIP, &address6) == 1)
+		if (ProxyInetPtonA(AF_INET6, lpszIP, &address6) == 1)
 		{
 			WORD port = (IsIPv4() || IsIPv6()) ? (WORD)GetPort() : 0;
 			Clear();
@@ -274,7 +275,7 @@ typedef struct  _tagProxySettingsInfo
 	BOOL bHookCreateProcess;
 	BOOL bHookLanIP;
 	BOOL bDisableLLMNR;
-	BOOL bBlockUDP;            // 禁止 UDP；优先于 bHookUDP，命中则 sendto/recvfrom 系列直接失败
+	BOOL bBlockUDP;            // 禁止非 loopback UDP；127.0.0.0/8 和 ::1 始终允许
 	BOOL bRedirectPrivateDNS;  // 服务器解析时将内网 :53 替换为公共 DNS
 	_SockAddr redirectDNSAddr;
 }ProxySettingsInfo, *LPProxySettingsInfo;

@@ -78,7 +78,12 @@ BOOL CGlobalProxy::EnableProxy()
 
 	if(!m_pProxyRC->CreatePRC())
 	{
-		m_szLastError = _T("Failed to initialize the PRC object.");
+		CString detail = m_pProxyRC->GetLastErrorText();
+		if (detail.IsEmpty())
+			m_szLastError = _T("Failed to initialize the local proxy service.");
+		else
+			m_szLastError.Format(_T("Failed to initialize the local proxy service: %s"),
+				(LPCTSTR)detail);
 		delete m_pProxyRC;
 		m_pProxyRC = NULL;
 		return FALSE;

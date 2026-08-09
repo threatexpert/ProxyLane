@@ -3,6 +3,7 @@
 #include <thread>
 #include <vector>
 #include "Socks5UdpCodec.h"
+#include "InetCompat.h"
 
 static void TestIPv4RoundTrip()
 {
@@ -48,7 +49,7 @@ static void TestIPv6RoundTrip()
 	SOCKADDR_IN6 destination = { 0 };
 	destination.sin6_family = AF_INET6;
 	destination.sin6_port = htons(443);
-	assert(InetPtonA(AF_INET6, "2001:db8::1234", &destination.sin6_addr) == 1);
+	assert(ProxyInetPtonA(AF_INET6, "2001:db8::1234", &destination.sin6_addr) == 1);
 	const char payload[] = "ipv6-payload";
 	BYTE packet[256];
 	int packetLength = CSocks5UdpCodec::EncodeIPv6(packet, sizeof(packet),

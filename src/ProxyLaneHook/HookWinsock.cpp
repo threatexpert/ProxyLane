@@ -65,6 +65,24 @@ static BOOL NormalizeSocketAddress(const SOCKADDR *address, int addressLength,
 	return TRUE;
 }
 
+static BOOL IsUdpLoopbackDestination(SOCKET socketHandle,
+	const SOCKADDR *destination, int destinationLength)
+{
+	_SockAddr normalized;
+	if (destination)
+		return NormalizeSocketAddress(destination, destinationLength,
+			&normalized) && normalized.IsLoopback();
+
+	SOCKADDR_STORAGE peer;
+	ZeroMemory(&peer, sizeof(peer));
+	int peerLength = sizeof(peer);
+	if (::getpeername(socketHandle, reinterpret_cast<SOCKADDR *>(&peer),
+		&peerLength) == SOCKET_ERROR)
+		return FALSE;
+	return NormalizeSocketAddress(reinterpret_cast<SOCKADDR *>(&peer),
+		peerLength, &normalized) && normalized.IsLoopback();
+}
+
 static BOOL GetSocketEndpoint(SOCKET socketHandle, int destinationFamily,
 	_SockAddr *endpoint)
 {
@@ -391,8 +409,8 @@ BOOL CHookWinsock::IsHostNameReserved(const char *name)
 {
 	IN_ADDR address4;
 	IN6_ADDR address6;
-	if (name && (InetPtonA(AF_INET, name, &address4) == 1 ||
-		InetPtonA(AF_INET6, name, &address6) == 1))
+	if (name && (ProxyInetPtonA(AF_INET, name, &address4) == 1 ||
+		ProxyInetPtonA(AF_INET6, name, &address6) == 1))
 		return TRUE;
 
 	CPRCPipeClient PRCPipeClient;
@@ -717,7 +735,7 @@ CHookWinsock::inhook_connect(SOCKET s, const struct sockaddr FAR * name, int nam
 	int socketTypeLength = sizeof(socketType);
 	if (m_psi.bBlockUDP &&
 		getsockopt(s, SOL_SOCKET, SO_TYPE, (char*)&socketType, &socketTypeLength) == 0 &&
-		socketType == SOCK_DGRAM)
+		socketType == SOCK_DGRAM && !addrname.IsLoopback())
 	{
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
@@ -768,7 +786,7 @@ CHookWinsock::inhook_WSAConnect(SOCKET s, const struct sockaddr* name, int namel
 	int socketTypeLength = sizeof(socketType);
 	if (m_psi.bBlockUDP &&
 		getsockopt(s, SOL_SOCKET, SO_TYPE, (char*)&socketType, &socketTypeLength) == 0 &&
-		socketType == SOCK_DGRAM)
+		socketType == SOCK_DGRAM && !addrname.IsLoopback())
 	{
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
@@ -891,7 +909,8 @@ INT PASCAL CHookWinsock::inhook_WSASendMsg(SOCKET s, LPWSAMSG lpMsg,
 		WSASetLastError(WSAEOPNOTSUPP);
 		return SOCKET_ERROR;
 	}
-	if (m_psi.bBlockUDP)
+	if (m_psi.bBlockUDP && (!lpMsg ||
+		!IsUdpLoopbackDestination(s, lpMsg->name, lpMsg->namelen)))
 	{
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
@@ -1063,6 +1082,15 @@ HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 		ATLTRACE("Hook: CHackedSocket.CanHackIt == %d\r\n", decision);
 		return decision;
 	}
+	if (nSockType == SOCK_STREAM && prcc.dstAddr.IsIPv6() &&
+		!prcinfo.tcpaddr6.IsIPv6())
+	{
+		// Do not leak the original IPv6 connection when this host cannot
+		// provide an IPv6 loopback listener (for example, Windows XP without
+		// the optional IPv6 stack).
+		WSASetLastError(WSAEAFNOSUPPORT);
+		return HOOK_FAILED;
+	}
 
 	//将原请求登记到PRC
 	if (!m_RequestPipe.PRCRegisterClient(&prcc))
@@ -1197,35 +1225,9 @@ int WSAAPI CHookWinsock::inhook_closesocket(SOCKET s)
 }
 
 MyDetourProc(has_Return,
-	int, WSAAPI, send, (SOCKET s, const char* buf, int len, int flags))
-{
-	return g_pHookWinsock->inhook_send(s, buf, len, flags);
-}
-
-MyDetourProc(has_Return, int, WSAAPI, WSASend, (
-	SOCKET s,
-	LPWSABUF lpBuffers,
-	DWORD dwBufferCount,
-	LPDWORD lpNumberOfBytesSent,
-	DWORD dwFlags,
-	LPWSAOVERLAPPED lpOverlapped,
-	LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
-	))
-{
-	return g_pHookWinsock->inhook_WSASend(s, lpBuffers, dwBufferCount,
-		lpNumberOfBytesSent, dwFlags, lpOverlapped, lpCompletionRoutine);
-}
-
-MyDetourProc(has_Return,
 	int, WSAAPI, sendto,(SOCKET s, const char* buf, int len, int flags, const struct sockaddr* to, int tolen))
 {
 	return g_pHookWinsock->inhook_sendto(s, buf, len, flags, to, tolen);
-}
-
-MyDetourProc(has_Return,
-	int, WSAAPI, recvfrom,(SOCKET s, char* buf, int len, int flags, struct sockaddr* from, int* fromlen))
-{
-	return g_pHookWinsock->inhook_recvfrom(s, buf, len, flags, from, fromlen);
 }
 
 MyDetourProc(has_Return, int, WSAAPI, WSASendTo, (
@@ -1243,72 +1245,12 @@ MyDetourProc(has_Return, int, WSAAPI, WSASendTo, (
 	return g_pHookWinsock->inhook_WSASendTo(s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped, lpCompletionRoutine);
 }
 
-MyDetourProc(has_Return, int, WSAAPI, WSARecvFrom, (
-	SOCKET s,
-	LPWSABUF lpBuffers,
-	DWORD dwBufferCount,
-	LPDWORD lpNumberOfBytesRecvd,
-	LPDWORD lpFlags,
-struct sockaddr* lpFrom,
-	LPINT lpFromlen,
-	LPWSAOVERLAPPED lpOverlapped,
-	LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
-	)
-	)
-{
-	return g_pHookWinsock->inhook_WSARecvFrom(s, lpBuffers, dwBufferCount, lpNumberOfBytesRecvd, lpFlags, lpFrom, lpFromlen, lpOverlapped, lpCompletionRoutine);
-}
-
 ////////////////////
-
-int WSAAPI CHookWinsock::inhook_send(SOCKET s, const char* buf, int len,
-	int flags)
-{
-	WSABUF buffer;
-	buffer.buf = const_cast<char *>(buf);
-	buffer.len = len >= 0 ? static_cast<ULONG>(len) : 0;
-	DWORD sent = 0;
-	if (len >= 0)
-	{
-		int result = inhook_WSASend(s, &buffer, 1, &sent, flags, NULL, NULL);
-		return result == 0 ? static_cast<int>(sent) : SOCKET_ERROR;
-	}
-	return CallTrampoline(send)(s, buf, len, flags);
-}
-
-int WSAAPI CHookWinsock::inhook_WSASend(SOCKET s, LPWSABUF lpBuffers,
-	DWORD dwBufferCount, LPDWORD lpNumberOfBytesSent, DWORD dwFlags,
-	LPWSAOVERLAPPED lpOverlapped,
-	LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine)
-{
-	if (m_psi.bBlockUDP)
-	{
-		int socketType = 0;
-		int socketTypeLength = sizeof(socketType);
-		if (getsockopt(s, SOL_SOCKET, SO_TYPE, (char*)&socketType,
-			&socketTypeLength) == 0 && socketType == SOCK_DGRAM)
-		{
-			WSASetLastError(WSAEACCES);
-			return SOCKET_ERROR;
-		}
-	}
-	if (!m_psi.bHookUDP)
-		return CallTrampoline(WSASend)(s, lpBuffers, dwBufferCount,
-			lpNumberOfBytesSent, dwFlags, lpOverlapped, lpCompletionRoutine);
-	size_t maxPayload = 0;
-	if (m_HackedSocket.GetConnectedUDPMaxPayload(s, &maxPayload) &&
-		!IsWSABufferPayloadAllowed(lpBuffers, dwBufferCount, maxPayload))
-	{
-		WSASetLastError(WSAEMSGSIZE);
-		return SOCKET_ERROR;
-	}
-	return CallTrampoline(WSASend)(s, lpBuffers, dwBufferCount,
-		lpNumberOfBytesSent, dwFlags, lpOverlapped, lpCompletionRoutine);
-}
 
 int WSAAPI CHookWinsock::inhook_sendto(SOCKET s, const char* buf, int len, int flags, const struct sockaddr* to, int tolen)
 {
-	if (m_psi.bBlockUDP)
+	if (m_psi.bBlockUDP &&
+		!IsUdpLoopbackDestination(s, to, tolen))
 	{
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
@@ -1352,7 +1294,8 @@ int WSAAPI CHookWinsock::inhook_WSASendTo(
 	LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
 	)
 {
-	if (m_psi.bBlockUDP)
+	if (m_psi.bBlockUDP &&
+		!IsUdpLoopbackDestination(s, lpTo, iToLen))
 	{
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
@@ -1422,83 +1365,6 @@ int WSAAPI CHookWinsock::inhook_WSASendTo(
 		lpNumberOfBytesSent, dwFlags, redirected, redirectedLength,
 		lpOverlapped, lpCompletionRoutine);
 }
-
-int WSAAPI CHookWinsock::inhook_recvfrom(SOCKET s, char* buf, int len, int flags, struct sockaddr* from, int* fromlen)
-{
-	if (m_psi.bBlockUDP)
-	{
-		WSASetLastError(WSAEACCES);
-		return SOCKET_ERROR;
-	}
-	return CallTrampoline(recvfrom)(s, buf, len, flags, from, fromlen);
-
-	//
-	//	int ret = pFunc(s, buf, len, flags, from, fromlen);
-	//
-	//	if(ret > 0)
-	//	{
-	//#ifdef _DEBUG
-	//		in_addr *pAddr = ((_SockAddr*)from)->GetAddr();
-	//		ATLTRACE("recvfrom1: %u.%u.%u.%u:%d\r\n", pAddr->s_net, pAddr->s_host, pAddr->s_lh, pAddr->s_impno, ((_SockAddr*)from)->GetPort());
-	//#endif
-	//
-	//		if (m_HackedSocket.ReplaceAddr(s, (_SockAddr *)from))
-	//		{
-	//#ifdef _DEBUG
-	//			pAddr = ((_SockAddr*)from)->GetAddr();
-	//			ATLTRACE("recvfrom2: %u.%u.%u.%u:%d\r\n", pAddr->s_net, pAddr->s_host, pAddr->s_lh, pAddr->s_impno, ((_SockAddr*)from)->GetPort());
-	//#endif
-	//		}
-	//	}
-	//
-	//	return ret;
-}
-
-
-int WSAAPI CHookWinsock::inhook_WSARecvFrom(
-	SOCKET s,
-	LPWSABUF lpBuffers,
-	DWORD dwBufferCount,
-	LPDWORD lpNumberOfBytesRecvd,
-	LPDWORD lpFlags,
-struct sockaddr* lpFrom,
-	LPINT lpFromlen,
-	LPWSAOVERLAPPED lpOverlapped,
-	LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
-	)
-{
-	if (m_psi.bBlockUDP)
-	{
-		WSASetLastError(WSAEACCES);
-		return SOCKET_ERROR;
-	}
-	return CallTrampoline(WSARecvFrom)(s, lpBuffers, dwBufferCount,
-		lpNumberOfBytesRecvd, lpFlags, lpFrom, lpFromlen, lpOverlapped,
-		lpCompletionRoutine);
-
-
-	//	int ret = pFunc(s, lpBuffers, dwBufferCount, lpNumberOfBytesRecvd, lpFlags, lpFrom, lpFromlen, lpOverlapped, lpCompletionRoutine);
-	//
-	//	if(ret == 0)
-	//	{
-	//#ifdef _DEBUG
-	//		in_addr *pAddr = ((_SockAddr*)lpFrom)->GetAddr();
-	//		ATLTRACE("recvfrom1: %u.%u.%u.%u:%d\r\n", pAddr->s_net, pAddr->s_host, pAddr->s_lh, pAddr->s_impno, ((_SockAddr*)lpFrom)->GetPort());
-	//#endif
-	//
-	//		if (m_HackedSocket.ReplaceAddr(s, (_SockAddr *)lpFrom))
-	//		{
-	//#ifdef _DEBUG
-	//			pAddr = ((_SockAddr*)lpFrom)->GetAddr();
-	//			ATLTRACE("recvfrom2: %u.%u.%u.%u:%d\r\n", pAddr->s_net, pAddr->s_host, pAddr->s_lh, pAddr->s_impno, ((_SockAddr*)lpFrom)->GetPort());
-	//#endif
-	//		}
-	//	}
-
-
-	//return ret;
-}
-
 
 HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname,
 	LPPRCClient lpC, size_t *maxPayload)
@@ -1985,17 +1851,9 @@ BOOL CHookWinsock::HookWinsock()
 			break;
 		if (!HookAPI(HOOKMODULE_WS2_32, _EHF(closesocket), "closesocket", _HOOKFUNC(closesocket), _TRAMPFUNC(closesocket)))
 			break;
-		if (!HookAPI(HOOKMODULE_WS2_32, _EHF(send), "send", _HOOKFUNC(send), _TRAMPFUNC(send)))
-			break;
-		if (!HookAPI(HOOKMODULE_WS2_32, _EHF(WSASend), "WSASend", _HOOKFUNC(WSASend), _TRAMPFUNC(WSASend)))
-			break;
 		if (!HookAPI(HOOKMODULE_WS2_32, _EHF(sendto), "sendto", _HOOKFUNC(sendto), _TRAMPFUNC(sendto)))
 			break;
 		if (!HookAPI(HOOKMODULE_WS2_32, _EHF(WSASendTo), "WSASendTo", _HOOKFUNC(WSASendTo), _TRAMPFUNC(WSASendTo)))
-			break;
-		if (!HookAPI(HOOKMODULE_WS2_32, _EHF(recvfrom), "recvfrom", _HOOKFUNC(recvfrom), _TRAMPFUNC(recvfrom)))
-			break;
-		if (!HookAPI(HOOKMODULE_WS2_32, _EHF(WSARecvFrom), "WSARecvFrom", _HOOKFUNC(WSARecvFrom), _TRAMPFUNC(WSARecvFrom)))
 			break;
 		if (!HookAPI(HOOKMODULE_WS2_32, _EHF(WSAIoctl), "WSAIoctl", _HOOKFUNC(WSAIoctl), _TRAMPFUNC(WSAIoctl)))
 			break;

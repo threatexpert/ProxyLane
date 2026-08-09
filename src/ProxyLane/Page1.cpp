@@ -455,10 +455,10 @@ BOOL CPage1::GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI)
 			{
 				TCHAR addressText[INET6_ADDRSTRLEN] = { 0 };
 #ifdef _UNICODE
-				InetNtopW(AF_INET6, (PVOID)pPRCC->dstAddr.GetAddr6(),
+				ProxyInetNtopW(AF_INET6, (PVOID)pPRCC->dstAddr.GetAddr6(),
 					addressText, _countof(addressText));
 #else
-				InetNtopA(AF_INET6, (PVOID)pPRCC->dstAddr.GetAddr6(),
+				ProxyInetNtopA(AF_INET6, (PVOID)pPRCC->dstAddr.GetAddr6(),
 					addressText, _countof(addressText));
 #endif
 				strKey.Format(_T("[%s]:%d"), addressText, nPort);
@@ -849,6 +849,16 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 		CSingleLock runtimeLock(&m_runtimeLock, TRUE);
 		m_runtimeSettingsValid = FALSE;
 	}
+	if (showErrors)
+	{
+		CString detail = m_proxyController.GetLastErrorText();
+		CString message = detail.IsEmpty()
+			? Localization::Get(_T("proxy.start_failed"))
+			: Localization::Format(_T("proxy.start_failed_detail"),
+				(LPCTSTR)detail);
+		MessageBox(message, Localization::Get(_T("proxy.start_failed_title")),
+			MB_ICONERROR);
+	}
 
 	return FALSE;
 }
@@ -1102,6 +1112,12 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 				break;
 			case PROXYERROR_AUTHFAILED:
 				szText = Localization::Get(_T("test.auth_failed"));
+				break;
+			case PROXYERROR_SECURE_UNAVAILABLE:
+				szText = Localization::Get(_T("test.secure_unavailable"));
+				break;
+			case PROXYERROR_SECURE_HANDSHAKE:
+				szText = Localization::Get(_T("test.secure_handshake_failed"));
 				break;
 
 			default:

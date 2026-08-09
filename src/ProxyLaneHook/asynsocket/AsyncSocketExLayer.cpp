@@ -95,9 +95,11 @@ CAsyncSocketExLayer::CAsyncSocketExLayer()
 		m_pReal_gethostbyname = (__gethostbyname)g_pHookWinsock->m_HookedInfo[HOOKAPI_gethostbyname].newfuncaddr;
 		m_pReal_WSAAsyncGetHostByName = (__WSAAsyncGetHostByName)g_pHookWinsock->m_HookedInfo[HOOKAPI_WSAAsyncGetHostByName].newfuncaddr;
 		m_pReal_sendto = (__sendto)g_pHookWinsock->m_HookedInfo[HOOKAPI_sendto].newfuncaddr;
-		m_pReal_recvfrom = (__recvfrom)g_pHookWinsock->m_HookedInfo[HOOKAPI_recvfrom].newfuncaddr;
 		m_pReal_WSASendTo = (__WSASendTo)g_pHookWinsock->m_HookedInfo[HOOKAPI_WSASendTo].newfuncaddr;
-		m_pReal_WSARecvFrom = (__WSARecvFrom)g_pHookWinsock->m_HookedInfo[HOOKAPI_WSARecvFrom].newfuncaddr;
+		// Receive APIs are intentionally not hooked. SOCKS5 UDP decapsulation
+		// happens in the PRC, and source-address restoration is disabled.
+		m_pReal_recvfrom = ::recvfrom;
+		m_pReal_WSARecvFrom = ::WSARecvFrom;
 	}else
 	{
 		m_pReal_connect = connect;
@@ -529,7 +531,7 @@ BOOL CAsyncSocketExLayer::CreateNext(UINT nSocketPort, int nSocketType,
 				local6.sin6_family = AF_INET6;
 				local6.sin6_port = htons((u_short)nSocketPort);
 				if (!lpszSocketAddress ||
-					InetPtonA(AF_INET6, lpszSocketAddress, &local6.sin6_addr) == 1)
+					ProxyInetPtonA(AF_INET6, lpszSocketAddress, &local6.sin6_addr) == 1)
 					bound = Bind(reinterpret_cast<SOCKADDR *>(&local6), sizeof(local6));
 				else
 					WSASetLastError(WSAEINVAL);
@@ -711,9 +713,9 @@ void CAsyncSocketExLayer::BypassHook(BOOL bBypass)
 		m_pReal_gethostbyname = (__gethostbyname)g_pHookWinsock->m_HookedInfo[HOOKAPI_gethostbyname].newfuncaddr;
 		m_pReal_WSAAsyncGetHostByName = (__WSAAsyncGetHostByName)g_pHookWinsock->m_HookedInfo[HOOKAPI_WSAAsyncGetHostByName].newfuncaddr;
 		m_pReal_sendto = (__sendto)g_pHookWinsock->m_HookedInfo[HOOKAPI_sendto].newfuncaddr;
-		m_pReal_recvfrom = (__recvfrom)g_pHookWinsock->m_HookedInfo[HOOKAPI_recvfrom].newfuncaddr;
 		m_pReal_WSASendTo = (__WSASendTo)g_pHookWinsock->m_HookedInfo[HOOKAPI_WSASendTo].newfuncaddr;
-		m_pReal_WSARecvFrom = (__WSARecvFrom)g_pHookWinsock->m_HookedInfo[HOOKAPI_WSARecvFrom].newfuncaddr;
+		m_pReal_recvfrom = ::recvfrom;
+		m_pReal_WSARecvFrom = ::WSARecvFrom;
 	}else
 	{
 		m_pReal_connect = connect;

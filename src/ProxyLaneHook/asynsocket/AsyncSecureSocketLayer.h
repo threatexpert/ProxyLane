@@ -3,6 +3,9 @@
 #include "AsyncSocketExLayer.h"
 #include <vector>
 
+#define PROXYLANE_SECURE_LOAD_FAILED      20001
+#define PROXYLANE_SECURE_HANDSHAKE_FAILED 20002
+
 // Optional gonc-compatible TLS-PSK transport.  The implementation is loaded
 // dynamically so plain SOCKS operation retains the legacy OS dependency set.
 class CAsyncSecureSocketLayer : public CAsyncSocketExLayer
@@ -88,4 +91,5 @@ private:
 	PFN_SESSION_LAST_ERROR m_sessionLastError;
 	PFN_UDP_CRYPT m_udpEncrypt;
 	PFN_UDP_CRYPT m_udpDecrypt;
+	DWORD m_transportLoadError;
 };

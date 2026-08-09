@@ -351,6 +351,8 @@ private:
 #define PROXYERROR_AUTHFAILED		5 //Authentication failed
 #define PROXYERROR_AUTHNOLOGON		6
 #define PROXYERROR_CANTRESOLVEHOST	7
+#define PROXYERROR_SECURE_UNAVAILABLE	20
+#define PROXYERROR_SECURE_HANDSHAKE	21
 
 //Status messages
 #define PROXYSTATUS_LISTENSOCKETCREATED 8	//Called when a listen socket was created successfully. Unlike the normal listen function,

@@ -54,7 +54,7 @@ CAsyncSecureSocketLayer::CAsyncSecureSocketLayer()
 	  m_sessionDrainTls(NULL), m_sessionWritePlain(NULL),
 	  m_sessionReadPlain(NULL), m_sessionCloseNotify(NULL),
 	  m_sessionExportKey(NULL), m_sessionLastError(NULL),
-	  m_udpEncrypt(NULL), m_udpDecrypt(NULL)
+	  m_udpEncrypt(NULL), m_udpDecrypt(NULL), m_transportLoadError(0)
 {
 	ZeroMemory(m_udpKey, sizeof(m_udpKey));
 }
@@ -81,6 +81,7 @@ BOOL CAsyncSecureSocketLayer::LoadTransport()
 {
 	if (m_hTransport)
 		return TRUE;
+	m_transportLoadError = 0;
 
 	TCHAR path[MAX_PATH] = { 0 };
 	DWORD length = GetModuleFileName(NULL, path, _countof(path));
@@ -98,7 +99,10 @@ BOOL CAsyncSecureSocketLayer::LoadTransport()
 #endif
 	m_hTransport = LoadLibrary(path);
 	if (!m_hTransport)
+	{
+		m_transportLoadError = GetLastError();
 		return FALSE;
+	}
 
 	PFN_ABI_VERSION abiVersion = reinterpret_cast<PFN_ABI_VERSION>(
 		LoadRequired(m_hTransport, "plst_abi_version"));
@@ -121,6 +125,7 @@ BOOL CAsyncSecureSocketLayer::LoadTransport()
 		!m_sessionCloseNotify || !m_sessionExportKey || !m_sessionLastError ||
 		!m_udpEncrypt || !m_udpDecrypt)
 	{
+		m_transportLoadError = ERROR_PROC_NOT_FOUND;
 		FreeLibrary(m_hTransport);
 		m_hTransport = NULL;
 		return FALSE;
@@ -130,6 +135,7 @@ BOOL CAsyncSecureSocketLayer::LoadTransport()
 		m_psk.GetLength(), m_serverName, &m_session);
 	if (result != PLST_OK || !m_session)
 	{
+		m_transportLoadError = ERROR_DLL_INIT_FAILED;
 		FreeLibrary(m_hTransport);
 		m_hTransport = NULL;
 		return FALSE;
@@ -285,7 +291,9 @@ void CAsyncSecureSocketLayer::ReportFailure(LPCTSTR prefix)
 		WSAGetLastError());
 	const BOOL wasConnected = m_bConnectNotified;
 	if (!wasConnected)
-		TriggerEvent(FD_CONNECT, WSAECONNABORTED, TRUE);
+		TriggerEvent(FD_CONNECT,
+			m_transportLoadError ? PROXYLANE_SECURE_LOAD_FAILED :
+			PROXYLANE_SECURE_HANDSHAKE_FAILED, TRUE);
 	else
 		TriggerEvent(FD_CLOSE, WSAECONNABORTED, TRUE);
 }

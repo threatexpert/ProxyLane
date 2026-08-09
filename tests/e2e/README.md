@@ -27,6 +27,9 @@ to loopback test services.
 - `tcp_e2e.go`: TCP server/client whose response is sent only after the server
   observes EOF. This makes successful completion proof of end-to-end
   half-close propagation.
+- `connectex_initial_data.cpp`: native Windows probe that submits the first
+  application payload in `ConnectEx`. It covers data queued while the PRC is
+  still negotiating SOCKS5/HTTP, including the Windows XP notification path.
 - `http_connect_server.go`: HTTP CONNECT proxy that deliberately writes its
   final response header and initial tunnel bytes together to verify surplus
   preservation.
@@ -44,6 +47,12 @@ go build -o build/qa/go/http_connect_server.exe tests/e2e/http_connect_server.go
 Push-Location tests/e2e/quic
 go build -o ../../../build/qa/go/quic_e2e.exe .
 Pop-Location
+```
+
+Build the native Win32 probe from a Visual Studio developer prompt:
+
+```bat
+cl /nologo /EHsc /O2 tests\e2e\connectex_initial_data.cpp /Fe:build\qa\connectex_initial_data32.exe
 ```
 
 Launch the client through ProxyLane's automation interface after creating a

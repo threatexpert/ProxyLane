@@ -26,12 +26,8 @@ typedef enum
 	HOOKAPI_getaddrinfo,
 	HOOKAPI_getpeername,
 	HOOKAPI_closesocket,
-	HOOKAPI_send,
-	HOOKAPI_WSASend,
 	HOOKAPI_sendto,
 	HOOKAPI_WSASendTo,
-	HOOKAPI_recvfrom,
-	HOOKAPI_WSARecvFrom,
 	HOOKAPI_WSAIoctl,
 	HOOKAPI_GetAddrInfoExW,
 	HOOKAPI_GetAddrInfoW,
@@ -682,15 +678,8 @@ public:
 	int WSAAPI inhook_getpeername(SOCKET s, struct sockaddr* name, int* namelen);
 
 	int WSAAPI inhook_closesocket(SOCKET s);
-	int WSAAPI inhook_send(SOCKET s, const char* buf, int len, int flags);
-	int WSAAPI inhook_WSASend(SOCKET s, LPWSABUF lpBuffers, DWORD dwBufferCount,
-		LPDWORD lpNumberOfBytesSent, DWORD dwFlags,
-		LPWSAOVERLAPPED lpOverlapped,
-		LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine);
 
 	int WSAAPI inhook_sendto(SOCKET s, const char* buf, int len, int flags, const struct sockaddr* to, int tolen);
-
-	int WSAAPI inhook_recvfrom(SOCKET s, char* buf, int len, int flags, struct sockaddr* from, int* fromlen);
 
 	int WSAAPI inhook_WSASendTo(
 		SOCKET s,
@@ -700,18 +689,6 @@ public:
 		DWORD dwFlags,
 		const struct sockaddr* lpTo,
 		int iToLen,
-		LPWSAOVERLAPPED lpOverlapped,
-		LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
-		);
-
-	int WSAAPI inhook_WSARecvFrom(
-		SOCKET s,
-		LPWSABUF lpBuffers,
-		DWORD dwBufferCount,
-		LPDWORD lpNumberOfBytesRecvd,
-		LPDWORD lpFlags,
-		struct sockaddr* lpFrom,
-		LPINT lpFromlen,
 		LPWSAOVERLAPPED lpOverlapped,
 		LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
 		);
