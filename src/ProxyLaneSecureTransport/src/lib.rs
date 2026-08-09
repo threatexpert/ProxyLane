@@ -25,8 +25,9 @@ use x509_parser::parse_x509_certificate;
 type Aes256Ctr = ctr::Ctr128BE<Aes256>;
 type HmacSha256 = Hmac<Sha256>;
 
-const ABI_VERSION: u32 = 1;
+const ABI_VERSION: u32 = 2;
 const OK: i32 = 0;
+const EOF: i32 = 1;
 const ERROR: i32 = -1;
 const WOULD_BLOCK: i32 = -2;
 const INVALID_ARGUMENT: i32 = -3;
@@ -346,23 +347,20 @@ pub unsafe extern "C" fn plst_session_read_plain(
     output_capacity: usize,
     read: *mut usize,
 ) -> i32 {
-    if (output.is_null() && output_capacity != 0) || read.is_null() {
+    if output.is_null() || output_capacity == 0 || read.is_null() {
         return INVALID_ARGUMENT;
     }
     let session = match session_mut(session) {
         Ok(v) => v,
         Err(c) => return c,
     };
-    let output = if output_capacity == 0 {
-        &mut []
-    } else {
-        std::slice::from_raw_parts_mut(output, output_capacity)
-    };
+    *read = 0;
+    let output = std::slice::from_raw_parts_mut(output, output_capacity);
     match session.connection.reader().read(output) {
         Ok(count) => {
             *read = count;
             if count == 0 {
-                WOULD_BLOCK
+                EOF
             } else {
                 OK
             }
@@ -509,6 +507,73 @@ pub unsafe extern "C" fn plst_udp_decrypt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustls::{ServerConfig, ServerConnection};
+
+    fn create_test_server(psk: &[u8]) -> ServerConnection {
+        let secret = derive_secret(psk).unwrap();
+        let pkcs8 = secret.to_pkcs8_der().unwrap();
+        let private_der = PrivatePkcs8KeyDer::from(pkcs8.as_bytes().to_vec());
+        let key_pair =
+            KeyPair::from_pkcs8_der_and_sign_algo(&private_der, &rcgen::PKCS_ECDSA_P256_SHA256)
+                .unwrap();
+        let mut params = CertificateParams::new(vec!["localhost".to_owned()]).unwrap();
+        params.is_ca = IsCa::NoCa;
+        params.extended_key_usages = vec![
+            ExtendedKeyUsagePurpose::ClientAuth,
+            ExtendedKeyUsagePurpose::ServerAuth,
+        ];
+        let certificate = params.self_signed(&key_pair).unwrap();
+        let provider = rustls::crypto::ring::default_provider();
+        let config = ServerConfig::builder_with_provider(Arc::new(provider))
+            .with_protocol_versions(&[&rustls::version::TLS12])
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![CertificateDer::from(certificate.der().to_vec())],
+                PrivateKeyDer::Pkcs8(private_der),
+            )
+            .unwrap();
+        ServerConnection::new(Arc::new(config)).unwrap()
+    }
+
+    unsafe fn drain_client_tls(session: *mut c_void) -> Vec<u8> {
+        let mut result = Vec::new();
+        loop {
+            let mut chunk = [0u8; 16 * 1024];
+            let mut written = 0usize;
+            assert_eq!(
+                plst_session_drain_tls(session, chunk.as_mut_ptr(), chunk.len(), &mut written,),
+                OK
+            );
+            if written == 0 {
+                return result;
+            }
+            result.extend_from_slice(&chunk[..written]);
+        }
+    }
+
+    unsafe fn feed_client_tls(session: *mut c_void, data: &[u8]) {
+        let mut consumed = 0usize;
+        assert_eq!(
+            plst_session_feed_tls(session, data.as_ptr(), data.len(), &mut consumed),
+            OK
+        );
+        assert_eq!(consumed, data.len());
+    }
+
+    fn feed_server_tls(server: &mut ServerConnection, data: &[u8]) {
+        let mut cursor = Cursor::new(data);
+        assert_eq!(server.read_tls(&mut cursor).unwrap(), data.len());
+        server.process_new_packets().unwrap();
+    }
+
+    fn drain_server_tls(server: &mut ServerConnection) -> Vec<u8> {
+        let mut result = Vec::new();
+        while server.wants_write() {
+            assert!(server.write_tls(&mut result).unwrap() > 0);
+        }
+        result
+    }
 
     #[test]
     fn udp_round_trip() {
@@ -534,5 +599,75 @@ mod tests {
                 .len(),
             65
         );
+    }
+
+    #[test]
+    fn zero_capacity_plaintext_read_is_rejected() {
+        unsafe {
+            let mut byte = 0u8;
+            let mut read = usize::MAX;
+            assert_eq!(
+                plst_session_read_plain(ptr::null_mut(), &mut byte, 0, &mut read),
+                INVALID_ARGUMENT
+            );
+        }
+    }
+
+    #[test]
+    fn final_plaintext_is_delivered_before_close_notify_eof() {
+        unsafe {
+            let psk = b"close-notify-test";
+            let server_name = b"localhost\0";
+            let mut session = ptr::null_mut();
+            assert_eq!(
+                plst_session_create(
+                    psk.as_ptr(),
+                    psk.len(),
+                    server_name.as_ptr().cast(),
+                    &mut session,
+                ),
+                OK
+            );
+            assert!(!session.is_null());
+
+            let mut server = create_test_server(psk);
+            for _ in 0..16 {
+                let client_tls = drain_client_tls(session);
+                if !client_tls.is_empty() {
+                    feed_server_tls(&mut server, &client_tls);
+                }
+                let server_tls = drain_server_tls(&mut server);
+                if !server_tls.is_empty() {
+                    feed_client_tls(session, &server_tls);
+                }
+                if plst_session_is_ready(session) == 1 && !server.is_handshaking() {
+                    break;
+                }
+            }
+            assert_eq!(plst_session_is_ready(session), 1);
+            assert!(!server.is_handshaking());
+
+            server.writer().write_all(b"final plaintext").unwrap();
+            server.send_close_notify();
+            let final_tls = drain_server_tls(&mut server);
+            assert!(!final_tls.is_empty());
+            feed_client_tls(session, &final_tls);
+
+            let mut output = [0u8; 64];
+            let mut read = 0usize;
+            assert_eq!(
+                plst_session_read_plain(session, output.as_mut_ptr(), output.len(), &mut read,),
+                OK
+            );
+            assert_eq!(&output[..read], b"final plaintext");
+
+            read = usize::MAX;
+            assert_eq!(
+                plst_session_read_plain(session, output.as_mut_ptr(), output.len(), &mut read,),
+                EOF
+            );
+            assert_eq!(read, 0);
+            plst_session_free(session);
+        }
     }
 }

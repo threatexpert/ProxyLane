@@ -13,6 +13,7 @@ public:
 
 	BOOL Configure(const CStringA& psk, const CStringA& serverName);
 	BOOL HasUdpKey() const { return m_bUdpKeyReady; }
+	BOOL HasPendingRead() const;
 	int EncryptUdp(const BYTE* plain, int plainLength, BYTE* output,
 		int outputCapacity, int* outputLength);
 	int DecryptUdp(const BYTE* packet, int packetLength, BYTE* output,
@@ -72,6 +73,8 @@ private:
 	BOOL m_bHandshakeStarted;
 	BOOL m_bHandshakeReady;
 	BOOL m_bConnectNotified;
+	BOOL m_bPeerReadClosed;
+	BOOL m_bPeerEofDelivered;
 	int m_pendingShutdown;
 
 	PFN_SESSION_FREE m_sessionFree;

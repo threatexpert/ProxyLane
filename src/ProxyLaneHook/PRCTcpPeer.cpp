@@ -423,7 +423,9 @@ void CPRCTcpPeer::OnSend(int nErrorCode)
 				m_pPartner->ClearBuffer();
 
 				TriggerEvent(FD_CLOSE);
-			}else if(nRetVal > 0)
+			}else if(nRetVal > 0 ||
+				(m_pPartner->m_pSecureLayer &&
+				 m_pPartner->m_pSecureLayer->HasPendingRead()))
 			{
 				m_pPartner->TriggerEvent(FD_READ);
 				ATLTRACE("CPRCTcpPeer.OnSend(), m_pPartner->TriggerEvent(FD_READ)\r\n");

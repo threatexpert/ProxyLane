@@ -5,8 +5,9 @@
 namespace
 {
 	const int PLST_OK = 0;
+	const int PLST_EOF = 1;
 	const int PLST_WOULD_BLOCK = -2;
-	const unsigned int PLST_ABI_VERSION = 1;
+	const unsigned int PLST_ABI_VERSION = 2;
 	const size_t TLS_CHUNK = 16 * 1024;
 	const size_t MAX_BUFFERED_DATA = 1024 * 1024;
 
@@ -47,7 +48,8 @@ CAsyncSecureSocketLayer::CAsyncSecureSocketLayer()
 	: m_hTransport(NULL), m_session(NULL), m_pendingTlsOffset(0),
 	  m_plaintextOffset(0), m_bUdpKeyReady(FALSE),
 	  m_bHandshakeStarted(FALSE), m_bHandshakeReady(FALSE),
-	  m_bConnectNotified(FALSE), m_pendingShutdown(-1),
+	  m_bConnectNotified(FALSE), m_bPeerReadClosed(FALSE),
+	  m_bPeerEofDelivered(FALSE), m_pendingShutdown(-1),
 	  m_sessionFree(NULL), m_sessionIsReady(NULL), m_sessionFeedTls(NULL),
 	  m_sessionDrainTls(NULL), m_sessionWritePlain(NULL),
 	  m_sessionReadPlain(NULL), m_sessionCloseNotify(NULL),
@@ -150,6 +152,12 @@ BOOL CAsyncSecureSocketLayer::HasPendingTls() const
 	return m_pendingTlsOffset < m_pendingTls.size();
 }
 
+BOOL CAsyncSecureSocketLayer::HasPendingRead() const
+{
+	return m_plaintextOffset < m_plaintext.size() ||
+		(m_bPeerReadClosed && !m_bPeerEofDelivered);
+}
+
 BOOL CAsyncSecureSocketLayer::FlushTls()
 {
 	while (m_session)
@@ -188,6 +196,11 @@ BOOL CAsyncSecureSocketLayer::DrainPlaintext()
 	{
 		size_t count = 0;
 		int result = m_sessionReadPlain(m_session, chunk, sizeof(chunk), &count);
+		if (result == PLST_EOF)
+		{
+			m_bPeerReadClosed = TRUE;
+			return TRUE;
+		}
 		if (result == PLST_WOULD_BLOCK)
 			return TRUE;
 		if (result != PLST_OK)
@@ -298,7 +311,7 @@ void CAsyncSecureSocketLayer::OnReceive(int nErrorCode)
 		ReportFailure(_T("Secure transport receive failed"));
 		return;
 	}
-	if (m_bHandshakeReady && m_plaintextOffset < m_plaintext.size())
+	if (m_bHandshakeReady && HasPendingRead())
 	{
 		SecureTrace(_T("TLS receive plain=%d\r\n"),
 			(int)(m_plaintext.size() - m_plaintextOffset));
@@ -328,6 +341,7 @@ void CAsyncSecureSocketLayer::OnSend(int nErrorCode)
 void CAsyncSecureSocketLayer::OnClose(int nErrorCode)
 {
 	SecureTrace(_T("raw close error=%d\r\n"), nErrorCode);
+	BOOL drainSucceeded = TRUE;
 	if (!nErrorCode && m_session)
 	{
 		// CAsyncSocketEx marks the layer closed before calling OnClose(), so
@@ -349,19 +363,33 @@ void CAsyncSecureSocketLayer::OnClose(int nErrorCode)
 				if (m_sessionFeedTls(m_session, chunk + offset,
 					received - offset, &consumed) != PLST_OK || !consumed)
 				{
+					drainSucceeded = FALSE;
 					offset = received;
 					break;
 				}
 				offset += consumed;
 			}
 		}
-		DrainPlaintext();
+		if (!DrainPlaintext())
+			drainSucceeded = FALSE;
+		// A clean TCP FIN is also an EOF for the decrypted stream.  It may
+		// follow close_notify later, or be the only close signal from a peer
+		// that does not perform a graceful TLS shutdown.
+		m_bPeerReadClosed = TRUE;
 		SecureTrace(_T("raw close plain=%d\r\n"),
 			(int)(m_plaintext.size() - m_plaintextOffset));
 	}
-	if (m_plaintextOffset < m_plaintext.size())
+	if (!drainSucceeded)
+	{
+		ReportFailure(_T("Secure transport close drain failed"));
+		return;
+	}
+	if (!nErrorCode && m_bHandshakeReady && HasPendingRead())
 		TriggerEvent(FD_READ, 0, TRUE);
-	TriggerEvent(FD_CLOSE, nErrorCode, TRUE);
+	else if (nErrorCode)
+		TriggerEvent(FD_CLOSE, nErrorCode, TRUE);
+	else if (!m_bHandshakeReady)
+		TriggerEvent(FD_CLOSE, 0, TRUE);
 }
 
 int CAsyncSecureSocketLayer::Send(const void* lpBuf, int nBufLen, int nFlags)
@@ -403,8 +431,18 @@ int CAsyncSecureSocketLayer::Receive(void* lpBuf, int nBufLen, int nFlags)
 		WSASetLastError(WSAEFAULT);
 		return SOCKET_ERROR;
 	}
-	if (!m_bHandshakeReady || m_plaintextOffset >= m_plaintext.size())
+	if (!m_bHandshakeReady)
 	{
+		WSASetLastError(WSAEWOULDBLOCK);
+		return SOCKET_ERROR;
+	}
+	if (m_plaintextOffset >= m_plaintext.size())
+	{
+		if (m_bPeerReadClosed)
+		{
+			m_bPeerEofDelivered = TRUE;
+			return 0;
+		}
 		WSASetLastError(WSAEWOULDBLOCK);
 		return SOCKET_ERROR;
 	}
@@ -417,6 +455,8 @@ int CAsyncSecureSocketLayer::Receive(void* lpBuf, int nBufLen, int nFlags)
 	{
 		m_plaintext.clear();
 		m_plaintextOffset = 0;
+		if (m_bPeerReadClosed && !m_bPeerEofDelivered)
+			TriggerEvent(FD_READ, 0, TRUE);
 	}
 	else
 	{
@@ -499,5 +539,7 @@ void CAsyncSecureSocketLayer::ResetTransport()
 	m_pendingTlsOffset = m_plaintextOffset = 0;
 	m_bUdpKeyReady = m_bHandshakeStarted = m_bHandshakeReady = FALSE;
 	m_bConnectNotified = FALSE;
+	m_bPeerReadClosed = FALSE;
+	m_bPeerEofDelivered = FALSE;
 	m_pendingShutdown = -1;
 }

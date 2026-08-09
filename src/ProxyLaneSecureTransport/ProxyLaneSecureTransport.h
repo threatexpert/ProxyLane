@@ -7,8 +7,9 @@
 extern "C" {
 #endif
 
-#define PLST_ABI_VERSION 1u
+#define PLST_ABI_VERSION 2u
 #define PLST_OK 0
+#define PLST_EOF 1
 #define PLST_ERROR -1
 #define PLST_WOULD_BLOCK -2
 #define PLST_INVALID_ARGUMENT -3
