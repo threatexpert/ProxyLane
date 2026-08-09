@@ -1,8 +1,8 @@
 name: Windows tests
 
 on:
-  push:
-  pull_request:
+  release:
+    types: [published]
 
 jobs:
   win32-x64:

@@ -6,6 +6,7 @@ dist/
 .vs/
 src/.vs/
 .vscode/
+.codex-remote-attachments
 .claude/
 *.user
 *.aps
