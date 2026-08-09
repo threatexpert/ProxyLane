@@ -25,6 +25,7 @@ $packageFiles = @(
     @{ Source = (Join-Path $binaryDirectory 'ProxyLaneSecureTransport32.dll'); Entry = 'ProxyLaneSecureTransport32.dll'; Versioned = $false },
     @{ Source = (Join-Path $binaryDirectory 'ProxyLaneSecureTransport64.dll'); Entry = 'ProxyLaneSecureTransport64.dll'; Versioned = $false },
     @{ Source = $exampleConfig;                                     Entry = 'ProxyLane.ini';       Versioned = $false },
+    @{ Source = (Join-Path $repositoryRoot 'LICENSE');              Entry = 'LICENSE';             Versioned = $false },
     @{ Source = (Join-Path $repositoryRoot 'README.md');            Entry = 'README.md';           Versioned = $false },
     @{ Source = (Join-Path $repositoryRoot 'README_EN.md');         Entry = 'README_EN.md';        Versioned = $false }
 )
