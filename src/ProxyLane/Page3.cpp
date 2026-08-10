@@ -2176,22 +2176,29 @@ LRESULT CPage3::OnRefreshPslist(WPARAM w, LPARAM l)
 
 BOOL CPage3::OnNewProcess(LPHookNewProcessInfo lphnpi)
 {
-	SendMessage(WM_ON_REFRESHPS, TRUE);
-	return ShouldProxyChildProcess(lphnpi);
+	const BOOL bShouldInject = ShouldProxyChildProcess(lphnpi);
+	PostMessage(WM_ON_REFRESHPS, TRUE);
+	return bShouldInject;
 }
 
 BOOL CPage3::ShouldProxyChildProcess(LPHookNewProcessInfo lphnpi)
 {
-	// 子进程注入过滤：按 profile 配置决定是否调用 InjectDll
-	CSingleLock filterLock(&g_childFilterLock, TRUE);
-	if (g_ChildInjectFilter.bEnabled && !g_ChildInjectFilter.patterns.empty())
+	// 子进程注入过滤：只在锁内复制已发布的运行时快照。
+	// 路径匹配和日志不得占用快照锁，也不依赖 UI 线程。
+	ChildInjectFilterSnapshot filterSnapshot;
+	{
+		CSingleLock filterLock(&g_childFilterLock, TRUE);
+		filterSnapshot = g_ChildInjectFilter;
+	}
+
+	if (filterSnapshot.bEnabled && !filterSnapshot.patterns.empty())
 	{
 		BOOL bMatched = FALSE;
 		if (lphnpi->szAppPath[0])
 		{
-			for (size_t i = 0; i < g_ChildInjectFilter.patterns.size(); i++)
+			for (size_t i = 0; i < filterSnapshot.patterns.size(); i++)
 			{
-				if (PathMatchSpecW(lphnpi->szAppPath, g_ChildInjectFilter.patterns[i]))
+				if (PathMatchSpecW(lphnpi->szAppPath, filterSnapshot.patterns[i]))
 				{
 					bMatched = TRUE;
 					break;
@@ -2199,7 +2206,7 @@ BOOL CPage3::ShouldProxyChildProcess(LPHookNewProcessInfo lphnpi)
 			}
 		}
 
-		BOOL bShouldInject = (g_ChildInjectFilter.nMode == CHILDFILTER_MODE_INCLUDE) ? bMatched : !bMatched;
+		BOOL bShouldInject = (filterSnapshot.nMode == CHILDFILTER_MODE_INCLUDE) ? bMatched : !bMatched;
 		if (!bShouldInject)
 		{
 			CString processName = lphnpi->szAppPath;
@@ -2222,7 +2229,7 @@ BOOL CPage3::ShouldProxyChildProcess(LPHookNewProcessInfo lphnpi)
 
 BOOL CPage3::InjectNewProcess(LPHookNewProcessInfo lphnpi)
 {
-	SendMessage(WM_ON_REFRESHPS, TRUE);
+	PostMessage(WM_ON_REFRESHPS, TRUE);
 
 	HookNewProcessInfo hnpi = *lphnpi;
 	HANDLE hProcess;
