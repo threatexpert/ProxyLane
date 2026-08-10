@@ -85,13 +85,14 @@ static BOOL IsUdpLoopbackDestination(SOCKET socketHandle,
 		peerLength, &normalized) && normalized.IsLoopback();
 }
 
-static BOOL IsBlockedIPv6Destination(SOCKET socketHandle,
-	const SOCKADDR *destination, int destinationLength)
+static BOOL GetSocketDestination(SOCKET socketHandle,
+	const SOCKADDR *destination, int destinationLength, _SockAddr *normalized)
 {
-	_SockAddr normalized;
+	if (!normalized)
+		return FALSE;
 	if (destination)
 	{
-		if (!NormalizeSocketAddress(destination, destinationLength, &normalized))
+		if (!NormalizeSocketAddress(destination, destinationLength, normalized))
 			return FALSE;
 	}
 	else
@@ -102,15 +103,32 @@ static BOOL IsBlockedIPv6Destination(SOCKET socketHandle,
 		if (::getpeername(socketHandle, reinterpret_cast<SOCKADDR *>(&peer),
 			&peerLength) == SOCKET_ERROR ||
 			!NormalizeSocketAddress(reinterpret_cast<SOCKADDR *>(&peer),
-				peerLength, &normalized))
+				peerLength, normalized))
 		{
 			return FALSE;
 		}
 	}
+	return TRUE;
+}
+
+static BOOL IsBlockedIPv6Destination(SOCKET socketHandle,
+	const SOCKADDR *destination, int destinationLength,
+	_SockAddr *blockedDestination = NULL)
+{
+	_SockAddr normalized;
+	if (!GetSocketDestination(socketHandle, destination, destinationLength,
+		&normalized))
+	{
+		return FALSE;
+	}
 	// IPv4-mapped IPv6 addresses are normalized to AF_INET above and remain
 	// usable. Local IPv6 IPC must also keep working when external IPv6 is
 	// disabled for an injected process.
-	return Ipv6BlockPolicy::ShouldBlock(normalized);
+	if (!Ipv6BlockPolicy::ShouldBlock(normalized))
+		return FALSE;
+	if (blockedDestination)
+		*blockedDestination = normalized;
+	return TRUE;
 }
 
 static BOOL IsMdnsDestination(const SOCKADDR *destination,
@@ -314,6 +332,65 @@ BOOL CHookWinsock::EnsureRequestPipe()
 	if (m_RequestPipe.IsConnected())
 		return TRUE;
 	return m_RequestPipe.Connect(m_szPRCPipeName);
+}
+
+void CHookWinsock::LogBlockedIPv6(SOCKET socketHandle,
+	const _SockAddr& destination, LPCWSTR apiName)
+{
+	if (!destination.IsIPv6() || !destination.GetAddr6())
+		return;
+
+	WCHAR addressText[INET6_ADDRSTRLEN] = L"";
+	if (!ProxyInetNtopW(AF_INET6, (PVOID)destination.GetAddr6(), addressText,
+		_countof(addressText)))
+	{
+		wcscpy(addressText, L"unknown");
+	}
+
+	WCHAR processPath[MAX_PATH] = L"";
+	GetModuleFileNameW(NULL, processPath, _countof(processPath));
+	processPath[_countof(processPath) - 1] = L'\0';
+	LPCWSTR processName = wcsrchr(processPath, L'\\');
+	processName = processName ? processName + 1 : processPath;
+	if (!processName[0])
+		processName = L"Unknown";
+
+	int socketType = 0;
+	int socketTypeLength = sizeof(socketType);
+	getsockopt(socketHandle, SOL_SOCKET, SO_TYPE,
+		reinterpret_cast<char *>(&socketType), &socketTypeLength);
+	LPCWSTR protocol = socketType == SOCK_DGRAM ? L"UDP" :
+		socketType == SOCK_STREAM ? L"TCP" : L"socket";
+	LPCWSTR action = socketType == SOCK_DGRAM ? L"send to" : L"connect to";
+
+	WCHAR domain[256] = L"";
+	char domainA[256] = "";
+	if (m_DummyDNS.IsDummyIPv6(destination.GetAddr6()) &&
+		m_DummyDNS.GetHostByIPv6(destination.GetAddr6(), domainA,
+			sizeof(domainA)))
+	{
+		MultiByteToWideChar(CP_ACP, 0, domainA, -1, domain,
+			_countof(domain));
+		domain[_countof(domain) - 1] = L'\0';
+	}
+
+	CStringW message;
+	if (domain[0])
+	{
+		message.Format(L"[Blocked] IPv6 %s %s, %s: %s ([%s]:%u), API: %s.",
+			protocol, processName, action, domain, addressText,
+			destination.GetPort(), apiName ? apiName : L"unknown");
+	}
+	else
+	{
+		message.Format(L"[Blocked] IPv6 %s %s, %s: [%s]:%u, API: %s.",
+			protocol, processName, action, addressText,
+			destination.GetPort(), apiName ? apiName : L"unknown");
+	}
+
+	CScopedCriticalSection pipeLock(&m_RequestPipeLock);
+	if (EnsureRequestPipe() && !m_RequestPipe.PRCLogtext(message))
+		m_RequestPipe.Disconnect();
 }
 
 CString CHookWinsock::GetLastError()
@@ -774,6 +851,7 @@ CHookWinsock::inhook_connect(SOCKET s, const struct sockaddr FAR * name, int nam
 		return CallTrampoline(connect)(s, name, namelen);
 	if (m_psi.bBlockIPv6 && Ipv6BlockPolicy::ShouldBlock(addrname))
 	{
+		LogBlockedIPv6(s, addrname, L"connect");
 		WSASetLastError(WSAEAFNOSUPPORT);
 		return SOCKET_ERROR;
 	}
@@ -830,6 +908,7 @@ CHookWinsock::inhook_WSAConnect(SOCKET s, const struct sockaddr* name, int namel
 			lpCalleeData, lpSQOS, lpGQOS);
 	if (m_psi.bBlockIPv6 && Ipv6BlockPolicy::ShouldBlock(addrname))
 	{
+		LogBlockedIPv6(s, addrname, L"WSAConnect");
 		WSASetLastError(WSAEAFNOSUPPORT);
 		return SOCKET_ERROR;
 	}
@@ -917,6 +996,7 @@ BOOL PASCAL CHookWinsock::inhook_ConnectEx(
 	}
 	if (m_psi.bBlockIPv6 && Ipv6BlockPolicy::ShouldBlock(addrname))
 	{
+		LogBlockedIPv6(s, addrname, L"ConnectEx");
 		WSASetLastError(WSAEAFNOSUPPORT);
 		return FALSE;
 	}
@@ -968,9 +1048,12 @@ INT PASCAL CHookWinsock::inhook_WSASendMsg(SOCKET s, LPWSAMSG lpMsg,
 		WSASetLastError(WSAEOPNOTSUPP);
 		return SOCKET_ERROR;
 	}
+	_SockAddr blockedIPv6Destination;
 	if (m_psi.bBlockIPv6 && lpMsg &&
-		IsBlockedIPv6Destination(s, lpMsg->name, lpMsg->namelen))
+		IsBlockedIPv6Destination(s, lpMsg->name, lpMsg->namelen,
+			&blockedIPv6Destination))
 	{
+		LogBlockedIPv6(s, blockedIPv6Destination, L"WSASendMsg");
 		WSASetLastError(WSAEAFNOSUPPORT);
 		return SOCKET_ERROR;
 	}
@@ -1333,8 +1416,11 @@ MyDetourProc(has_Return, int, WSAAPI, WSASendTo, (
 
 int WSAAPI CHookWinsock::inhook_sendto(SOCKET s, const char* buf, int len, int flags, const struct sockaddr* to, int tolen)
 {
-	if (m_psi.bBlockIPv6 && IsBlockedIPv6Destination(s, to, tolen))
+	_SockAddr blockedIPv6Destination;
+	if (m_psi.bBlockIPv6 &&
+		IsBlockedIPv6Destination(s, to, tolen, &blockedIPv6Destination))
 	{
+		LogBlockedIPv6(s, blockedIPv6Destination, L"sendto");
 		WSASetLastError(WSAEAFNOSUPPORT);
 		return SOCKET_ERROR;
 	}
@@ -1388,8 +1474,11 @@ int WSAAPI CHookWinsock::inhook_WSASendTo(
 	LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
 	)
 {
-	if (m_psi.bBlockIPv6 && IsBlockedIPv6Destination(s, lpTo, iToLen))
+	_SockAddr blockedIPv6Destination;
+	if (m_psi.bBlockIPv6 &&
+		IsBlockedIPv6Destination(s, lpTo, iToLen, &blockedIPv6Destination))
 	{
+		LogBlockedIPv6(s, blockedIPv6Destination, L"WSASendTo");
 		WSASetLastError(WSAEAFNOSUPPORT);
 		return SOCKET_ERROR;
 	}

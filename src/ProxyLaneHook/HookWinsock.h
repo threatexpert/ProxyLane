@@ -784,5 +784,7 @@ private:
 	CPRCPipeClient m_RequestPipe;
 	CRITICAL_SECTION m_RequestPipeLock;
 	BOOL EnsureRequestPipe();
+	void LogBlockedIPv6(SOCKET socketHandle, const _SockAddr& destination,
+		LPCWSTR apiName);
 
 };

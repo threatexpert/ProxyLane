@@ -1145,6 +1145,7 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 	int nCode = LOWORD(nErrorCode);
 
 	CString szText;
+	BOOL enabledIpv6Blocking = FALSE;
 
 	if (nType == LAYERCALLBACK_STATECHANGE)
 	{
@@ -1212,6 +1213,13 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 
 		if(nCode == 0)
 		{
+			const BOOL ipv6Unavailable =
+				m_testIpv6Result == IPV6_TEST_UNAVAILABLE ||
+				m_testIpv6Result == IPV6_TEST_UNSUPPORTED;
+			const BOOL ipv6AlreadyBlocked =
+				m_btnBlockIPv6.GetCheck() == BST_CHECKED;
+			const BOOL suggestIpv6Blocking =
+				ipv6Unavailable && !ipv6AlreadyBlocked;
 			szText = Localization::Get(m_testUdpRequested
 				? _T("test.success_tcp_udp") : _T("test.success"));
 			switch (m_testIpv6Result)
@@ -1235,20 +1243,21 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 			if (m_profileDirty && m_runtimeDirty)
 			{
 				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_unsaved_unapplied")), CStatusLabel::TONE_WARNING);
-				szText += Localization::Get(_T("test.not_saved_or_applied"));
 			}
 			else if (m_runtimeDirty)
 			{
 				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_unapplied")), CStatusLabel::TONE_WARNING);
-				szText += Localization::Get(_T("test.not_applied"));
 			}
 			else if (m_profileDirty)
 			{
 				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_unsaved")), CStatusLabel::TONE_WARNING);
-				szText += Localization::Get(_T("test.not_saved"));
 			}
 			else if (m_testIpv6Result == IPV6_TEST_AVAILABLE)
 				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_saved")), CStatusLabel::TONE_SUCCESS);
+			else if (ipv6Unavailable && ipv6AlreadyBlocked)
+				m_staticTestProxy.SetStatus(Localization::Get(
+					_T("status.test_passed_ipv6_blocked")),
+					CStatusLabel::TONE_INFO);
 			else
 				m_staticTestProxy.SetStatus(Localization::Get(
 					m_testIpv6Result == IPV6_TEST_UNAVAILABLE ||
@@ -1256,9 +1265,25 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 						? _T("status.test_passed_ipv6_unavailable")
 						: _T("status.test_passed_ipv6_unknown")),
 					CStatusLabel::TONE_WARNING);
-			MessageBox(szText, Localization::Get(_T("test.title")),
-				m_testIpv6Result == IPV6_TEST_AVAILABLE
-					? MB_ICONINFORMATION : MB_ICONWARNING);
+
+			if (suggestIpv6Blocking)
+			{
+				szText += Localization::Get(_T("test.ipv6_block_suggestion"));
+				if (MessageBox(szText, Localization::Get(_T("test.title")),
+					MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON1) == IDYES)
+				{
+					m_btnBlockIPv6.SetCheck(BST_CHECKED);
+					OnProfileFieldChanged();
+					enabledIpv6Blocking = TRUE;
+				}
+			}
+			else
+			{
+				const UINT icon = m_testIpv6Result == IPV6_TEST_AVAILABLE ||
+					(ipv6Unavailable && ipv6AlreadyBlocked)
+						? MB_ICONINFORMATION : MB_ICONWARNING;
+				MessageBox(szText, Localization::Get(_T("test.title")), icon);
+			}
 		}else
 		{
 			switch (nCode)
@@ -1315,6 +1340,8 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 		m_btnTest.SetWindowText(Localization::Get(_T("action.test_current")));
 		m_bIsTesting = FALSE;
 		m_proxyTestPhase = PROXY_TEST_NONE;
+		if (enabledIpv6Blocking)
+			UpdateProxyTestStatus();
 
 	}
 
