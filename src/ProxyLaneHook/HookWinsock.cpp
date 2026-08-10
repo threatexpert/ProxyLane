@@ -12,6 +12,7 @@
 #include "UdpPayloadPolicy.h"
 #include "UdpAssociationPolicy.h"
 #include "Ipv6BlockPolicy.h"
+#include "DnsAddressFamilyPolicy.h"
 
 #pragma comment(lib,"psapi.lib")
 #pragma comment(lib,"ws2_32.lib")
@@ -620,6 +621,16 @@ int WSAAPI CHookWinsock::inhook_getaddrinfo(IN const char FAR * nodename, IN con
 	if (HackDNS(nodename))
 	{
 		ATLTRACE("inhook_getaddrinfo %s\r\n", nodename);
+		const int requestedFamily = hints ? hints->ai_family : AF_UNSPEC;
+		const DnsAddressFamilyPolicy::Decision familyDecision =
+			DnsAddressFamilyPolicy::Decide(requestedFamily,
+				m_psi.bBlockIPv6 != FALSE);
+		if (familyDecision == DnsAddressFamilyPolicy::REJECT_IPV6)
+		{
+			if (res)
+				*res = NULL;
+			return WSAEAFNOSUPPORT;
+		}
 
 		DWORD dummyIP = m_DummyDNS.GetDummyIP(nodename);
 		IN6_ADDR dummyIPv6 = m_DummyDNS.GetDummyIPv6(nodename);
@@ -630,7 +641,18 @@ int WSAAPI CHookWinsock::inhook_getaddrinfo(IN const char FAR * nodename, IN con
 		// 
 		// 		ret = pFunc(szIP, servname, hints, res);
 
-		ret = CallTrampoline(getaddrinfo)("localhost", servname, hints, res);
+		struct addrinfo ipv4Hints;
+		const struct addrinfo *effectiveHints = hints;
+		if (familyDecision == DnsAddressFamilyPolicy::FORCE_IPV4)
+		{
+			ZeroMemory(&ipv4Hints, sizeof(ipv4Hints));
+			if (hints)
+				ipv4Hints = *hints;
+			ipv4Hints.ai_family = AF_INET;
+			effectiveHints = &ipv4Hints;
+		}
+		ret = CallTrampoline(getaddrinfo)("localhost", servname,
+			effectiveHints, res);
 		struct addrinfo FAR *resls = (ret == 0 && res) ? *res : NULL;
 		while (resls)
 		{
@@ -706,6 +728,18 @@ struct timeval *timeout,
 		)
 	{
 		ATLTRACE("inhook_GetAddrInfoEx %s\r\n", nodename);
+		const int requestedFamily = hints ? hints->ai_family : AF_UNSPEC;
+		const DnsAddressFamilyPolicy::Decision familyDecision =
+			DnsAddressFamilyPolicy::Decide(requestedFamily,
+				m_psi.bBlockIPv6 != FALSE);
+		if (familyDecision == DnsAddressFamilyPolicy::REJECT_IPV6)
+		{
+			if (ppResult)
+				*ppResult = NULL;
+			if (lpHandle)
+				*lpHandle = NULL;
+			return WSAEAFNOSUPPORT;
+		}
 
 		if (lpOverlapped)
 			ATLTRACE("inhook_GetAddrInfoEx Overlapped completed synchronously\r\n");
@@ -716,11 +750,21 @@ struct timeval *timeout,
 		// GetAddrInfoExW may complete synchronously even when the caller supplies
 		// an OVERLAPPED. Returning 0 with ppResult populated is the documented
 		// completion path; the caller must not wait for a callback in that case.
+		ADDRINFOEXW ipv4Hints;
+		const ADDRINFOEXW *effectiveHints = hints;
+		if (familyDecision == DnsAddressFamilyPolicy::FORCE_IPV4)
+		{
+			ZeroMemory(&ipv4Hints, sizeof(ipv4Hints));
+			if (hints)
+				ipv4Hints = *hints;
+			ipv4Hints.ai_family = AF_INET;
+			effectiveHints = &ipv4Hints;
+		}
 		ret = CallTrampoline(GetAddrInfoExW)(L"localhost", // 127.0.0.1的话不知道为什么会引起堆破坏？？
 			pServiceName,
 			dwNameSpace,
 			lpNspId,
-			hints,
+			effectiveHints,
 			ppResult,
 			timeout,
 			NULL,
@@ -796,13 +840,33 @@ int WSAAPI CHookWinsock::inhook_GetAddrInfoW(
 		)
 	{
 		ATLTRACE("inhook_GetAddrInfoW %s\r\n", nodename);
+		const int requestedFamily = pHints ? pHints->ai_family : AF_UNSPEC;
+		const DnsAddressFamilyPolicy::Decision familyDecision =
+			DnsAddressFamilyPolicy::Decide(requestedFamily,
+				m_psi.bBlockIPv6 != FALSE);
+		if (familyDecision == DnsAddressFamilyPolicy::REJECT_IPV6)
+		{
+			if (ppResult)
+				*ppResult = NULL;
+			return WSAEAFNOSUPPORT;
+		}
 
 		DWORD dummyIP = m_DummyDNS.GetDummyIP(nodename);
 		IN6_ADDR dummyIPv6 = m_DummyDNS.GetDummyIPv6(nodename);
 
+		ADDRINFOW ipv4Hints;
+		const ADDRINFOW *effectiveHints = pHints;
+		if (familyDecision == DnsAddressFamilyPolicy::FORCE_IPV4)
+		{
+			ZeroMemory(&ipv4Hints, sizeof(ipv4Hints));
+			if (pHints)
+				ipv4Hints = *pHints;
+			ipv4Hints.ai_family = AF_INET;
+			effectiveHints = &ipv4Hints;
+		}
 		ret = CallTrampoline(GetAddrInfoW)(L"localhost", 
 			pServiceName,
-			pHints,
+			effectiveHints,
 			ppResult);
 
 		if (ret == 0 && ppResult && *ppResult)

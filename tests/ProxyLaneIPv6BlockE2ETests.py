@@ -23,8 +23,26 @@ def connect_error(address):
 external = connect_error("2001:db8::1")
 loopback = connect_error("::1")
 mapped = connect_error("::ffff:127.0.0.1")
-result = "PASS" if external == 10047 and loopback != 10047 and mapped != 10047 else (
-    f"FAIL external={external} loopback={loopback} mapped={mapped}")
+
+remote_results = socket.getaddrinfo(
+    "proxylane-ipv6-block.invalid", 22, socket.AF_UNSPEC, socket.SOCK_STREAM)
+remote_ipv4_only = bool(remote_results) and all(
+    family == socket.AF_INET and address[0].startswith("127.255.")
+    for family, _type, _protocol, _name, address in remote_results)
+try:
+    socket.getaddrinfo(
+        "proxylane-ipv6-block.invalid", 22, socket.AF_INET6,
+        socket.SOCK_STREAM)
+    explicit_ipv6_rejected = False
+except socket.gaierror:
+    explicit_ipv6_rejected = True
+
+result = "PASS" if (
+    external == 10047 and loopback != 10047 and mapped != 10047 and
+    remote_ipv4_only and explicit_ipv6_rejected
+) else (
+    f"FAIL external={external} loopback={loopback} mapped={mapped} "
+    f"remote={remote_results!r} explicit_rejected={explicit_ipv6_rejected}")
 with open(sys.argv[1], "w", encoding="utf-8") as output:
     output.write(result)
 '''
@@ -57,7 +75,7 @@ HookTCP=0
 HookUDP=0
 BlockUDP=0
 BlockIPv6=1
-dnsOpt=0
+dnsOpt=1
 RedirectPrivateDNS=0
 ChildFilter=
 ChildFilterMode=1
@@ -94,7 +112,7 @@ PSK=
                 result = result_file.read()
             if result != "PASS":
                 raise RuntimeError(result)
-            print("PASS: injected IPv6 blocking and loopback exceptions")
+            print("PASS: IPv6 blocking, loopback exceptions, and IPv4-only remote DNS")
         finally:
             proxylane.terminate()
             try:
