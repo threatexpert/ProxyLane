@@ -251,6 +251,15 @@ public:
 
 IGlobalProxy* WINAPI GetGlobalProxyInstance();
 BOOL WINAPI ReleaseGlobalProxyInstance();
+// Called once by ProxyLane.exe after startup.  The marker remains stable for
+// the lifetime of that GUI process, including proxy stop/start cycles.
+BOOL WINAPI SetProxyLaneChildGuardInfo(
+	LPCWSTR variableName,
+	ULONGLONG generationTime);
+BOOL GetProxyLaneChildGuardInfo(
+	LPWSTR variableName,
+	DWORD variableNameCount,
+	ULONGLONG *generationTime);
 
 
 ////////////////////////////////////////

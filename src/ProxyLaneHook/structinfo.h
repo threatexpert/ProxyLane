@@ -292,6 +292,11 @@ typedef struct _tagPRCINFO
 	_SockAddr tcpaddr;
 	_SockAddr tcpaddr6;
 	_SockAddr udpaddr;
+	// A per-ProxyLane-process random environment variable name.  Hooked
+	// processes inherit "<name>=1" so PRC can recognize a child left
+	// suspended if its parent exits during injection.
+	WCHAR childGuardName[64];
+	ULONGLONG childGuardGenerationTime;
 }PRCINFO, *LPPRCINFO;
 
 #define PRC_CLIENT_FLAG_DNS_REDIRECT 0x00000001
@@ -376,6 +381,7 @@ typedef struct _HookNewProcessInfo
 
 	DWORD dwProcessId;
 	DWORD dwThreadId;
+	ULONGLONG processCreateTime;
 }HookNewProcessInfo, *LPHookNewProcessInfo;
 
 typedef struct _HookProcessIdentityInfo
@@ -423,6 +429,7 @@ typedef struct _tagHookLogtext
 #define PRCPD_Logtext    10
 #define PRCPD_CHILD_INJECTION_RESULT 11
 #define PRCPD_REGISTER_PROCESS_IDENTITY 12
+#define PRCPD_CHILD_RELEASED 13
 
 #pragma pack(pop)
 

@@ -13,6 +13,9 @@
 #include "UdpAssociationPolicy.h"
 #include "Ipv6BlockPolicy.h"
 #include "DnsAddressFamilyPolicy.h"
+#include <algorithm>
+#include <string>
+#include <vector>
 
 #pragma comment(lib,"psapi.lib")
 #pragma comment(lib,"ws2_32.lib")
@@ -302,6 +305,8 @@ CHookWinsock::CHookWinsock(void)
 	ZeroMemory(m_HookedInfo, sizeof(m_HookedInfo));
 	ZeroMemory(&m_psi, sizeof(m_psi));
 	ZeroMemory(m_mem4bakcode, sizeof(m_mem4bakcode));
+	ZeroMemory(m_ChildGuardName, sizeof(m_ChildGuardName));
+	m_ChildGuardInstalled = FALSE;
 
 	m_bHookEnabled = FALSE;
 	//
@@ -416,6 +421,18 @@ BOOL CHookWinsock::EnableHook()
 		return FALSE;
 	}
 
+	PRCINFO startupInfo;
+	if (!PRCPipeClient.GetPRCStartupInfo(&startupInfo))
+		return FALSE;
+	if (m_psi.bHookCreateProcess && startupInfo.childGuardName[0])
+	{
+		wcsncpy(m_ChildGuardName, startupInfo.childGuardName,
+			_countof(m_ChildGuardName) - 1);
+		m_ChildGuardName[_countof(m_ChildGuardName) - 1] = L'\0';
+		m_ChildGuardInstalled = SetEnvironmentVariableW(
+			m_ChildGuardName, L"1");
+	}
+
 	// 在安装网络 Hook 前登记身份，避免其他线程的首个连接早于路径缓存建立。
 	RegisterCurrentProcessIdentity(PRCPipeClient);
 
@@ -433,6 +450,11 @@ BOOL CHookWinsock::EnableHook()
 	//hook API
 
 	BOOL bOK = HookWinsock();
+	if (!bOK && m_ChildGuardInstalled)
+	{
+		SetEnvironmentVariableW(m_ChildGuardName, NULL);
+		m_ChildGuardInstalled = FALSE;
+	}
 
 	PRCPipeClient.PRCNotifyHookWSockResult(bOK ? 0 : 1);
 
@@ -444,6 +466,10 @@ BOOL CHookWinsock::EnableHook()
 BOOL CHookWinsock::DisableHook()
 {
 	UnhookWinsock();
+	if (m_ChildGuardInstalled && m_ChildGuardName[0])
+		SetEnvironmentVariableW(m_ChildGuardName, NULL);
+	m_ChildGuardInstalled = FALSE;
+	ZeroMemory(m_ChildGuardName, sizeof(m_ChildGuardName));
 	ZeroMemory(m_HookedInfo, sizeof(m_HookedInfo));
 	ZeroMemory(&m_psi, sizeof(m_psi));
 	ZeroMemory(m_mem4bakcode, sizeof(m_mem4bakcode));
@@ -1891,6 +1917,262 @@ static BOOL WINAPI CreateProcessWithoutProxyLaneHook(
 		NULL);
 }
 
+static ULONGLONG QueryProcessCreateTimeValue(HANDLE process)
+{
+	FILETIME created, exited, kernel, user;
+	if (!process || !GetProcessTimes(process, &created, &exited, &kernel, &user))
+		return 0;
+	return (static_cast<ULONGLONG>(created.dwHighDateTime) << 32) |
+		created.dwLowDateTime;
+}
+
+static BOOL GetReadableEnvironmentRegionEnd(
+	LPCVOID address,
+	const BYTE **regionEnd)
+{
+	if (!address || !regionEnd)
+		return FALSE;
+	MEMORY_BASIC_INFORMATION memoryInfo;
+	if (!VirtualQuery(address, &memoryInfo, sizeof(memoryInfo)) ||
+		memoryInfo.State != MEM_COMMIT ||
+		(memoryInfo.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+	{
+		return FALSE;
+	}
+	const DWORD readable = PAGE_READONLY | PAGE_READWRITE |
+		PAGE_WRITECOPY | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+		PAGE_EXECUTE_WRITECOPY;
+	if ((memoryInfo.Protect & readable) == 0)
+		return FALSE;
+	*regionEnd = static_cast<const BYTE *>(memoryInfo.BaseAddress) +
+		memoryInfo.RegionSize;
+	return TRUE;
+}
+
+template <typename CharType>
+static BOOL ReadEnvironmentEntries(
+	const CharType *environment,
+	std::vector<std::basic_string<CharType> >& entries)
+{
+	if (!environment)
+		return FALSE;
+	const size_t maxCharacters = (1024 * 1024) / sizeof(CharType);
+	const CharType *entry = environment;
+	const BYTE *regionEnd = NULL;
+	size_t visited = 0;
+	while (visited < maxCharacters)
+	{
+		if ((!regionEnd || reinterpret_cast<const BYTE *>(entry) >= regionEnd) &&
+			!GetReadableEnvironmentRegionEnd(entry, &regionEnd))
+			return FALSE;
+		size_t length = 0;
+		while (visited + length < maxCharacters)
+		{
+			if ((!regionEnd || reinterpret_cast<const BYTE *>(entry + length) >= regionEnd) &&
+				!GetReadableEnvironmentRegionEnd(entry + length, &regionEnd))
+				return FALSE;
+			if (entry[length] == 0)
+				break;
+			++length;
+		}
+		if (visited + length >= maxCharacters)
+			return FALSE;
+		if (length == 0)
+			return TRUE;
+		entries.push_back(std::basic_string<CharType>(entry, length));
+		entry += length + 1;
+		visited += length + 1;
+	}
+	return FALSE;
+}
+
+static BOOL EnvironmentEntryHasName(
+	const std::wstring& entry,
+	LPCWSTR variableName)
+{
+	if (entry.empty() || entry[0] == L'=')
+		return FALSE;
+	const size_t separator = entry.find(L'=');
+	return separator != std::wstring::npos &&
+		separator == wcslen(variableName) &&
+		_wcsnicmp(entry.c_str(), variableName, separator) == 0;
+}
+
+static BOOL EnvironmentEntryHasName(
+	const std::string& entry,
+	LPCSTR variableName)
+{
+	if (entry.empty() || entry[0] == '=')
+		return FALSE;
+	const size_t separator = entry.find('=');
+	return separator != std::string::npos &&
+		separator == strlen(variableName) &&
+		_strnicmp(entry.c_str(), variableName, separator) == 0;
+}
+
+struct WideEnvironmentLess
+{
+	bool operator()(const std::wstring& left, const std::wstring& right) const
+	{
+		return _wcsicmp(left.c_str(), right.c_str()) < 0;
+	}
+};
+
+struct AnsiEnvironmentLess
+{
+	bool operator()(const std::string& left, const std::string& right) const
+	{
+		return _stricmp(left.c_str(), right.c_str()) < 0;
+	}
+};
+
+template <typename CharType, typename StringType, typename LessType>
+static void SerializeEnvironmentEntries(
+	std::vector<StringType>& entries,
+	std::vector<BYTE>& output)
+{
+	std::sort(entries.begin(), entries.end(), LessType());
+	size_t characterCount = 1;
+	for (size_t i = 0; i < entries.size(); ++i)
+		characterCount += entries[i].size() + 1;
+	// An empty environment block still needs two terminators.
+	if (entries.empty())
+		++characterCount;
+	output.assign(characterCount * sizeof(CharType), 0);
+	CharType *writeAt = reinterpret_cast<CharType *>(&output[0]);
+	for (size_t i = 0; i < entries.size(); ++i)
+	{
+		memcpy(writeAt, entries[i].c_str(),
+			entries[i].size() * sizeof(CharType));
+		writeAt += entries[i].size() + 1;
+	}
+}
+
+static BOOL BuildWideChildEnvironment(
+	LPVOID suppliedEnvironment,
+	BOOL addMarker,
+	LPCWSTR variableName,
+	std::vector<BYTE>& output)
+{
+	LPWCH inherited = NULL;
+	const WCHAR *source = static_cast<const WCHAR *>(suppliedEnvironment);
+	if (!source)
+	{
+		inherited = GetEnvironmentStringsW();
+		source = inherited;
+	}
+	std::vector<std::wstring> entries;
+	const BOOL read = ReadEnvironmentEntries(source, entries);
+	if (inherited)
+		FreeEnvironmentStringsW(inherited);
+	if (!read)
+		return FALSE;
+
+	for (std::vector<std::wstring>::iterator it = entries.begin();
+		it != entries.end();)
+	{
+		if (EnvironmentEntryHasName(*it, variableName))
+			it = entries.erase(it);
+		else
+			++it;
+	}
+	if (addMarker)
+		entries.push_back(std::wstring(variableName) + L"=1");
+	SerializeEnvironmentEntries<WCHAR, std::wstring, WideEnvironmentLess>(
+		entries, output);
+	return TRUE;
+}
+
+static BOOL BuildAnsiChildEnvironment(
+	LPVOID suppliedEnvironment,
+	BOOL addMarker,
+	LPCWSTR variableName,
+	std::vector<BYTE>& output)
+{
+	char ansiName[64] = "";
+	if (!WideCharToMultiByte(CP_ACP, 0, variableName, -1, ansiName,
+		_countof(ansiName), NULL, NULL))
+	{
+		return FALSE;
+	}
+	LPCH inherited = NULL;
+	const char *source = static_cast<const char *>(suppliedEnvironment);
+	if (!source)
+	{
+		typedef LPCH (WINAPI *GetEnvironmentStringsAProc)();
+		HMODULE kernel32 = GetModuleHandleW(L"kernel32.dll");
+		GetEnvironmentStringsAProc getEnvironmentStringsA = kernel32
+			? reinterpret_cast<GetEnvironmentStringsAProc>(
+				GetProcAddress(kernel32, "GetEnvironmentStringsA")) : NULL;
+		if (!getEnvironmentStringsA)
+			return FALSE;
+		inherited = getEnvironmentStringsA();
+		source = inherited;
+	}
+	std::vector<std::string> entries;
+	const BOOL read = ReadEnvironmentEntries(source, entries);
+	if (inherited)
+		FreeEnvironmentStringsA(inherited);
+	if (!read)
+		return FALSE;
+
+	for (std::vector<std::string>::iterator it = entries.begin();
+		it != entries.end();)
+	{
+		if (EnvironmentEntryHasName(*it, ansiName))
+			it = entries.erase(it);
+		else
+			++it;
+	}
+	if (addMarker)
+		entries.push_back(std::string(ansiName) + "=1");
+	SerializeEnvironmentEntries<char, std::string, AnsiEnvironmentLess>(
+		entries, output);
+	return TRUE;
+}
+
+static BOOL BuildChildEnvironment(
+	LPVOID suppliedEnvironment,
+	DWORD creationFlags,
+	BOOL addMarker,
+	LPCWSTR variableName,
+	std::vector<BYTE>& output)
+{
+	if (!variableName || !variableName[0])
+		return FALSE;
+	if (creationFlags & CREATE_UNICODE_ENVIRONMENT)
+	{
+		return BuildWideChildEnvironment(suppliedEnvironment, addMarker,
+			variableName, output);
+	}
+	return BuildAnsiChildEnvironment(suppliedEnvironment, addMarker,
+		variableName, output);
+}
+
+class CChildResumeGuard
+{
+public:
+	CChildResumeGuard(HANDLE thread, BOOL ownsSuspension)
+		: m_thread(thread), m_armed(ownsSuspension) {}
+	~CChildResumeGuard()
+	{
+		if (m_armed && m_thread)
+			ResumeThread(m_thread);
+	}
+	BOOL Resume()
+	{
+		if (!m_armed)
+			return FALSE;
+		if (ResumeThread(m_thread) == static_cast<DWORD>(-1))
+			return FALSE;
+		m_armed = FALSE;
+		return TRUE;
+	}
+private:
+	HANDLE m_thread;
+	BOOL m_armed;
+};
+
 BOOL WINAPI CHookWinsock::inhook_CreateProcessInternalW(HANDLE hToken, LPCWSTR lpApplicationName, LPWSTR lpCommandLine, LPSECURITY_ATTRIBUTES lpProcessAttributes, LPSECURITY_ATTRIBUTES lpThreadAttributes, BOOL bInheritHandles, DWORD dwCreationFlags, LPVOID lpEnvironment, LPCWSTR lpCurrentDirectory, LPSTARTUPINFOW lpStartupInfo, LPPROCESS_INFORMATION lpProcessInformation, PHANDLE hNewToken)
 {
 	if (!m_psi.bHookCreateProcess)
@@ -1898,29 +2180,49 @@ BOOL WINAPI CHookWinsock::inhook_CreateProcessInternalW(HANDLE hToken, LPCWSTR l
 		return CallTrampoline(CreateProcessInternalW)(hToken, lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, lpEnvironment, lpCurrentDirectory, lpStartupInfo, lpProcessInformation, hNewToken);
 	}
 
+	const DWORD originalCreationFlags = dwCreationFlags;
 	//如果没标志挂起主线程， 则修改之
-	BOOL bSuspend;
-	if ((dwCreationFlags & CREATE_SUSPENDED) == 0)
+	const BOOL bSuspend = (originalCreationFlags & CREATE_SUSPENDED) == 0;
+	if (bSuspend)
 	{
 		dwCreationFlags |= CREATE_SUSPENDED;
-		bSuspend = TRUE;
-	}
-	else
-	{
-		bSuspend = FALSE;
 	}
 
-	BOOL bRetVal = CallTrampoline(CreateProcessInternalW)(hToken, lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, lpEnvironment, lpCurrentDirectory, lpStartupInfo, lpProcessInformation, hNewToken);
+	std::vector<BYTE> childEnvironment;
+	LPVOID effectiveEnvironment = lpEnvironment;
+	// NULL normally inherits the marker automatically.  Explicit environment
+	// blocks must receive it.  Conversely, a caller-owned CREATE_SUSPENDED child
+	// must never carry ProxyLane's marker because ProxyLane does not own that
+	// suspension.
+	const BOOL mustRewriteEnvironment = m_ChildGuardInstalled &&
+		((bSuspend && lpEnvironment != NULL) || !bSuspend);
+	if (mustRewriteEnvironment && BuildChildEnvironment(
+		lpEnvironment,
+		originalCreationFlags,
+		bSuspend,
+		m_ChildGuardName,
+		childEnvironment))
+	{
+		effectiveEnvironment = &childEnvironment[0];
+	}
+
+	BOOL bRetVal = CallTrampoline(CreateProcessInternalW)(hToken, lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, effectiveEnvironment, lpCurrentDirectory, lpStartupInfo, lpProcessInformation, hNewToken);
 
 	if (bRetVal)
 	{
+		CChildResumeGuard resumeGuard(lpProcessInformation->hThread, bSuspend);
+		CPRCPipeClient PRCPipeClient;
+		BOOL pipeConnected = FALSE;
+		HookNewProcessInfo hnpi = {0};
+		hnpi.dwProcessId = lpProcessInformation->dwProcessId;
+		hnpi.dwThreadId = lpProcessInformation->dwThreadId;
+		hnpi.processCreateTime = QueryProcessCreateTimeValue(
+			lpProcessInformation->hProcess);
 		do
 		{
-			CPRCPipeClient PRCPipeClient;
 			if (!PRCPipeClient.Connect(m_szPRCPipeName))
 				break;
-
-			HookNewProcessInfo hnpi = {0};
+			pipeConnected = TRUE;
 
 			ResolveChildAppPath(lpProcessInformation->hProcess, lpApplicationName, lpCommandLine, hnpi.szAppPath, MAX_PATH);
 
@@ -1945,15 +2247,17 @@ BOOL WINAPI CHookWinsock::inhook_CreateProcessInternalW(HANDLE hToken, LPCWSTR l
 				pipeName,
 				CreateProcessWithoutProxyLaneHook);
 			PRCPipeClient.PRCNotifyChildInjectionResult(&hnpi, injectionSucceeded);
-			PRCPipeClient.Disconnect();
 
 		} while (FALSE);
 
-		//如果是被我修改的则在通知PRC后回复
-		if (bSuspend)
+		// Only record the exclusion after the suspension that ProxyLane added has
+		// actually been released.  Recording first could hide the exact orphan
+		// process that the watchdog is intended to recover.
+		if (bSuspend && resumeGuard.Resume() && pipeConnected)
 		{
-			ResumeThread(lpProcessInformation->hThread);
+			PRCPipeClient.PRCNotifyChildReleased(&hnpi);
 		}
+		PRCPipeClient.Disconnect();
 	}
 
 

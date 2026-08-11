@@ -30,6 +30,10 @@ to loopback test services.
 - `connectex_initial_data.cpp`: native Windows probe that submits the first
   application payload in `ConnectEx`. It covers data queued while the PRC is
   still negotiating SOCKS5/HTTP, including the Windows XP notification path.
+- `child_guard_watchdog.cpp`: native watchdog probe that creates a marked,
+  single-threaded suspended child, exits its parent, and verifies that PRC
+  terminates it only after the production age threshold and two stable checks;
+  a second suspended child registered as normally released must remain intact.
 - `http_connect_server.go`: HTTP CONNECT proxy that deliberately writes its
   final response header and initial tunnel bytes together to verify surplus
   preservation.
@@ -54,6 +58,19 @@ Build the native Win32 probe from a Visual Studio developer prompt:
 ```bat
 cl /nologo /EHsc /O2 tests\e2e\connectex_initial_data.cpp /Fe:build\qa\connectex_initial_data32.exe
 ```
+
+Build the x64 child-guard probe after building ProxyLane x64 Release:
+
+```bat
+cl /nologo /EHsc /O2 /DUNICODE /D_UNICODE /I src\ProxyLaneHook ^
+  tests\e2e\child_guard_watchdog.cpp /Fe:build\qa\child_guard_watchdog.exe ^
+  /link /LIBPATH:bin\x64\Release ProxyLaneHook.lib user32.lib
+set PATH=%CD%\bin;%PATH%
+build\qa\child_guard_watchdog.exe
+```
+
+The watchdog test intentionally takes about two minutes; it uses the same
+60-second minimum age and two 30-second observations as production.
 
 Launch the client through ProxyLane's automation interface after creating a
 temporary profile that points at the corresponding local proxy:

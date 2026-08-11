@@ -1,6 +1,7 @@
 EXPORTS
 	GetGlobalProxyInstance
 	ReleaseGlobalProxyInstance
+	SetProxyLaneChildGuardInfo
 	gp_HookWinsock
 	gp_UnhookWinsock
 	AttachTo

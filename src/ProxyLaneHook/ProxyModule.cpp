@@ -14,6 +14,8 @@
 CGlobalProxy *g_pPMGlobalProxy = NULL;
 CHookWinsock *g_pPMHookWs = NULL;
 HMODULE g_hDllModule = NULL;
+static WCHAR g_ChildGuardName[64] = L"";
+static ULONGLONG g_ChildGuardGenerationTime = 0;
 
 const DWORD ProxyModuleVersion = 20080129;
 //////////////////////////////////////////////////////////////////////////
@@ -97,6 +99,48 @@ BOOL WINAPI ReleaseGlobalProxyInstance()
 	{
 		g_pPMGlobalProxy = NULL;
 	}
+	return TRUE;
+}
+
+BOOL WINAPI SetProxyLaneChildGuardInfo(
+	LPCWSTR variableName,
+	ULONGLONG generationTime)
+{
+	if (!variableName || !variableName[0] || !generationTime ||
+		wcslen(variableName) >= _countof(g_ChildGuardName) ||
+		wcschr(variableName, L'='))
+	{
+		return FALSE;
+	}
+
+	// ProxyLane calls this once.  Do not silently change the marker while
+	// already-hooked processes still carry the original name.
+	if (g_ChildGuardName[0])
+	{
+		return _wcsicmp(g_ChildGuardName, variableName) == 0 &&
+			g_ChildGuardGenerationTime == generationTime;
+	}
+
+	wcsncpy(g_ChildGuardName, variableName,
+		_countof(g_ChildGuardName) - 1);
+	g_ChildGuardName[_countof(g_ChildGuardName) - 1] = L'\0';
+	g_ChildGuardGenerationTime = generationTime;
+	return TRUE;
+}
+
+BOOL GetProxyLaneChildGuardInfo(
+	LPWSTR variableName,
+	DWORD variableNameCount,
+	ULONGLONG *generationTime)
+{
+	if (!variableName || variableNameCount == 0 || !generationTime ||
+		!g_ChildGuardName[0] || !g_ChildGuardGenerationTime)
+	{
+		return FALSE;
+	}
+	wcsncpy(variableName, g_ChildGuardName, variableNameCount - 1);
+	variableName[variableNameCount - 1] = L'\0';
+	*generationTime = g_ChildGuardGenerationTime;
 	return TRUE;
 }
 

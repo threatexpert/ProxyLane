@@ -285,6 +285,20 @@ BOOL CPRCPipeClient::PRCNotifyChildInjectionResult(
 	return WritePipe(lphnpi, sizeof(*lphnpi));
 }
 
+BOOL CPRCPipeClient::PRCNotifyChildReleased(LPHookNewProcessInfo lphnpi)
+{
+	if (!lphnpi || !lphnpi->dwProcessId || !lphnpi->processCreateTime)
+		return FALSE;
+
+	PRCPipeDataHead hdr;
+	hdr.action = PRCPD_CHILD_RELEASED;
+	hdr.flag = 0;
+	hdr.dataSize = sizeof(*lphnpi);
+	if (!WritePipe(&hdr, sizeof(hdr)))
+		return FALSE;
+	return WritePipe(lphnpi, sizeof(*lphnpi));
+}
+
 BOOL CPRCPipeClient::PRCRegisterProcessIdentity(
 	LPHookProcessIdentityInfo identity)
 {

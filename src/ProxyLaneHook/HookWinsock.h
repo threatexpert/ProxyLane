@@ -781,6 +781,8 @@ private:
 
 	CString m_szLastError;
 	CString m_szPRCPipeName;
+	WCHAR m_ChildGuardName[64];
+	BOOL m_ChildGuardInstalled;
 	CPRCPipeClient m_RequestPipe;
 	CRITICAL_SECTION m_RequestPipeLock;
 	BOOL EnsureRequestPipe();

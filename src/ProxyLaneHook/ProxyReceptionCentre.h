@@ -45,6 +45,7 @@ public:
 
 	BOOL GetClientInfo(SOCKET accepted, LPPRCClient lpClientInfo, BOOL bpop=FALSE);
 	BOOL RegisterProcessIdentity(LPHookProcessIdentityInfo identity);
+	BOOL RegisterReleasedChild(LPHookNewProcessInfo child);
 	BOOL GetProcessIdentity(DWORD processId, LPWSTR appPath, DWORD appPathCount);
 
 
@@ -75,6 +76,13 @@ protected:
 	BOOL ShutdownPRCServer();
 
 private:
+	struct SuspendedChildObservation
+	{
+		ULONGLONG processCreateTime;
+		ULONGLONG cpuTime;
+		DWORD consecutiveChecks;
+	};
+	void CheckSuspendedChildren();
 	CString m_szLastError;
 
 	HANDLE m_hPRCThread;
@@ -87,6 +95,9 @@ private:
 
 	CTSList<PRCClient> m_RegisteredClient;
 	std::map<DWORD, HookProcessIdentityInfo> m_ProcessIdentities;
+	std::map<DWORD, ULONGLONG> m_ReleasedChildren;
+	std::map<DWORD, SuspendedChildObservation> m_SuspendedChildObservations;
+	std::map<DWORD, ULONGLONG> m_ProcessedSuspendedChildren;
 	CRITICAL_SECTION m_ProcessIdentityLock;
 
 public:

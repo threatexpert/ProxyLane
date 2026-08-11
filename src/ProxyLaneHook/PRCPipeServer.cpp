@@ -527,6 +527,17 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 			}
 			break;
 
+		case PRCPD_CHILD_RELEASED:
+			{
+				HookNewProcessInfo child;
+				if (hdr.dataSize != sizeof(child))
+					goto SEC_ERROR;
+				if (!ReadPipe(hPipe, &child, hdr.dataSize))
+					goto SEC_ERROR;
+				m_pPRC->RegisterReleasedChild(&child);
+			}
+			break;
+
 		case PRCPD_GET_CLIENT_UDPPORT_STATE:
 			{
 				UDPLocalProxyAddrInfo udpai;
