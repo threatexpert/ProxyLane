@@ -246,11 +246,11 @@ BOOL CPRCPipeClient::PRCGetProxySettingsInfo(LPProxySettingsInfo lpPSI)
 }
 
 
-BOOL CPRCPipeClient::PRCNotifyNewProcess(LPHookNewProcessInfo lphnpi)
+BOOL CPRCPipeClient::PRCShouldInjectNewProcess(LPHookNewProcessInfo lphnpi)
 {
 	PRCPipeDataHead hdr;
 
-	hdr.action = PRCPD_ON_CREATEPROCESS;
+	hdr.action = PRCPD_SHOULD_INJECT_NEW_PROCESS;
 	hdr.flag = 0;
 	hdr.dataSize = sizeof(*lphnpi);
 

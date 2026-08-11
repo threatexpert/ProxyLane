@@ -92,7 +92,6 @@ class CPage3 : public CModernDialog
 	DECLARE_DYNAMIC(CPage3)
 
 #define TIMER_PSLIST 0x100
-#define WM_ON_REFRESHPS 0x101
 
 public:
 	CPage3(CWnd* pParent = NULL);   // 标准构造函数
@@ -175,7 +174,7 @@ public:
 	////重载IProxyLog的成员函数
 	void LogText(LPCWSTR lpText);
 	void LogNewProxyTask(const LPPRCClient lpC);
-	BOOL OnNewProcess(LPHookNewProcessInfo lphnpi);
+	BOOL ShouldInjectNewProcess(LPHookNewProcessInfo lphnpi);
 	void OnChildInjectionResult(LPHookNewProcessInfo lphnpi, BOOL succeeded) {};
 	void OnHookWsock(LPHookWSockResult res){};
 	void OnHookLogtext(LPHookLogtext log) {};
@@ -192,8 +191,6 @@ protected:
 	DECLARE_MESSAGE_MAP()
 public:
 	afx_msg void OnSize(UINT nType, int cx, int cy);
-
-	afx_msg LRESULT OnRefreshPslist( WPARAM, LPARAM );
 
 	afx_msg void OnBnClickedOk();
 	afx_msg void OnBnClickedCancel();

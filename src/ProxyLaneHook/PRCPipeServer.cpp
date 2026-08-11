@@ -471,7 +471,7 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 			}
 			break;
 
-		case PRCPD_ON_CREATEPROCESS:
+		case PRCPD_SHOULD_INJECT_NEW_PROCESS:
 			{
 				HookNewProcessInfo hnpi;
 
@@ -486,7 +486,7 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 				hdr.flag = false;
 				hdr.dataSize = 0;
 
-				hdr.flag = (BYTE)m_pPRC->m_pGlobalProxy->GetLogInstance()->OnNewProcess(&hnpi);
+				hdr.flag = (BYTE)m_pPRC->m_pGlobalProxy->GetLogInstance()->ShouldInjectNewProcess(&hnpi);
 
 				if (! WritePipe(hPipe, &hdr, sizeof(hdr)))
 					goto SEC_ERROR;

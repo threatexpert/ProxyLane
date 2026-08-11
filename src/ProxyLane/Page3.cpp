@@ -1159,7 +1159,6 @@ BEGIN_MESSAGE_MAP(CPage3, CModernDialog)
 	ON_BN_CLICKED(IDC_INJECTDLL, &CPage3::OnBnClickedInjectdll)
 	ON_NOTIFY(LVN_COLUMNCLICK, IDC_PSLIST, &CPage3::OnLvnColumnClickProcessList)
 	ON_NOTIFY(NM_CUSTOMDRAW, IDC_PSLIST, &CPage3::OnNMCustomdrawProcessList)
-	ON_MESSAGE(WM_ON_REFRESHPS, &CPage3::OnRefreshPslist)
 	ON_MESSAGE(WM_WINDOW_FINDER_BEGIN, &CPage3::OnWindowFinderBegin)
 	ON_MESSAGE(WM_WINDOW_FINDER_UPDATE, &CPage3::OnWindowFinderUpdate)
 	ON_MESSAGE(WM_WINDOW_FINDER_COMPLETE, &CPage3::OnWindowFinderComplete)
@@ -2166,71 +2165,56 @@ void CPage3::OnTimer(UINT_PTR nIDEvent)
 
 }
 
-LRESULT CPage3::OnRefreshPslist(WPARAM w, LPARAM l)
+BOOL CPage3::ShouldInjectNewProcess(LPHookNewProcessInfo lphnpi)
 {
-	UpdatePslist(w!=0);
-
-	return 1;
-}
-
-
-BOOL CPage3::OnNewProcess(LPHookNewProcessInfo lphnpi)
-{
-	const BOOL bShouldInject = ShouldProxyChildProcess(lphnpi);
-	PostMessage(WM_ON_REFRESHPS, TRUE);
-	return bShouldInject;
+	return ShouldProxyChildProcess(lphnpi);
 }
 
 BOOL CPage3::ShouldProxyChildProcess(LPHookNewProcessInfo lphnpi)
 {
-	// 子进程注入过滤：只在锁内复制已发布的运行时快照。
-	// 路径匹配和日志不得占用快照锁，也不依赖 UI 线程。
-	ChildInjectFilterSnapshot filterSnapshot;
+	BOOL bShouldInject = TRUE;
 	{
 		CSingleLock filterLock(&g_childFilterLock, TRUE);
-		filterSnapshot = g_ChildInjectFilter;
-	}
-
-	if (filterSnapshot.bEnabled && !filterSnapshot.patterns.empty())
-	{
-		BOOL bMatched = FALSE;
-		if (lphnpi->szAppPath[0])
+		if (g_ChildInjectFilter.bEnabled && !g_ChildInjectFilter.patterns.empty())
 		{
-			for (size_t i = 0; i < filterSnapshot.patterns.size(); i++)
+			BOOL bMatched = FALSE;
+			if (lphnpi->szAppPath[0])
 			{
-				if (PathMatchSpecW(lphnpi->szAppPath, filterSnapshot.patterns[i]))
+				for (size_t i = 0; i < g_ChildInjectFilter.patterns.size(); i++)
 				{
-					bMatched = TRUE;
-					break;
+					if (PathMatchSpecW(lphnpi->szAppPath, g_ChildInjectFilter.patterns[i]))
+					{
+						bMatched = TRUE;
+						break;
+					}
 				}
 			}
-		}
 
-		BOOL bShouldInject = (filterSnapshot.nMode == CHILDFILTER_MODE_INCLUDE) ? bMatched : !bMatched;
-		if (!bShouldInject)
-		{
-			CString processName = lphnpi->szAppPath;
-			const int slash = processName.ReverseFind(_T('\\'));
-			if (slash >= 0)
-				processName = processName.Mid(slash + 1);
-			CString text;
-			text.Format(
-				_T("New Process: %d | %s Skipped by filter\r\n"),
-				lphnpi->dwProcessId,
-				(LPCTSTR)processName);
-			CPage2* page2 = g_MainTab ? g_MainTab->GetPage2() : NULL;
-			if (page2)
-				page2->AddLogText(text);
-			return FALSE;
+			bShouldInject = (g_ChildInjectFilter.nMode == CHILDFILTER_MODE_INCLUDE)
+				? bMatched : !bMatched;
 		}
 	}
-	return TRUE;
+
+	if (!bShouldInject)
+	{
+		CString processName = lphnpi->szAppPath;
+		const int slash = processName.ReverseFind(_T('\\'));
+		if (slash >= 0)
+			processName = processName.Mid(slash + 1);
+		CString text;
+		text.Format(
+			_T("New Process: %d | %s Skipped by filter\r\n"),
+			lphnpi->dwProcessId,
+			(LPCTSTR)processName);
+		CPage2* page2 = g_MainTab ? g_MainTab->GetPage2() : NULL;
+		if (page2)
+			page2->AddLogText(text);
+	}
+	return bShouldInject;
 }
 
 BOOL CPage3::InjectNewProcess(LPHookNewProcessInfo lphnpi)
 {
-	PostMessage(WM_ON_REFRESHPS, TRUE);
-
 	HookNewProcessInfo hnpi = *lphnpi;
 	HANDLE hProcess;
 	int bRet;

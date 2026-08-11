@@ -40,13 +40,13 @@ void CProxyLog::LogNewProxyTask(const LPPRCClient lpC)
 	}
 }
 
-BOOL CProxyLog::OnNewProcess(LPHookNewProcessInfo lphnpi)
+BOOL CProxyLog::ShouldInjectNewProcess(LPHookNewProcessInfo lphnpi)
 {
 	BOOL shouldProxy = TRUE;
 	IProxyLog *p = IProxyLog::m_pNext;
 	while(p)
 	{
-		if (!p->OnNewProcess(lphnpi))
+		if (!p->ShouldInjectNewProcess(lphnpi))
 			shouldProxy = FALSE;
 		p = p->m_pNext;
 	}

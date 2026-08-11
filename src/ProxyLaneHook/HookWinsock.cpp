@@ -1931,7 +1931,7 @@ BOOL WINAPI CHookWinsock::inhook_CreateProcessInternalW(HANDLE hToken, LPCWSTR l
 			}
 			hnpi.dwProcessId = lpProcessInformation->dwProcessId;
 			hnpi.dwThreadId = lpProcessInformation->dwThreadId;
-			if (!PRCPipeClient.PRCNotifyNewProcess(&hnpi))
+			if (!PRCPipeClient.PRCShouldInjectNewProcess(&hnpi))
 			{
 				break;
 			}

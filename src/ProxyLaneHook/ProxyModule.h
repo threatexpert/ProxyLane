@@ -129,7 +129,7 @@ public:
 
 	virtual void LogText(LPCWSTR lpText) = 0;
 	virtual void LogNewProxyTask(const LPPRCClient lpC) = 0;
-	virtual BOOL OnNewProcess(LPHookNewProcessInfo lphnpi) = 0;
+	virtual BOOL ShouldInjectNewProcess(LPHookNewProcessInfo lphnpi) = 0;
 	virtual void OnHookWsock(LPHookWSockResult res) = 0;
 	virtual void OnHookLogtext(LPHookLogtext log) = 0;
 	// 新增回调放在接口末尾，避免改变既有虚函数在 vtable 中的位置。

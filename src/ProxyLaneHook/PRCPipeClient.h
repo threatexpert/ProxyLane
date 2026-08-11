@@ -27,7 +27,7 @@ public:
 	BOOL PRCGetProxySettingsInfo(LPProxySettingsInfo lpPSI);
 	BOOL PRCGetProxyInfo(LPPRCClient lpClientInfo, LPProxyInfo lpPI);
 
-	BOOL PRCNotifyNewProcess(LPHookNewProcessInfo lphnpi);
+	BOOL PRCShouldInjectNewProcess(LPHookNewProcessInfo lphnpi);
 	BOOL PRCNotifyChildInjectionResult(LPHookNewProcessInfo lphnpi, BOOL succeeded);
 	BOOL PRCRegisterProcessIdentity(LPHookProcessIdentityInfo identity);
 
