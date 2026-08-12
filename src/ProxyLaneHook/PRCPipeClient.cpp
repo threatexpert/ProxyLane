@@ -365,7 +365,9 @@ BOOL CPRCPipeClient::PRCGetProxyInfo(LPPRCClient lpClientInfo, LPProxyInfo lpPI)
 	return TRUE;
 }
 
-BOOL CPRCPipeClient::PRCNotifyHookWSockResult(DWORD err)
+BOOL CPRCPipeClient::PRCNotifyHookWSockResult(
+	DWORD err,
+	ULONGLONG processCreateTime)
 {
 	PRCPipeDataHead hdr;
 	HookWSockResult result;
@@ -376,6 +378,7 @@ BOOL CPRCPipeClient::PRCNotifyHookWSockResult(DWORD err)
 
 	result.err = err;
 	result.dwProcessId = GetCurrentProcessId();
+	result.processCreateTime = processCreateTime;
 
 	if (!WritePipe(&hdr, sizeof(hdr)))
 		return FALSE;
@@ -392,7 +395,7 @@ BOOL CPRCPipeClient::PRCLogtext(LPCWSTR lpsz)
 	HookLogtext hdr2;
 
 	hdr2.dwProcessId = GetCurrentProcessId();
-	hdr2.len = (wcslen(lpsz)+1)*sizeof(lpsz[0]);
+	hdr2.len = (int)((wcslen(lpsz)+1)*sizeof(lpsz[0]));
 
 	hdr.action = PRCPD_Logtext;
 	hdr.flag = 0;

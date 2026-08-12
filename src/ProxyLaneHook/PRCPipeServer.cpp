@@ -611,6 +611,7 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 					if (pipeClientPid && res.dwProcessId != pipeClientPid)
 						goto SEC_ERROR;
 
+					m_pPRC->UpdateProcessHookResult(&res);
 					m_pPRC->m_pGlobalProxy->GetLogInstance()->OnHookWsock(&res);
 		}
 			break;

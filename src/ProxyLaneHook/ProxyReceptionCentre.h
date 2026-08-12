@@ -45,8 +45,14 @@ public:
 
 	BOOL GetClientInfo(SOCKET accepted, LPPRCClient lpClientInfo, BOOL bpop=FALSE);
 	BOOL RegisterProcessIdentity(LPHookProcessIdentityInfo identity);
+	BOOL UpdateProcessHookResult(LPHookWSockResult result);
 	BOOL RegisterReleasedChild(LPHookNewProcessInfo child);
 	BOOL GetProcessIdentity(DWORD processId, LPWSTR appPath, DWORD appPathCount);
+	BOOL GetProcessHookState(
+		DWORD processId,
+		ULONGLONG processCreateTime,
+		DWORD *hookState,
+		DWORD *hookError);
 
 
 protected:

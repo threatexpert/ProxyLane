@@ -1961,8 +1961,7 @@ void CPage3::OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result)
 		return;
 	}
 
-	if (customDraw->nmcd.dwDrawStage != CDDS_ITEMPREPAINT
-		|| m_sortState != PROCESS_SORT_NONE)
+	if (customDraw->nmcd.dwDrawStage != CDDS_ITEMPREPAINT)
 	{
 		*result = CDRF_DODEFAULT;
 		return;
@@ -1981,6 +1980,41 @@ void CPage3::OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result)
 	DWORD pid = static_cast<DWORD>(m_ListCtrl.GetItemData(item));
 	std::map<DWORD, _myPROCESSINFO>::const_iterator process = m_processSortData.find(pid);
 	if (process == m_processSortData.end() || !process->second.hasStartTime)
+	{
+		*result = CDRF_DODEFAULT;
+		return;
+	}
+
+	IProxyReceptionCentre *receptionCentre = g_GlobalProxy
+		? g_GlobalProxy->GetPRCInstance()
+		: NULL;
+	DWORD hookState = PROCESS_HOOK_STATE_PENDING;
+	DWORD hookError = 0;
+	if (receptionCentre && receptionCentre->GetProcessHookState(
+		pid,
+		process->second.startTimeValue,
+		&hookState,
+		&hookError))
+	{
+		switch (hookState)
+		{
+		case PROCESS_HOOK_STATE_SUCCEEDED:
+			customDraw->clrText = RGB(112, 48, 160);
+			break;
+		case PROCESS_HOOK_STATE_FAILED:
+			customDraw->clrText = RGB(200, 0, 0);
+			break;
+		case PROCESS_HOOK_STATE_PENDING:
+			customDraw->clrText = RGB(180, 110, 0);
+			break;
+		default:
+			break;
+		}
+	}
+
+	// The background age hint is meaningful only in the default process-tree
+	// order.  Hook-result text color remains visible in every sort mode.
+	if (m_sortState != PROCESS_SORT_NONE)
 	{
 		*result = CDRF_DODEFAULT;
 		return;

@@ -389,7 +389,13 @@ typedef struct _HookProcessIdentityInfo
 	DWORD dwProcessId;
 	ULONGLONG processCreateTime;
 	WCHAR szAppPath[MAX_PATH];
+	DWORD hookState;
+	DWORD hookError;
 }HookProcessIdentityInfo, *LPHookProcessIdentityInfo;
+
+#define PROCESS_HOOK_STATE_PENDING 0
+#define PROCESS_HOOK_STATE_SUCCEEDED 1
+#define PROCESS_HOOK_STATE_FAILED 2
 
 //PRC Pipe Protocol Data Head
 typedef struct _tagPRCPDHead
@@ -402,6 +408,7 @@ typedef struct _tagPRCPDHead
 typedef struct _tagHookWSockResult
 {
 	DWORD dwProcessId;
+	ULONGLONG processCreateTime;
 	DWORD err;
 }HookWSockResult, *LPHookWSockResult;
 

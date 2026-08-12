@@ -234,17 +234,24 @@
     <ClCompile>
       <AdditionalOptions>/source-charset:utf-8 /execution-charset:.936 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
+    <PostBuildEvent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+      </Command>
+    </PostBuildEvent>
+    <PostBuildEvent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(SolutionDir)build-secure-transport.bat</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\ProxyLaneHook\token.cpp" />
-	<ClCompile Include="AppVersion.cpp" />
+    <ClCompile Include="AppVersion.cpp" />
     <ClCompile Include="AutomationOptions.cpp" />
     <ClCompile Include="Base64.cpp" />
     <ClCompile Include="IniFile.cpp" />
     <ClCompile Include="Localization.cpp" />
     <ClCompile Include="ListCtrlEx.cpp" />
     <ClCompile Include="MainTab.cpp" />
-	<ClCompile Include="ModernUI.cpp" />
+    <ClCompile Include="ModernUI.cpp" />
     <ClCompile Include="Page1.cpp" />
     <ClCompile Include="Page2.cpp" />
     <ClCompile Include="Page3.cpp" />
@@ -252,8 +259,8 @@
     <ClCompile Include="Page5.cpp" />
     <ClCompile Include="ProxyLane.cpp" />
     <ClCompile Include="ProxyLaneDlg.cpp" />
-	<ClCompile Include="ProxyController.cpp" />
-	<ClCompile Include="ProxyProfileStore.cpp" />
+    <ClCompile Include="ProxyController.cpp" />
+    <ClCompile Include="ProxyProfileStore.cpp" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
@@ -263,7 +270,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\ProxyLaneHook\token.h" />
-	<ClInclude Include="AppVersion.h" />
+    <ClInclude Include="AppVersion.h" />
     <ClInclude Include="AutomationOptions.h" />
     <ClInclude Include="Base64.h" />
     <ClInclude Include="BoundedLogQueue.h" />
@@ -271,7 +278,7 @@
     <ClInclude Include="Localization.h" />
     <ClInclude Include="ListCtrlEx.h" />
     <ClInclude Include="MainTab.h" />
-	<ClInclude Include="ModernUI.h" />
+    <ClInclude Include="ModernUI.h" />
     <ClInclude Include="Page1.h" />
     <ClInclude Include="Page2.h" />
     <ClInclude Include="Page3.h" />
@@ -279,8 +286,8 @@
     <ClInclude Include="Page5.h" />
     <ClInclude Include="ProxyLane.h" />
     <ClInclude Include="ProxyLaneDlg.h" />
-	<ClInclude Include="ProxyController.h" />
-	<ClInclude Include="ProxyProfileStore.h" />
+    <ClInclude Include="ProxyController.h" />
+    <ClInclude Include="ProxyProfileStore.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="stdafx.h" />
   </ItemGroup>

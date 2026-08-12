@@ -136,6 +136,136 @@ static BOOL NotifyReleasedChild(IGlobalProxy *proxy, DWORD processId)
 	return result;
 }
 
+static BOOL GetChildGuardInfo(IGlobalProxy *proxy, PRCINFO *startupInfo)
+{
+	if (!proxy || !startupInfo)
+		return FALSE;
+	IProxyReceptionCentre *receptionCentre = proxy->GetPRCInstance();
+	char pipeName[MAX_PATH] = "";
+	if (!receptionCentre ||
+		!receptionCentre->GetPRCPipeName(pipeName, _countof(pipeName)))
+	{
+		return FALSE;
+	}
+
+	HANDLE pipe = CreateFileA(pipeName, GENERIC_READ | GENERIC_WRITE,
+		FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+	if (pipe == INVALID_HANDLE_VALUE)
+		return FALSE;
+	PRCPipeDataHead header = { 0 };
+	header.action = PRCPD_GETSTARTUPINFO;
+	DWORD transferred = 0;
+	BOOL result = WriteFile(pipe, &header, sizeof(header), &transferred,
+		NULL) && transferred == sizeof(header) &&
+		ReadFile(pipe, &header, sizeof(header), &transferred, NULL) &&
+		transferred == sizeof(header) &&
+		header.action == PRCPD_REPLY && header.flag == 1 &&
+		header.dataSize == sizeof(*startupInfo) &&
+		ReadFile(pipe, startupInfo, sizeof(*startupInfo), &transferred, NULL) &&
+		transferred == sizeof(*startupInfo);
+	CloseHandle(pipe);
+	return result;
+}
+
+static BOOL VerifyHookStateStorage(IGlobalProxy *proxy)
+{
+	if (!proxy)
+		return FALSE;
+	IProxyReceptionCentre *receptionCentre = proxy->GetPRCInstance();
+	char pipeName[MAX_PATH] = "";
+	if (!receptionCentre ||
+		!receptionCentre->GetPRCPipeName(pipeName, _countof(pipeName)))
+	{
+		return FALSE;
+	}
+
+	HookProcessIdentityInfo identity = { 0 };
+	identity.dwProcessId = GetCurrentProcessId();
+	identity.processCreateTime = ProcessCreateTime(GetCurrentProcess());
+	GetModuleFileNameW(NULL, identity.szAppPath,
+		_countof(identity.szAppPath));
+	identity.szAppPath[_countof(identity.szAppPath) - 1] = L'\0';
+	if (!identity.processCreateTime || !identity.szAppPath[0])
+		return FALSE;
+
+	HANDLE pipe = CreateFileA(pipeName, GENERIC_READ | GENERIC_WRITE,
+		FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+	if (pipe == INVALID_HANDLE_VALUE)
+		return FALSE;
+	PRCPipeDataHead header = { 0 };
+	header.action = PRCPD_REGISTER_PROCESS_IDENTITY;
+	header.dataSize = sizeof(identity);
+	DWORD written = 0;
+	BOOL sent = WriteFile(pipe, &header, sizeof(header), &written, NULL) &&
+		written == sizeof(header) &&
+		WriteFile(pipe, &identity, sizeof(identity), &written, NULL) &&
+		written == sizeof(identity);
+
+	HookWSockResult hookResult = { 0 };
+	hookResult.dwProcessId = identity.dwProcessId;
+	hookResult.processCreateTime = identity.processCreateTime;
+	hookResult.err = 37;
+	header.action = PRCPD_HOOKWSOCK_RESULT;
+	header.dataSize = sizeof(hookResult);
+	sent = sent && WriteFile(pipe, &header, sizeof(header), &written, NULL) &&
+		written == sizeof(header) &&
+		WriteFile(pipe, &hookResult, sizeof(hookResult), &written, NULL) &&
+		written == sizeof(hookResult);
+	CloseHandle(pipe);
+	if (!sent)
+		return FALSE;
+
+	DWORD state = PROCESS_HOOK_STATE_PENDING;
+	DWORD error = 0;
+	BOOL failedStateObserved = FALSE;
+	for (int attempt = 0; attempt < 200; ++attempt)
+	{
+		if (receptionCentre->GetProcessHookState(identity.dwProcessId,
+			identity.processCreateTime, &state, &error) &&
+			state == PROCESS_HOOK_STATE_FAILED && error == hookResult.err)
+		{
+			failedStateObserved = TRUE;
+			break;
+		}
+		Sleep(10);
+	}
+	if (!failedStateObserved)
+		return FALSE;
+
+	pipe = CreateFileA(pipeName, GENERIC_READ | GENERIC_WRITE,
+		FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+	if (pipe == INVALID_HANDLE_VALUE)
+		return FALSE;
+	hookResult.err = 0;
+	header.action = PRCPD_HOOKWSOCK_RESULT;
+	header.dataSize = sizeof(hookResult);
+	sent = WriteFile(pipe, &header, sizeof(header), &written, NULL) &&
+		written == sizeof(header) &&
+		WriteFile(pipe, &hookResult, sizeof(hookResult), &written, NULL) &&
+		written == sizeof(hookResult);
+	CloseHandle(pipe);
+	if (!sent)
+		return FALSE;
+
+	for (int attempt = 0; attempt < 200; ++attempt)
+	{
+		if (receptionCentre->GetProcessHookState(identity.dwProcessId,
+			identity.processCreateTime, &state, &error) &&
+			state == PROCESS_HOOK_STATE_SUCCEEDED && error == 0)
+		{
+			DWORD wrongState = PROCESS_HOOK_STATE_PENDING;
+			DWORD wrongError = 0;
+			return !receptionCentre->GetProcessHookState(
+				identity.dwProcessId,
+				identity.processCreateTime + 1,
+				&wrongState,
+				&wrongError);
+		}
+		Sleep(10);
+	}
+	return FALSE;
+}
+
 static void CleanupChild(DWORD processId)
 {
 	if (!processId)
@@ -205,17 +335,32 @@ static int RunHost()
 		return 11;
 	ZeroMemory(childPids, sizeof(*childPids));
 
-	WCHAR markerName[64] = L"PLCGWATCHDOGTEST";
-	const ULONGLONG generationTime = ProcessCreateTime(GetCurrentProcess());
-	if (!SetProxyLaneChildGuardInfo(markerName, generationTime) ||
-		!SetEnvironmentVariableW(markerName, L"1"))
-	{
-		return 12;
-	}
-
 	IGlobalProxy *proxy = GetGlobalProxyInstance();
 	if (!proxy || !proxy->EnableProxy())
 		return 13;
+
+	PRCINFO startupInfo;
+	ZeroMemory(&startupInfo, sizeof(startupInfo));
+	if (!GetChildGuardInfo(proxy, &startupInfo) ||
+		!startupInfo.childGuardName[0] ||
+		startupInfo.childGuardGenerationTime !=
+			ProcessCreateTime(GetCurrentProcess()) ||
+		!SetEnvironmentVariableW(startupInfo.childGuardName, L"1"))
+	{
+		proxy->DisableProxy();
+		ReleaseGlobalProxyInstance();
+		return 12;
+	}
+	WCHAR markerName[64] = L"";
+	wcsncpy(markerName, startupInfo.childGuardName, _countof(markerName) - 1);
+	markerName[_countof(markerName) - 1] = L'\0';
+	if (!VerifyHookStateStorage(proxy))
+	{
+		SetEnvironmentVariableW(markerName, NULL);
+		proxy->DisableProxy();
+		ReleaseGlobalProxyInstance();
+		return 18;
+	}
 
 	WCHAR modulePath[MAX_PATH] = L"";
 	GetModuleFileNameW(NULL, modulePath, _countof(modulePath));

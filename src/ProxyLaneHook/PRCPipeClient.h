@@ -34,7 +34,7 @@ public:
 
 	BOOL PRCGetUDPClientPortState(UDPLocalProxyAddrInfo *pLPAI);
 
-	BOOL PRCNotifyHookWSockResult(DWORD err);
+	BOOL PRCNotifyHookWSockResult(DWORD err, ULONGLONG processCreateTime);
 	BOOL PRCLogtext(LPCWSTR lpsz);
 
 private:

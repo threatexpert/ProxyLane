@@ -87,6 +87,10 @@ static BOOL ResolveProcPath(
 		}
 		wcsncpy(identity.szAppPath, szOut, _countof(identity.szAppPath) - 1);
 		receptionCentre->RegisterProcessIdentity(&identity);
+		HookWSockResult hookResult = { 0 };
+		hookResult.dwProcessId = identity.dwProcessId;
+		hookResult.processCreateTime = identity.processCreateTime;
+		receptionCentre->UpdateProcessHookResult(&hookResult);
 	}
 
 	ppszName = wcsrchr(szOut, L'\\');

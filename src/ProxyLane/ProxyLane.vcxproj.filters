@@ -15,16 +15,13 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-	<ClCompile Include="AppVersion.cpp">
-	  <Filter>源文件</Filter>
-	</ClCompile>
+    <ClCompile Include="AppVersion.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="AutomationOptions.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="Base64.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
-    <ClCompile Include="..\ProxyLaneHook\detour.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="IniFile.cpp">
@@ -33,18 +30,15 @@
     <ClCompile Include="Localization.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-    <ClCompile Include="..\ProxyLaneHook\inline_hook.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
     <ClCompile Include="ListCtrlEx.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="MainTab.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-	<ClCompile Include="ModernUI.cpp">
-	  <Filter>源文件</Filter>
-	</ClCompile>
+    <ClCompile Include="ModernUI.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="Page1.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -66,23 +60,23 @@
     <ClCompile Include="ProxyLaneDlg.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-	<ClCompile Include="ProxyController.cpp">
-	  <Filter>源文件</Filter>
-	</ClCompile>
-	<ClCompile Include="ProxyProfileStore.cpp">
-	  <Filter>源文件</Filter>
-	</ClCompile>
-    <ClCompile Include="remoteCode.cpp">
+    <ClCompile Include="ProxyController.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ProxyProfileStore.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="stdafx.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="..\ProxyLaneHook\token.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-	<ClInclude Include="AppVersion.h">
-	  <Filter>头文件</Filter>
-	</ClInclude>
+    <ClInclude Include="AppVersion.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="AutomationOptions.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -104,9 +98,9 @@
     <ClInclude Include="MainTab.h">
       <Filter>头文件</Filter>
     </ClInclude>
-	<ClInclude Include="ModernUI.h">
-	  <Filter>头文件</Filter>
-	</ClInclude>
+    <ClInclude Include="ModernUI.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="Page1.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -128,19 +122,19 @@
     <ClInclude Include="ProxyLaneDlg.h">
       <Filter>头文件</Filter>
     </ClInclude>
-	<ClInclude Include="ProxyController.h">
-	  <Filter>头文件</Filter>
-	</ClInclude>
-	<ClInclude Include="ProxyProfileStore.h">
-	  <Filter>头文件</Filter>
-	</ClInclude>
-    <ClInclude Include="remoteCode.h">
+    <ClInclude Include="ProxyController.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ProxyProfileStore.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="Resource.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="stdafx.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="..\ProxyLaneHook\token.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

@@ -43,32 +43,6 @@ static BOOL CreateBootstrapEventName(CString& eventName)
 	return TRUE;
 }
 
-static BOOL InitializeChildGuardMarker()
-{
-	GUID guid;
-	if (CoCreateGuid(&guid) != S_OK)
-		return FALSE;
-
-	const BYTE *bytes = reinterpret_cast<const BYTE *>(&guid);
-	WCHAR variableName[64] = L"PLCG";
-	WCHAR *writeAt = variableName + 4;
-	for (size_t i = 0; i < sizeof(guid); ++i)
-	{
-		// Letters only keep the name valid on every supported Windows version.
-		*writeAt++ = static_cast<WCHAR>(L'A' + (bytes[i] >> 4));
-		*writeAt++ = static_cast<WCHAR>(L'A' + (bytes[i] & 0x0f));
-	}
-	*writeAt = L'\0';
-
-	FILETIME created, exited, kernel, user;
-	if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user))
-		return FALSE;
-	const ULONGLONG generationTime =
-		(static_cast<ULONGLONG>(created.dwHighDateTime) << 32) |
-		created.dwLowDateTime;
-	return SetProxyLaneChildGuardInfo(variableName, generationTime);
-}
-
 void CProxyLaneApp::SignalAutomationReady()
 {
 	if (m_automationOptions.bootstrapEventName.IsEmpty())
@@ -238,11 +212,6 @@ BOOL CProxyLaneApp::InitInstance()
 		return FALSE;
 	}
 #endif
-
-	// Generate once per ProxyLane.exe lifetime.  Proxy start/stop cycles keep
-	// the same marker so PRC can recognize descendants from this app instance.
-	if (!InitializeChildGuardMarker())
-		OutputDebugString(_T("ProxyLane child guard initialization failed.\r\n"));
 
 	CProxyLaneDlg dlg;
 	m_pMainWnd = &dlg;

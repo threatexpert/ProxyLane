@@ -437,7 +437,8 @@ BOOL CHookWinsock::EnableHook()
 	RegisterCurrentProcessIdentity(PRCPipeClient);
 
 	if (IsHookEnabled()) {
-		PRCPipeClient.PRCNotifyHookWSockResult(0);
+		PRCPipeClient.PRCNotifyHookWSockResult(
+			0, GetCurrentProcessCreateTimeValue());
 		PRCPipeClient.Disconnect();
 		return TRUE;
 	}
@@ -456,7 +457,8 @@ BOOL CHookWinsock::EnableHook()
 		m_ChildGuardInstalled = FALSE;
 	}
 
-	PRCPipeClient.PRCNotifyHookWSockResult(bOK ? 0 : 1);
+	PRCPipeClient.PRCNotifyHookWSockResult(
+		bOK ? 0 : 1, GetCurrentProcessCreateTimeValue());
 
 	PRCPipeClient.Disconnect();
 

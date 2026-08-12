@@ -17,6 +17,39 @@ HMODULE g_hDllModule = NULL;
 static WCHAR g_ChildGuardName[64] = L"";
 static ULONGLONG g_ChildGuardGenerationTime = 0;
 
+static BOOL InitializeChildGuardInfo()
+{
+	if (g_ChildGuardName[0] && g_ChildGuardGenerationTime)
+		return TRUE;
+
+	GUID guid;
+	if (CoCreateGuid(&guid) != S_OK)
+		return FALSE;
+
+	const BYTE *bytes = reinterpret_cast<const BYTE *>(&guid);
+	WCHAR variableName[64] = L"PLCG";
+	WCHAR *writeAt = variableName + 4;
+	for (size_t i = 0; i < sizeof(guid); ++i)
+	{
+		// Letters only keep the name valid on every supported Windows version.
+		*writeAt++ = static_cast<WCHAR>(L'A' + (bytes[i] >> 4));
+		*writeAt++ = static_cast<WCHAR>(L'A' + (bytes[i] & 0x0f));
+	}
+	*writeAt = L'\0';
+
+	FILETIME created, exited, kernel, user;
+	if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user))
+		return FALSE;
+
+	wcsncpy(g_ChildGuardName, variableName,
+		_countof(g_ChildGuardName) - 1);
+	g_ChildGuardName[_countof(g_ChildGuardName) - 1] = L'\0';
+	g_ChildGuardGenerationTime =
+		(static_cast<ULONGLONG>(created.dwHighDateTime) << 32) |
+		created.dwLowDateTime;
+	return TRUE;
+}
+
 const DWORD ProxyModuleVersion = 20080129;
 //////////////////////////////////////////////////////////////////////////
 
@@ -83,6 +116,11 @@ BOOL APIENTRY DllMain( HANDLE hModule,
 
 IGlobalProxy* WINAPI GetGlobalProxyInstance()
 {
+	// ProxyLaneHook.dll remains loaded for the GUI process lifetime, so this
+	// marker survives CGlobalProxy stop/start and recreation cycles.
+	if (!InitializeChildGuardInfo())
+		OutputDebugString(_T("ProxyLane child guard initialization failed.\r\n"));
+
 	if(!g_pPMGlobalProxy)
 		g_pPMGlobalProxy = new CGlobalProxy;
 
@@ -99,32 +137,6 @@ BOOL WINAPI ReleaseGlobalProxyInstance()
 	{
 		g_pPMGlobalProxy = NULL;
 	}
-	return TRUE;
-}
-
-BOOL WINAPI SetProxyLaneChildGuardInfo(
-	LPCWSTR variableName,
-	ULONGLONG generationTime)
-{
-	if (!variableName || !variableName[0] || !generationTime ||
-		wcslen(variableName) >= _countof(g_ChildGuardName) ||
-		wcschr(variableName, L'='))
-	{
-		return FALSE;
-	}
-
-	// ProxyLane calls this once.  Do not silently change the marker while
-	// already-hooked processes still carry the original name.
-	if (g_ChildGuardName[0])
-	{
-		return _wcsicmp(g_ChildGuardName, variableName) == 0 &&
-			g_ChildGuardGenerationTime == generationTime;
-	}
-
-	wcsncpy(g_ChildGuardName, variableName,
-		_countof(g_ChildGuardName) - 1);
-	g_ChildGuardName[_countof(g_ChildGuardName) - 1] = L'\0';
-	g_ChildGuardGenerationTime = generationTime;
 	return TRUE;
 }
 

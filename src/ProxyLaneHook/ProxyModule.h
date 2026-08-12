@@ -52,6 +52,12 @@ public:
 	virtual IProxyTaskMgr* GetPTMInstance(int type) = 0;
 	//查询IProxyDataHandle 实例的指针
 	virtual IProxyDataHandle* GetPDHInstance() = 0;
+	// Query the final Winsock Hook result for one exact process lifetime.
+	virtual BOOL GetProcessHookState(
+		DWORD processId,
+		ULONGLONG processCreateTime,
+		DWORD *hookState,
+		DWORD *hookError) = 0;
 };
 
 template<typename T>
@@ -251,11 +257,8 @@ public:
 
 IGlobalProxy* WINAPI GetGlobalProxyInstance();
 BOOL WINAPI ReleaseGlobalProxyInstance();
-// Called once by ProxyLane.exe after startup.  The marker remains stable for
-// the lifetime of that GUI process, including proxy stop/start cycles.
-BOOL WINAPI SetProxyLaneChildGuardInfo(
-	LPCWSTR variableName,
-	ULONGLONG generationTime);
+// Internal child-guard state generated when the DLL first creates the global
+// proxy instance.  It remains stable across proxy stop/start cycles.
 BOOL GetProxyLaneChildGuardInfo(
 	LPWSTR variableName,
 	DWORD variableNameCount,

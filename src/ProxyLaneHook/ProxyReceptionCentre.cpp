@@ -765,14 +765,55 @@ BOOL CProxyReceptionCentre::RegisterProcessIdentity(
 	if (!identity || !identity->dwProcessId || !identity->processCreateTime ||
 		!identity->szAppPath[0])
 		return FALSE;
+	ULONGLONG actualCreateTime = 0;
+	if (QueryProcessCreateTime(identity->dwProcessId, &actualCreateTime) &&
+		actualCreateTime != identity->processCreateTime)
+	{
+		return FALSE;
+	}
 
 	HookProcessIdentityInfo safeIdentity = *identity;
 	safeIdentity.szAppPath[_countof(safeIdentity.szAppPath) - 1] = L'\0';
+	safeIdentity.hookState = PROCESS_HOOK_STATE_PENDING;
+	safeIdentity.hookError = 0;
 
 	EnterCriticalSection(&m_ProcessIdentityLock);
+	std::map<DWORD, HookProcessIdentityInfo>::iterator existing =
+		m_ProcessIdentities.find(safeIdentity.dwProcessId);
+	if (existing != m_ProcessIdentities.end() &&
+		existing->second.processCreateTime == safeIdentity.processCreateTime &&
+		existing->second.hookState != PROCESS_HOOK_STATE_PENDING)
+	{
+		// A late identity registration must not erase a final result that has
+		// already arrived for this exact process lifetime.
+		safeIdentity.hookState = existing->second.hookState;
+		safeIdentity.hookError = existing->second.hookError;
+	}
 	m_ProcessIdentities[safeIdentity.dwProcessId] = safeIdentity;
 	LeaveCriticalSection(&m_ProcessIdentityLock);
 	return TRUE;
+}
+
+BOOL CProxyReceptionCentre::UpdateProcessHookResult(LPHookWSockResult result)
+{
+	if (!result || !result->dwProcessId || !result->processCreateTime)
+		return FALSE;
+
+	BOOL updated = FALSE;
+	EnterCriticalSection(&m_ProcessIdentityLock);
+	std::map<DWORD, HookProcessIdentityInfo>::iterator identity =
+		m_ProcessIdentities.find(result->dwProcessId);
+	if (identity != m_ProcessIdentities.end() &&
+		identity->second.processCreateTime == result->processCreateTime)
+	{
+		identity->second.hookState = result->err == 0
+			? PROCESS_HOOK_STATE_SUCCEEDED
+			: PROCESS_HOOK_STATE_FAILED;
+		identity->second.hookError = result->err;
+		updated = TRUE;
+	}
+	LeaveCriticalSection(&m_ProcessIdentityLock);
+	return updated;
 }
 
 BOOL CProxyReceptionCentre::RegisterReleasedChild(LPHookNewProcessInfo child)
@@ -816,6 +857,30 @@ BOOL CProxyReceptionCentre::GetProcessIdentity(
 			appPath[appPathCount - 1] = L'\0';
 			found = appPath[0] != L'\0';
 		}
+	}
+	LeaveCriticalSection(&m_ProcessIdentityLock);
+	return found;
+}
+
+BOOL CProxyReceptionCentre::GetProcessHookState(
+	DWORD processId,
+	ULONGLONG processCreateTime,
+	DWORD *hookState,
+	DWORD *hookError)
+{
+	if (!processId || !processCreateTime || !hookState || !hookError)
+		return FALSE;
+
+	BOOL found = FALSE;
+	EnterCriticalSection(&m_ProcessIdentityLock);
+	std::map<DWORD, HookProcessIdentityInfo>::const_iterator identity =
+		m_ProcessIdentities.find(processId);
+	if (identity != m_ProcessIdentities.end() &&
+		identity->second.processCreateTime == processCreateTime)
+	{
+		*hookState = identity->second.hookState;
+		*hookError = identity->second.hookError;
+		found = TRUE;
 	}
 	LeaveCriticalSection(&m_ProcessIdentityLock);
 	return found;
