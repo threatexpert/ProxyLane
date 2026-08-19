@@ -11,17 +11,20 @@ enum AutomationExitCode
 	AUTOMATION_EXIT_TARGET_INVALID = 5,
 	AUTOMATION_EXIT_CREATE_PROCESS_FAILED = 6,
 	AUTOMATION_EXIT_INJECTION_FAILED = 7,
-	AUTOMATION_EXIT_ARCH_FORWARD_FAILED = 8
+	AUTOMATION_EXIT_ARCH_FORWARD_FAILED = 8,
+	AUTOMATION_EXIT_COMMAND_FORWARD_FAILED = 9
 };
 
 struct AutomationOptions
 {
 	AutomationOptions()
 		: enabled(FALSE)
+		, showHelp(FALSE)
 	{
 	}
 
 	BOOL enabled;
+	BOOL showHelp;
 	CString profileName;
 	CString targetPath;
 	std::vector<CString> targetArguments;

@@ -41,6 +41,18 @@ BOOL ParseAutomationOptions(
 		errorMessage = _T("CommandLineToArgvW failed");
 		return FALSE;
 	}
+	for (int i = 1; i < argc; ++i)
+	{
+		CString argument(argv[i]);
+		if (argument.CompareNoCase(_T("/?")) == 0 ||
+			argument.CompareNoCase(_T("-?")) == 0 ||
+			argument.CompareNoCase(_T("--help")) == 0)
+		{
+			options.showHelp = TRUE;
+			LocalFree(argv);
+			return TRUE;
+		}
+	}
 
 	BOOL seenProfile = FALSE;
 	BOOL seenRun = FALSE;

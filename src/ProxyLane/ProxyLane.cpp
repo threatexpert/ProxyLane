@@ -7,6 +7,7 @@
 #include "Page3.h"
 #include "AutomationOptions.h"
 #include "Localization.h"
+#include "AppVersion.h"
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -24,6 +25,7 @@ END_MESSAGE_MAP()
 
 CProxyLaneApp::CProxyLaneApp()
 	: m_automationExitCode(AUTOMATION_EXIT_SUCCESS)
+	, m_requiresProfileCommandOwnership(FALSE)
 {
 	// TODO: 在此处添加构造代码，
 	// 将所有重要的初始化放置在 InitInstance 中
@@ -45,6 +47,7 @@ static BOOL CreateBootstrapEventName(CString& eventName)
 
 void CProxyLaneApp::SignalAutomationReady()
 {
+	ReleaseAutomationLaunchGate();
 	if (m_automationOptions.bootstrapEventName.IsEmpty())
 		return;
 
@@ -59,8 +62,62 @@ void CProxyLaneApp::SignalAutomationReady()
 	}
 }
 
+BOOL CProxyLaneApp::PrepareAutomationCommandReceiver()
+{
+	if (!m_automationOptions.enabled)
+		return TRUE;
+	if (!m_profileCommandBroker.AcquireLaunchGate(m_automationOptions.profileName))
+	{
+		m_automationExitCode = AUTOMATION_EXIT_COMMAND_FORWARD_FAILED;
+		return FALSE;
+	}
+
+	int forwardedExitCode = AUTOMATION_EXIT_COMMAND_FORWARD_FAILED;
+	ProfileCommandForwardResult forwardResult = m_profileCommandBroker.Forward(
+		m_automationOptions, forwardedExitCode);
+	if (forwardResult == PROFILE_COMMAND_HANDLED)
+	{
+		m_automationExitCode = forwardedExitCode;
+		m_profileCommandBroker.ReleaseLaunchGate();
+		return FALSE;
+	}
+	if (forwardResult == PROFILE_COMMAND_TRANSPORT_FAILED)
+	{
+		m_automationExitCode = forwardedExitCode;
+		m_profileCommandBroker.ReleaseLaunchGate();
+		return FALSE;
+	}
+
+	m_requiresProfileCommandOwnership = TRUE;
+	return TRUE;
+}
+
+BOOL CProxyLaneApp::ActivateProfileCommandServer(
+	LPCTSTR profileName,
+	HWND notifyWindow)
+{
+	return m_profileCommandBroker.StartServer(profileName, notifyWindow);
+}
+
+void CProxyLaneApp::DeactivateProfileCommandServer()
+{
+	m_profileCommandBroker.StopServer();
+}
+
+BOOL CProxyLaneApp::IsProfileCommandServerActive(LPCTSTR profileName) const
+{
+	return m_profileCommandBroker.IsServerActive(profileName);
+}
+
+void CProxyLaneApp::ReleaseAutomationLaunchGate()
+{
+	m_profileCommandBroker.ReleaseLaunchGate();
+}
+
 int CProxyLaneApp::ExitInstance()
 {
+	m_profileCommandBroker.StopServer();
+	m_profileCommandBroker.ReleaseLaunchGate();
 	CWinApp::ExitInstance();
 	return m_automationExitCode;
 }
@@ -115,10 +172,32 @@ BOOL CProxyLaneApp::InitInstance()
 		m_automationExitCode = AUTOMATION_EXIT_INVALID_COMMAND_LINE;
 		return FALSE;
 	}
+	if (m_automationOptions.showHelp)
+	{
+		::MessageBox(
+			NULL,
+			Localization::Get(_T("automation.command_line_help")),
+			Localization::Get(_T("automation.command_line_help_title")),
+			MB_OK | MB_ICONINFORMATION | MB_TASKMODAL);
+		return FALSE;
+	}
 
 #ifndef _WIN64
 	if (IsWow64(GetCurrentProcess()))
 	{
+		if (m_automationOptions.enabled)
+		{
+			int forwardedExitCode = AUTOMATION_EXIT_COMMAND_FORWARD_FAILED;
+			ProfileCommandForwardResult forwardResult =
+				m_profileCommandBroker.Forward(m_automationOptions, forwardedExitCode);
+			if (forwardResult == PROFILE_COMMAND_HANDLED ||
+				forwardResult == PROFILE_COMMAND_TRANSPORT_FAILED)
+			{
+				m_automationExitCode = forwardedExitCode;
+				return FALSE;
+			}
+		}
+
 		CString strPath64;
 		LPTSTR pathBuffer = strPath64.GetBuffer(MAX_PATH);
 		const DWORD pathLength = ::GetModuleFileName(m_hInstance, pathBuffer, MAX_PATH);
@@ -212,6 +291,9 @@ BOOL CProxyLaneApp::InitInstance()
 		return FALSE;
 	}
 #endif
+
+	if (!PrepareAutomationCommandReceiver())
+		return FALSE;
 
 	CProxyLaneDlg dlg;
 	m_pMainWnd = &dlg;

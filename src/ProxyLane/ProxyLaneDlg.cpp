@@ -141,6 +141,7 @@ BEGIN_MESSAGE_MAP(CProxyLaneDlg, CModernDialog)
 	ON_REGISTERED_MESSAGE(s_uTaskbarRestart, OnTaskbarRestartNotify)
 	ON_MESSAGE(WM_AUTOMATION_START, OnAutomationStart)
 	ON_MESSAGE(WM_PROXY_STATUS_CHANGED, OnProxyStatusChanged)
+	ON_MESSAGE(WM_PROFILE_COMMAND_REQUEST, OnProfileCommandRequest)
 	//}}AFX_MSG_MAP
 	ON_WM_DESTROY()
 	ON_WM_SIZE()
@@ -249,6 +250,11 @@ LRESULT CProxyLaneDlg::OnAutomationStart(WPARAM wParam, LPARAM lParam)
 		FailAutomation(AUTOMATION_EXIT_PROXY_START_FAILED);
 		return 0;
 	}
+	if (!RefreshProfileCommandServer() && theApp.RequiresProfileCommandOwnership())
+	{
+		FailAutomation(AUTOMATION_EXIT_COMMAND_FORWARD_FAILED);
+		return 0;
+	}
 
 	AppLaunchResult launchResult = page3->LaunchAndProxyApp(
 		options.targetPath,
@@ -270,6 +276,18 @@ LRESULT CProxyLaneDlg::OnAutomationStart(WPARAM wParam, LPARAM lParam)
 
 	theApp.SignalAutomationReady();
 	return 0;
+}
+
+BOOL CProxyLaneDlg::RefreshProfileCommandServer()
+{
+	if (!m_MainTab.IsProxyRunning())
+	{
+		theApp.DeactivateProfileCommandServer();
+		return TRUE;
+	}
+
+	CString profileName = m_MainTab.GetRunningProfileName();
+	return theApp.ActivateProfileCommandServer(profileName, GetSafeHwnd());
 }
 
 BOOL CProxyLaneDlg::AddTaskbarIcons()
@@ -308,7 +326,52 @@ void CProxyLaneDlg::UpdateTaskbarTooltip()
 
 LRESULT CProxyLaneDlg::OnProxyStatusChanged(WPARAM, LPARAM)
 {
+	RefreshProfileCommandServer();
 	UpdateTaskbarTooltip();
+	return 0;
+}
+
+LRESULT CProxyLaneDlg::OnProfileCommandRequest(WPARAM, LPARAM lParam)
+{
+	CProfileCommandRequest* request = reinterpret_cast<CProfileCommandRequest*>(lParam);
+	if (!request)
+		return 0;
+
+	int exitCode = AUTOMATION_EXIT_COMMAND_FORWARD_FAILED;
+	if (!InterlockedCompareExchange(&request->cancelled, FALSE, FALSE) &&
+		m_MainTab.IsProxyRunning() &&
+		m_MainTab.GetRunningProfileName().CompareNoCase(request->profileName) == 0 &&
+		theApp.IsProfileCommandServerActive(request->profileName))
+	{
+		CPage3* page3 = m_MainTab.GetPage3();
+		if (page3)
+		{
+			AppLaunchResult result = page3->LaunchAndProxyApp(
+				request->targetPath,
+				request->targetArguments,
+				TRUE);
+			switch (result)
+			{
+			case APP_LAUNCH_SUCCESS:
+				exitCode = AUTOMATION_EXIT_SUCCESS;
+				break;
+			case APP_LAUNCH_INVALID_TARGET:
+				exitCode = AUTOMATION_EXIT_TARGET_INVALID;
+				break;
+			case APP_LAUNCH_INJECTION_FAILED:
+				exitCode = AUTOMATION_EXIT_INJECTION_FAILED;
+				break;
+			default:
+				exitCode = AUTOMATION_EXIT_CREATE_PROCESS_FAILED;
+				break;
+			}
+		}
+	}
+
+	request->exitCode = exitCode;
+	if (request->completedEvent)
+		SetEvent(request->completedEvent);
+	request->Release();
 	return 0;
 }
 
@@ -359,6 +422,8 @@ HCURSOR CProxyLaneDlg::OnQueryDragIcon()
 
 void CProxyLaneDlg::OnDestroy()
 {
+	theApp.DeactivateProfileCommandServer();
+	theApp.ReleaseAutomationLaunchGate();
 	CDialog::OnDestroy();
 
 	// TODO: 在此处添加消息处理程序代码

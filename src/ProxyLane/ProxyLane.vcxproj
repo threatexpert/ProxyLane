@@ -257,6 +257,7 @@
     <ClCompile Include="Page3.cpp" />
     <ClCompile Include="Page4.cpp" />
     <ClCompile Include="Page5.cpp" />
+	<ClCompile Include="ProfileCommandBroker.cpp" />
     <ClCompile Include="ProxyLane.cpp" />
     <ClCompile Include="ProxyLaneDlg.cpp" />
     <ClCompile Include="ProxyController.cpp" />
@@ -284,6 +285,7 @@
     <ClInclude Include="Page3.h" />
     <ClInclude Include="Page4.h" />
     <ClInclude Include="Page5.h" />
+	<ClInclude Include="ProfileCommandBroker.h" />
     <ClInclude Include="ProxyLane.h" />
     <ClInclude Include="ProxyLaneDlg.h" />
     <ClInclude Include="ProxyController.h" />

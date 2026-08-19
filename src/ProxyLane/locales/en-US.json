@@ -184,5 +184,7 @@
   "dialog.drop_inject_failed": "Proxy injection failed. The target was cancelled instead of continuing without the proxy.",
   "dialog.drop_elevated_failed": "Elevated launch or proxy injection did not complete; the target was cancelled.",
   "dialog.drop_launch_failed": "The dropped application could not start. Check the file and its permissions.",
-  "dialog.drop_failed_title": "Cannot Start Through Proxy"
+  "dialog.drop_failed_title": "Cannot Start Through Proxy",
+  "automation.command_line_help_title": "ProxyLane Command-Line Help",
+  "automation.command_line_help": "Usage\r\n\r\nStart an application through the transparent proxy:\r\nProxyLane.exe --auto --profile <profile name> --run <application path> [-- <application arguments...>]\r\n\r\nShow this help:\r\nProxyLane.exe /?\r\n\r\nOptions\r\n--auto       Use command-line automation mode.\r\n--profile    Select a saved profile.\r\n--run        Select the application to start through the proxy.\r\n--           Pass all remaining arguments to the application.\r\n/?, -?, --help    Show this help.\r\n\r\nExample\r\nProxyLane.exe --auto --profile \"Test\" --run \"C:\\Tools\\app.exe\" -- -arg value\r\n\r\nAn existing instance with the same installation, user session, and profile is reused."
 }

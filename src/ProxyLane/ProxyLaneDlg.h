@@ -33,6 +33,7 @@ protected:
 	void UpdateTaskbarTooltip();
 	void ShowAndActivate();
 	void FailAutomation(int exitCode);
+	BOOL RefreshProfileCommandServer();
 
 	// 生成的消息映射函数
 	virtual BOOL OnInitDialog();
@@ -47,6 +48,7 @@ public:
 	afx_msg LRESULT OnTaskbarRestartNotify( WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnAutomationStart(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnProxyStatusChanged(WPARAM wParam, LPARAM lParam);
+	afx_msg LRESULT OnProfileCommandRequest(WPARAM wParam, LPARAM lParam);
 	afx_msg void OnSize(UINT nType, int cx, int cy);
 	afx_msg void OnGetMinMaxInfo(MINMAXINFO* minMaxInfo);
 	afx_msg void OnDropFiles(HDROP dropInfo);

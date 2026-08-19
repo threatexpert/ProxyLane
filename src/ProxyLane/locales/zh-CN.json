@@ -184,5 +184,7 @@
   "dialog.drop_inject_failed": "代理注入失败，目标程序已取消启动，未在无代理状态下继续运行。",
   "dialog.drop_elevated_failed": "提权启动或代理注入未完成，目标程序已取消启动。",
   "dialog.drop_launch_failed": "无法启动拖入的程序，请检查文件状态和运行权限。",
-  "dialog.drop_failed_title": "无法启动并代理"
+  "dialog.drop_failed_title": "无法启动并代理",
+  "automation.command_line_help_title": "ProxyLane 命令行帮助",
+  "automation.command_line_help": "用法\r\n\r\n启动并透明代理一个程序：\r\nProxyLane.exe --auto --profile <配置名称> --run <程序路径> [-- <程序参数...>]\r\n\r\n显示此帮助：\r\nProxyLane.exe /?\r\n\r\n参数\r\n--auto       使用命令行自动启动模式。\r\n--profile    指定已保存的配置名称。\r\n--run        指定要启动并代理的程序。\r\n--           后面的内容作为目标程序参数。\r\n/?, -?, --help    显示此帮助。\r\n\r\n示例\r\nProxyLane.exe --auto --profile \"Test\" --run \"C:\\Tools\\app.exe\" -- -arg value\r\n\r\n如果同一安装目录、用户会话和配置已有运行实例，命令会复用该实例。"
 }

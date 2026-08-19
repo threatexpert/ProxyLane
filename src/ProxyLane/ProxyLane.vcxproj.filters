@@ -54,6 +54,9 @@
     <ClCompile Include="Page5.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+	<ClCompile Include="ProfileCommandBroker.cpp">
+	  <Filter>源文件</Filter>
+	</ClCompile>
     <ClCompile Include="ProxyLane.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -116,6 +119,9 @@
     <ClInclude Include="Page5.h">
       <Filter>头文件</Filter>
     </ClInclude>
+	<ClInclude Include="ProfileCommandBroker.h">
+	  <Filter>头文件</Filter>
+	</ClInclude>
     <ClInclude Include="ProxyLane.h">
       <Filter>头文件</Filter>
     </ClInclude>

@@ -72,6 +72,16 @@ build\qa\child_guard_watchdog.exe
 The watchdog test intentionally takes about two minutes; it uses the same
 60-second minimum age and two 30-second observations as production.
 
+Verify profile-scoped command reuse after building both Release platforms:
+
+```powershell
+python tests/ProfileCommandReuseE2ETests.py --bin bin
+```
+
+This test covers reuse of a running manual instance, repeated automation
+launches, Win32-to-x64 forwarding, a later manual instance that must not steal
+ownership, and two simultaneous first launches.
+
 Launch the client through ProxyLane's automation interface after creating a
 temporary profile that points at the corresponding local proxy:
 

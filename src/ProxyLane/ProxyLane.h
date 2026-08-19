@@ -9,6 +9,7 @@
 
 #include "resource.h"		// 主符号
 #include "AutomationOptions.h"
+#include "ProfileCommandBroker.h"
 
 
 // CProxyLaneApp:
@@ -22,6 +23,12 @@ public:
 	const AutomationOptions& GetAutomationOptions() const { return m_automationOptions; }
 	void SetAutomationExitCode(int exitCode) { m_automationExitCode = exitCode; }
 	void SignalAutomationReady();
+	BOOL PrepareAutomationCommandReceiver();
+	BOOL ActivateProfileCommandServer(LPCTSTR profileName, HWND notifyWindow);
+	void DeactivateProfileCommandServer();
+	BOOL IsProfileCommandServerActive(LPCTSTR profileName = NULL) const;
+	BOOL RequiresProfileCommandOwnership() const { return m_requiresProfileCommandOwnership; }
+	void ReleaseAutomationLaunchGate();
 
 // 重写
 	public:
@@ -35,6 +42,8 @@ public:
 private:
 	AutomationOptions m_automationOptions;
 	int m_automationExitCode;
+	BOOL m_requiresProfileCommandOwnership;
+	CProfileCommandBroker m_profileCommandBroker;
 };
 
 extern CProxyLaneApp theApp;
