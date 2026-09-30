@@ -14,7 +14,9 @@ typedef BOOL(WINAPI* ProxyLaneCreateProcessWFunction)(
 	LPSTARTUPINFOW startupInfo,
 	LPPROCESS_INFORMATION processInformation);
 
-// Inject the matching Hook module into a suspended process at the current integrity level.
+// Inject the matching Hook module using handles returned by process creation,
+// including when the target belongs to a different user. On Vista+ the
+// cross-bitness helper inherits only these two handles through an allowlist.
 // A hooked parent supplies its original CreateProcess trampoline so an internal cross-bitness
 // rundll32 launch does not recursively enter the child-process proxy path.
 BOOL ProxyLaneInjectSuspendedProcess(

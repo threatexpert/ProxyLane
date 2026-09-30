@@ -13,6 +13,7 @@ typedef enum
 {
 	HOOKMODULE_WS2_32 = 0,
 	HOOKMODULE_KERNEL32,
+	HOOKMODULE_ADVAPI32,
 	HOOKMODULE_COUNT
 }eHOOKMODUDLE;
 
@@ -34,6 +35,7 @@ typedef enum
 
 	//kernel32
 	HOOKAPI_CreateProcessInternalW,
+	HOOKAPI_CreateProcessWithLogonW,
 	//HOOKAPI_AddAccessAllowedAce,
 
 	HOOKAPI_COUNT
@@ -761,10 +763,17 @@ public:
 		LPPROCESS_INFORMATION lpProcessInformation,
 		PHANDLE hNewToken);
 
+	BOOL WINAPI inhook_CreateProcessWithLogonW(LPCWSTR username, LPCWSTR domain,
+		LPCWSTR password, DWORD logonFlags, LPCWSTR applicationName,
+		LPWSTR commandLine, DWORD creationFlags, LPVOID environment,
+		LPCWSTR currentDirectory, LPSTARTUPINFOW startup,
+		LPPROCESS_INFORMATION process);
 
 private:
-
 	ProxySettingsInfo m_psi;
+	DWORD m_ProcessCreationTls;
+	void FinishChildCreation(LPPROCESS_INFORMATION process, BOOL ownsSuspension,
+		LPCWSTR applicationName, LPCWSTR commandLine);
 
 	BOOL m_bHookEnabled;
 

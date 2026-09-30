@@ -11,6 +11,10 @@
 
 #include <new>
 
+#ifndef PIPE_REJECT_REMOTE_CLIENTS
+#define PIPE_REJECT_REMOTE_CLIENTS 0x00000008
+#endif
+
 //CString g_szPRCPipeServerName;
 GUID g_GuidPipeName;
 
@@ -166,8 +170,11 @@ DWORD WINAPI CPRCPipeServer::_mainThread()
 
 	CSecurityAttributes sa;
 
-	sa.CreateSD(_T("Everyone"), GENERIC_READ|GENERIC_WRITE, 0);
-	sa.LowIntegrity();
+	if (!sa.CreatePipeSD())
+	{
+		SetThreadStatus(threadstatus_error);
+		return 0;
+	}
 
 	for(;;)
 	{
@@ -176,7 +183,7 @@ DWORD WINAPI CPRCPipeServer::_mainThread()
 			PIPE_ACCESS_DUPLEX,       // read/write access 
 			PIPE_TYPE_MESSAGE |       // message type pipe 
 			PIPE_READMODE_MESSAGE |   // message-read mode 
-			PIPE_WAIT,                // blocking mode 
+			PIPE_WAIT | (IsVistaOrLater() ? PIPE_REJECT_REMOTE_CLIENTS : 0),
 			PIPE_UNLIMITED_INSTANCES, // max. instances  
 			MAXBUFSIZE,                  // output buffer size 
 			MAXBUFSIZE,                  // input buffer size 

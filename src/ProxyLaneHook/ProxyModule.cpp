@@ -351,5 +351,18 @@ void CALLBACK AttachTo(HWND hwnd, HINSTANCE hinst, LPSTR lpszCmdLine, int nCmdSh
 	if (!get_arg(lpszCmdLine, "--pipe=", szPipeName, sizeof(szPipeName)-1))
 		return;
 
+	if (get_arg(lpszCmdLine, "--process-handle=", szOpt, sizeof(szOpt)-1))
+	{
+		HANDLE process = ULongToHandle(strtoul(szOpt, NULL, 10));
+		if (!get_arg(lpszCmdLine, "--thread-handle=", szOpt, sizeof(szOpt)-1))
+			ExitProcess(ERROR_INVALID_PARAMETER);
+		HANDLE thread = ULongToHandle(strtoul(szOpt, NULL, 10));
+		// These handles came through an explicit inheritance allowlist.
+		DWORD result = AttachToHandles(process, thread, szPipeName);
+		CloseHandle(thread);
+		CloseHandle(process);
+		ExitProcess(result);
+	}
+
 	ExitProcess(AttachToI(dwPid, dwTid, szPipeName));
 }

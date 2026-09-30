@@ -4,6 +4,7 @@
 #include <accctrl.h>
 #include <Sddl.h>
 #include <Aclapi.h>
+#include <vector>
 
 BOOL GrantPrivilege(TCHAR *PName, BOOL bEnable)
 {
@@ -211,9 +212,6 @@ BOOL ApplySD2LowIntegrity(PSECURITY_DESCRIPTOR lpSecurityDescriptor, PSECURITY_D
 		SDDL_REVISION_1, &pLowIntegritySecDesc, NULL))
 		goto __RET;
 	
-	if (!SetSecurityDescriptorDacl(lpSecurityDescriptor, TRUE, 0, FALSE))
-		goto __RET;
-
 	if (!GetSecurityDescriptorSacl(pLowIntegritySecDesc, &fAclPresent, &pAcl, &fAclDefaulted))
 		goto __RET;
 
@@ -299,6 +297,33 @@ BOOL CSecurityAttributes::LowIntegrity()
 	}
 
 	return ApplySD2LowIntegrity(this->lpSecurityDescriptor, &m_pLowIntegritySD);
+}
+
+BOOL CSecurityAttributes::CreatePipeSD()
+{
+	HANDLE token = NULL;
+	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+		return FALSE;
+	DWORD size = 0;
+	GetTokenInformation(token, TokenUser, NULL, 0, &size);
+	std::vector<BYTE> user(size);
+	const BOOL gotUser = size && GetTokenInformation(token, TokenUser,
+		&user[0], size, &size);
+	CloseHandle(token);
+	if (!gotUser)
+		return FALSE;
+	LPWSTR sid = NULL;
+	if (!ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(&user[0])->User.Sid, &sid))
+		return FALSE;
+	CStringW sddl;
+	// Only the server owner and SYSTEM may create additional pipe instances.
+	// Clients get read/write, excluding FILE_CREATE_PIPE_INSTANCE (0x4).
+	// SID strings avoid localized account-name lookup failures.
+	sddl.Format(L"D:(A;;GA;;;SY)(A;;GA;;;%s)(A;;0x0012019b;;;WD)%s", sid,
+		IsVistaOrLater() ? L"S:(ML;;NW;;;LW)" : L"");
+	LocalFree(sid);
+	return ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl,
+		SDDL_REVISION_1, &lpSecurityDescriptor, NULL);
 }
 
 BOOL CSecurityAttributes::SetSDDacl(LPCTSTR pUserName, DWORD AccessPermissions, ACCESS_MODE AccessMode, DWORD Inheritance)

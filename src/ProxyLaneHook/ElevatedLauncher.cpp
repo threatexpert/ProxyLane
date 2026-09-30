@@ -10,6 +10,53 @@ extern HMODULE g_hDllModule;
 
 namespace
 {
+	// Pass the already-authorized handles to the matching-bitness helper.
+	// Reopening by PID loses access when the child belongs to another user.
+	class CInjectionHandleList
+	{
+		typedef BOOL (WINAPI *InitializeFn)(LPPROC_THREAD_ATTRIBUTE_LIST, DWORD, DWORD, PSIZE_T);
+		typedef BOOL (WINAPI *UpdateFn)(LPPROC_THREAD_ATTRIBUTE_LIST, DWORD, DWORD_PTR, PVOID, SIZE_T, PVOID, PSIZE_T);
+		typedef VOID (WINAPI *DeleteFn)(LPPROC_THREAD_ATTRIBUTE_LIST);
+		DeleteFn m_delete;
+		std::vector<BYTE> m_storage;
+	public:
+		HANDLE handles[2];
+		LPPROC_THREAD_ATTRIBUTE_LIST list;
+		CInjectionHandleList() : m_delete(NULL), list(NULL)
+		{
+			handles[0] = handles[1] = NULL;
+		}
+		~CInjectionHandleList()
+		{
+			if (list) m_delete(list);
+			if (handles[0]) CloseHandle(handles[0]);
+			if (handles[1]) CloseHandle(handles[1]);
+		}
+		BOOL Initialize(HANDLE process, HANDLE thread)
+		{
+			HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
+			InitializeFn initialize = reinterpret_cast<InitializeFn>(GetProcAddress(kernel, "InitializeProcThreadAttributeList"));
+			UpdateFn update = reinterpret_cast<UpdateFn>(GetProcAddress(kernel, "UpdateProcThreadAttribute"));
+			m_delete = reinterpret_cast<DeleteFn>(GetProcAddress(kernel, "DeleteProcThreadAttributeList"));
+			// XP has no handle-list support; retain its existing PID-based path.
+			if (!initialize || !update || !m_delete)
+				return TRUE;
+			HANDLE self = GetCurrentProcess();
+			if (!DuplicateHandle(self, process, self, &handles[0], 0, TRUE, DUPLICATE_SAME_ACCESS) ||
+				!DuplicateHandle(self, thread, self, &handles[1], 0, TRUE, DUPLICATE_SAME_ACCESS))
+				return FALSE;
+			SIZE_T bytes = 0;
+			initialize(NULL, 1, 0, &bytes);
+			if (!bytes) return FALSE;
+			m_storage.resize(bytes);
+			LPPROC_THREAD_ATTRIBUTE_LIST candidate = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(&m_storage[0]);
+			if (!initialize(candidate, 1, 0, &bytes)) return FALSE;
+			list = candidate;
+			return update(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles,
+				sizeof(handles), NULL, NULL);
+		}
+	};
+
 	BOOL IsCurrentProcessElevated()
 	{
 		OSVERSIONINFO versionInfo = { 0 };
@@ -265,22 +312,32 @@ BOOL ProxyLaneInjectSuspendedProcess(
 		return FALSE;
 	}
 
+	CInjectionHandleList inherited;
+	if (!inherited.Initialize(targetProcess, targetThread))
+		return FALSE;
+	WCHAR handleArguments[128] = L"";
+	if (inherited.list)
+		StringCchPrintfW(handleArguments, _countof(handleArguments),
+			L" --process-handle=%lu --thread-handle=%lu",
+			HandleToULong(inherited.handles[0]), HandleToULong(inherited.handles[1]));
+
 	WCHAR helperCommand[1024] = { 0 };
 	if (FAILED(StringCchPrintfW(
 		helperCommand,
 		_countof(helperCommand),
-		L"\"%s\" \"%s\",AttachTo --pid=%lu --tid=%lu --pipe=%s",
+		L"\"%s\" \"%s\",AttachTo --pid=%lu --tid=%lu --pipe=%s%s",
 		rundllPath,
 		hookPath,
 		processId,
 		threadId,
-		pipeNameWide)))
+		pipeNameWide, handleArguments)))
 	{
 		return FALSE;
 	}
 
-	STARTUPINFOW startupInfo = { 0 };
-	startupInfo.cb = sizeof(startupInfo);
+	STARTUPINFOEXW startupInfo = { 0 };
+	startupInfo.StartupInfo.cb = inherited.list ? sizeof(startupInfo) : sizeof(STARTUPINFOW);
+	startupInfo.lpAttributeList = inherited.list;
 	PROCESS_INFORMATION processInfo = { 0 };
 	PVOID oldRedirection = NULL;
 	BOOL redirectionDisabled = FALSE;
@@ -295,11 +352,11 @@ BOOL ProxyLaneInjectSuspendedProcess(
 		helperCommand,
 		NULL,
 		NULL,
-		FALSE,
-		0,
+		inherited.list != NULL,
+		inherited.list ? EXTENDED_STARTUPINFO_PRESENT : 0,
 		NULL,
 		NULL,
-		&startupInfo,
+		&startupInfo.StartupInfo,
 		&processInfo);
 	if (redirectionDisabled)
 		SetWow64Redirection(FALSE, &oldRedirection);

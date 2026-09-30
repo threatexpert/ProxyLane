@@ -93,3 +93,56 @@ bin/ProxyLane64.exe --auto --profile E2E --run `
 
 The servers, temporary profiles and ports are test-owned resources. Do not run
 these mappings against production proxy settings.
+
+## Alternate-user process creation
+
+Build `logon_child_probe.cpp` from both x64 and x86 Visual Studio developer
+prompts (use the corresponding output name):
+
+```bat
+cl /nologo /EHsc /MT /O2 /DUNICODE /D_UNICODE tests\e2e\logon_child_probe.cpp /Fe:build\qa\logon_probe64.exe
+cl /nologo /EHsc /MT /O2 /DUNICODE /D_UNICODE tests\e2e\logon_child_probe.cpp /Fe:build\qa\logon_probe32.exe
+```
+
+After building both ProxyLane Release platforms, run:
+
+```powershell
+python tests/LogonChildE2ETests.py --user <local-test-account>
+```
+
+The runner prompts for the password, or accepts `PROXYLANE_TEST_PASSWORD` from
+its transient environment. Credentials are never stored in sources, reports,
+profiles or command-line arguments. A disposable directory under `build/qa`
+is granted Modify access to the supplied test account so both users can write
+reports and read the test binaries. Only the runner's own inherited Hook, if
+any, is disabled to isolate the test from an already-proxied developer shell.
+
+The 24 cases cover all four x86/x64 parent/child combinations, NULL and
+explicit ANSI/Unicode environments, caller-owned suspension, invalid creation
+flags and a missing executable. Successful cases verify the actual child
+identity, Hook loading, environment semantics and both child/grandchild
+SOCKS5 traffic through the PRC. Only a local test proxy can answer the
+TEST-NET target. Separate ACL checks use the test user's regular and lowered
+integrity tokens: message I/O is allowed; DACL modification and creating a
+competing named-pipe server are denied.
+
+For the actual Windows `runas.exe`, run this in an interactive terminal:
+
+```powershell
+python tests/LogonChildE2ETests.py --user <local-test-account> --interactive-runas
+```
+
+Enter the password at the initial test prompt and at each of the four Windows
+`runas` prompts. The script injects the selected x86/x64 `runas.exe` while
+suspended, then validates the alternate-user child and grandchild against the
+same local SOCKS5 endpoint. This deliberately leaves runas password entry to
+the operator. Each prompt has a 60-second timeout.
+
+Implementation notes: NULL environments retain Windows' target-user profile
+semantics. Consequently that initial child does not carry the caller's
+environment-based orphan-watchdog marker; once its Hook is initialized, its
+normal descendants use the existing marker mechanism. The explicit handle
+inheritance path requires Vista or later; XP retains the existing PID-based
+cross-bitness helper and is not covered by this test matrix. The installation
+directory must be readable/executable by the target account; production file
+ACLs and account privileges are not modified.

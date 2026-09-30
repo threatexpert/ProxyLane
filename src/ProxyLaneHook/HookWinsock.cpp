@@ -305,6 +305,7 @@ CHookWinsock::CHookWinsock(void)
 : m_HackedSocket(this)
 {
 	InitializeCriticalSection(&m_RequestPipeLock);
+	m_ProcessCreationTls = TlsAlloc();
 	ZeroMemory(m_HookedInfo, sizeof(m_HookedInfo));
 	ZeroMemory(&m_psi, sizeof(m_psi));
 	ZeroMemory(m_mem4bakcode, sizeof(m_mem4bakcode));
@@ -319,6 +320,7 @@ CHookWinsock::CHookWinsock(void)
 	g_pHookWinsock = this;
 
 	m_ModuleName[HOOKMODULE_WS2_32] = "Ws2_32.dll";
+	m_ModuleName[HOOKMODULE_ADVAPI32] = "Advapi32.dll";
 
 	if (IsWin8OrLater())
 		m_ModuleName[HOOKMODULE_KERNEL32] = "KernelBase.dll";
@@ -334,6 +336,8 @@ CHookWinsock::~CHookWinsock(void)
 {
 	m_RequestPipe.Disconnect();
 	DeleteCriticalSection(&m_RequestPipeLock);
+	if (m_ProcessCreationTls != TLS_OUT_OF_INDEXES)
+		TlsFree(m_ProcessCreationTls);
 	g_pHookWinsock = NULL;
 }
 
@@ -2216,7 +2220,7 @@ private:
 
 BOOL WINAPI CHookWinsock::inhook_CreateProcessInternalW(HANDLE hToken, LPCWSTR lpApplicationName, LPWSTR lpCommandLine, LPSECURITY_ATTRIBUTES lpProcessAttributes, LPSECURITY_ATTRIBUTES lpThreadAttributes, BOOL bInheritHandles, DWORD dwCreationFlags, LPVOID lpEnvironment, LPCWSTR lpCurrentDirectory, LPSTARTUPINFOW lpStartupInfo, LPPROCESS_INFORMATION lpProcessInformation, PHANDLE hNewToken)
 {
-	if (!m_psi.bHookCreateProcess)
+	if (!m_psi.bHookCreateProcess || TlsGetValue(m_ProcessCreationTls))
 	{
 		return CallTrampoline(CreateProcessInternalW)(hToken, lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, lpEnvironment, lpCurrentDirectory, lpStartupInfo, lpProcessInformation, hNewToken);
 	}
@@ -2260,62 +2264,111 @@ BOOL WINAPI CHookWinsock::inhook_CreateProcessInternalW(HANDLE hToken, LPCWSTR l
 
 	BOOL bRetVal = CallTrampoline(CreateProcessInternalW)(hToken, lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, effectiveEnvironment, lpCurrentDirectory, lpStartupInfo, lpProcessInformation, hNewToken);
 
+	const DWORD creationError = ::GetLastError();
 	mitigationDeferral.Restore();
-
 	if (bRetVal)
+		FinishChildCreation(lpProcessInformation, bSuspend, lpApplicationName, lpCommandLine);
+	SetLastError(creationError);
+	return bRetVal;
+}
+
+void CHookWinsock::FinishChildCreation(LPPROCESS_INFORMATION lpProcessInformation,
+	BOOL bSuspend, LPCWSTR lpApplicationName, LPCWSTR lpCommandLine)
+{
+	CChildResumeGuard resumeGuard(lpProcessInformation->hThread, bSuspend);
+	CPRCPipeClient PRCPipeClient;
+	BOOL pipeConnected = FALSE;
+	HookNewProcessInfo hnpi = {0};
+	hnpi.dwProcessId = lpProcessInformation->dwProcessId;
+	hnpi.dwThreadId = lpProcessInformation->dwThreadId;
+	hnpi.processCreateTime = QueryProcessCreateTimeValue(
+		lpProcessInformation->hProcess);
+	do
 	{
-		CChildResumeGuard resumeGuard(lpProcessInformation->hThread, bSuspend);
-		CPRCPipeClient PRCPipeClient;
-		BOOL pipeConnected = FALSE;
-		HookNewProcessInfo hnpi = {0};
+		if (!PRCPipeClient.Connect(m_szPRCPipeName))
+			break;
+		pipeConnected = TRUE;
+
+		ResolveChildAppPath(lpProcessInformation->hProcess, lpApplicationName, lpCommandLine, hnpi.szAppPath, MAX_PATH);
+
+		if (lpCommandLine)
+		{
+			wcsncpy(hnpi.szCommandLine, lpCommandLine, MAX_PATH - 1);
+			hnpi.szCommandLine[MAX_PATH - 1] = L'\0';
+		}
 		hnpi.dwProcessId = lpProcessInformation->dwProcessId;
 		hnpi.dwThreadId = lpProcessInformation->dwThreadId;
-		hnpi.processCreateTime = QueryProcessCreateTimeValue(
-			lpProcessInformation->hProcess);
-		do
+		if (!PRCPipeClient.PRCShouldInjectNewProcess(&hnpi))
 		{
-			if (!PRCPipeClient.Connect(m_szPRCPipeName))
-				break;
-			pipeConnected = TRUE;
-
-			ResolveChildAppPath(lpProcessInformation->hProcess, lpApplicationName, lpCommandLine, hnpi.szAppPath, MAX_PATH);
-
-			if (lpCommandLine)
-			{
-				wcsncpy(hnpi.szCommandLine, lpCommandLine, MAX_PATH - 1);
-				hnpi.szCommandLine[MAX_PATH - 1] = L'\0';
-			}
-			hnpi.dwProcessId = lpProcessInformation->dwProcessId;
-			hnpi.dwThreadId = lpProcessInformation->dwThreadId;
-			if (!PRCPipeClient.PRCShouldInjectNewProcess(&hnpi))
-			{
-				break;
-			}
-
-			CStringA pipeName(m_szPRCPipeName);
-			const BOOL injectionSucceeded = ProxyLaneInjectSuspendedProcess(
-				lpProcessInformation->hProcess,
-				lpProcessInformation->hThread,
-				lpProcessInformation->dwProcessId,
-				lpProcessInformation->dwThreadId,
-				pipeName,
-				CreateProcessWithoutProxyLaneHook);
-			PRCPipeClient.PRCNotifyChildInjectionResult(&hnpi, injectionSucceeded);
-
-		} while (FALSE);
-
-		// Only record the exclusion after the suspension that ProxyLane added has
-		// actually been released.  Recording first could hide the exact orphan
-		// process that the watchdog is intended to recover.
-		if (bSuspend && resumeGuard.Resume() && pipeConnected)
-		{
-			PRCPipeClient.PRCNotifyChildReleased(&hnpi);
+			break;
 		}
-		PRCPipeClient.Disconnect();
+
+		CStringA pipeName(m_szPRCPipeName);
+		const BOOL injectionSucceeded = ProxyLaneInjectSuspendedProcess(
+			lpProcessInformation->hProcess,
+			lpProcessInformation->hThread,
+			lpProcessInformation->dwProcessId,
+			lpProcessInformation->dwThreadId,
+			pipeName,
+			CreateProcessWithoutProxyLaneHook);
+		PRCPipeClient.PRCNotifyChildInjectionResult(&hnpi, injectionSucceeded);
+
+	} while (FALSE);
+
+	// Only record the exclusion after the suspension that ProxyLane added has
+	// actually been released.  Recording first could hide the exact orphan
+	// process that the watchdog is intended to recover.
+	if (bSuspend && resumeGuard.Resume() && pipeConnected)
+	{
+		PRCPipeClient.PRCNotifyChildReleased(&hnpi);
 	}
+	PRCPipeClient.Disconnect();
+}
 
+MyDetourProc(has_Return, BOOL, WINAPI, CreateProcessWithLogonW, (
+	LPCWSTR username, LPCWSTR domain, LPCWSTR password, DWORD logonFlags,
+	LPCWSTR applicationName, LPWSTR commandLine, DWORD creationFlags,
+	LPVOID environment, LPCWSTR currentDirectory, LPSTARTUPINFOW startup,
+	LPPROCESS_INFORMATION process))
+{
+	return g_pHookWinsock->inhook_CreateProcessWithLogonW(username, domain,
+		password, logonFlags, applicationName, commandLine, creationFlags,
+		environment, currentDirectory, startup, process);
+}
 
-	return bRetVal;
+BOOL WINAPI CHookWinsock::inhook_CreateProcessWithLogonW(
+	LPCWSTR username, LPCWSTR domain, LPCWSTR password, DWORD logonFlags,
+	LPCWSTR applicationName, LPWSTR commandLine, DWORD creationFlags,
+	LPVOID environment, LPCWSTR currentDirectory, LPSTARTUPINFOW startup,
+	LPPROCESS_INFORMATION process)
+{
+	if (!m_psi.bHookCreateProcess || TlsGetValue(m_ProcessCreationTls))
+		return CallTrampoline(CreateProcessWithLogonW)(username, domain, password,
+			logonFlags, applicationName, commandLine, creationFlags, environment,
+			currentDirectory, startup, process);
+
+	const BOOL ownsSuspension = (creationFlags & CREATE_SUSPENDED) == 0;
+	std::vector<BYTE> childEnvironment;
+	// NULL asks Windows to build the OTHER user's environment. Never replace
+	// it with the caller's environment (or perform a second credential logon).
+	if (environment && m_ChildGuardInstalled && BuildChildEnvironment(
+		environment, creationFlags, ownsSuspension, m_ChildGuardName, 0,
+		childEnvironment))
+		environment = &childEnvironment[0];
+
+	// Some Windows implementations can nest the internal creation API.
+	// Suppress only this thread's nested hook, so injection happens once.
+	if (!TlsSetValue(m_ProcessCreationTls, reinterpret_cast<LPVOID>(1)))
+		return FALSE;
+	BOOL created = CallTrampoline(CreateProcessWithLogonW)(username, domain,
+		password, logonFlags, applicationName, commandLine,
+		creationFlags | CREATE_SUSPENDED, environment, currentDirectory, startup, process);
+	const DWORD creationError = ::GetLastError();
+	TlsSetValue(m_ProcessCreationTls, NULL);
+	if (created)
+		FinishChildCreation(process, ownsSuspension, applicationName, commandLine);
+	SetLastError(creationError);
+	return created;
 }
 
 MyDetourProc(has_Return, int, WSAAPI, WSAIoctl, (
@@ -2426,6 +2479,8 @@ void *myAlloc4Bakcode(HMODULE hAfterDll, SIZE_T size)
 
 BOOL CHookWinsock::HookWinsock()
 {
+	if (m_ProcessCreationTls == TLS_OUT_OF_INDEXES)
+		return FALSE;
 	int i;
 	for (i = 0; i < HOOKMODULE_COUNT; i++)
 	{
@@ -2493,6 +2548,8 @@ BOOL CHookWinsock::HookWinsock()
 			//ATLTRACE("Kernel32.dll : 0x%.8x | 0x%.8x", m_CloneModule[HOOKMODULE_KERNEL32].pOldBaseAddr, m_CloneModule[HOOKMODULE_KERNEL32].pNewBaseAddr);
 
 			if (!HookAPI(HOOKMODULE_KERNEL32, _EHF(CreateProcessInternalW), "CreateProcessInternalW", _HOOKFUNC(CreateProcessInternalW), _TRAMPFUNC(CreateProcessInternalW)))
+				break;
+			if (!HookAPI(HOOKMODULE_ADVAPI32, _EHF(CreateProcessWithLogonW), "CreateProcessWithLogonW", _HOOKFUNC(CreateProcessWithLogonW), _TRAMPFUNC(CreateProcessWithLogonW)))
 				break;
 		}
 

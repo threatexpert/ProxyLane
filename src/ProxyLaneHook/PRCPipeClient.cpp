@@ -36,13 +36,15 @@ BOOL CPRCPipeClient::Connect(LPCTSTR lpszServerName)
 	for(;;)
 	{
 		//连接管道
+		// GENERIC_WRITE includes FILE_CREATE_PIPE_INSTANCE. Clients only need
+		// message I/O; do not request the right to create a competing server.
 		m_hPipe = CreateFile(
 			m_szFullPipename, 
-			GENERIC_READ|GENERIC_WRITE,
+			(FILE_GENERIC_READ | FILE_GENERIC_WRITE) & ~FILE_CREATE_PIPE_INSTANCE,
 			FILE_SHARE_READ|FILE_SHARE_WRITE,
 			NULL,
 			OPEN_EXISTING,
-			SECURITY_IMPERSONATION,
+			SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
 			NULL);
 		if(m_hPipe != INVALID_HANDLE_VALUE && m_hPipe != NULL)
 			break;
