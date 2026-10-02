@@ -2,6 +2,7 @@ bin/
 build/
 tests/obj/
 tests/tools/MitigationAttributeProbe/obj/
+tests/tools/ApplicationCatalogProbe/obj/
 src/ProxyLaneSecureTransport/target/
 dist/
 .vs/

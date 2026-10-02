@@ -6,6 +6,7 @@
 
 #include "stdafx.h"
 #include "PRCPipeClient.h"
+#include "AppContainerPipeAccess.h"
 
 CPRCPipeClient::CPRCPipeClient(void)
 {
@@ -40,7 +41,7 @@ BOOL CPRCPipeClient::Connect(LPCTSTR lpszServerName)
 		// message I/O; do not request the right to create a competing server.
 		m_hPipe = CreateFile(
 			m_szFullPipename, 
-			(FILE_GENERIC_READ | FILE_GENERIC_WRITE) & ~FILE_CREATE_PIPE_INSTANCE,
+			PROXYLANE_PIPE_CLIENT_ACCESS,
 			FILE_SHARE_READ|FILE_SHARE_WRITE,
 			NULL,
 			OPEN_EXISTING,

@@ -15,6 +15,15 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="InstalledApplications.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ApplicationCatalogCache.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ApplicationPicker.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="AppVersion.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -138,6 +147,21 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="PackagedAppSupport.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="InstalledApplications.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ApplicationCatalogCache.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ProcessActions.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ScopedProcessSuspension.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ApplicationPicker.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="Resource.h">

@@ -20,6 +20,7 @@ public:
 
 	//重载
 	BOOL GetPRCPipeName(LPSTR lpBuf, int bufsize);
+	BOOL AuthorizeProcessPipeAccess(HANDLE targetProcess);
 	IProxyTaskMgr* GetPTMInstance(int type);
 	IProxyDataHandle* GetPDHInstance();
 	//

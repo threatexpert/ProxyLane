@@ -58,6 +58,8 @@ public:
 		ULONGLONG processCreateTime,
 		DWORD *hookState,
 		DWORD *hookError) = 0;
+	// Must succeed before injection; ordinary processes need no extra grant.
+	virtual BOOL AuthorizeProcessPipeAccess(HANDLE targetProcess) = 0;
 };
 
 template<typename T>

@@ -83,7 +83,8 @@ enum AppLaunchResult
 	APP_LAUNCH_CREATE_PROCESS_FAILED,
 	APP_LAUNCH_INJECTION_FAILED,
 	APP_LAUNCH_UAC_CANCELLED,
-	APP_LAUNCH_ELEVATED_HELPER_FAILED
+	APP_LAUNCH_ELEVATED_HELPER_FAILED,
+	APP_LAUNCH_PACKAGED_INJECTION_FAILED
 };
 
 enum AppLaunchElevationMode
@@ -98,6 +99,7 @@ class CPage3 : public CModernDialog
 	DECLARE_DYNAMIC(CPage3)
 
 #define TIMER_PSLIST 0x100
+#define TIMER_LAUNCHED_PROCESS 0x101
 
 public:
 	CPage3(CWnd* pParent = NULL);   // 标准构造函数
@@ -111,6 +113,8 @@ public:
 	CWindowFinderButton m_btnWindowFinder;
 	CModernButton m_btnRefresh;
 	CModernButton m_btnInject;
+	CModernButton m_btnSelectApp;
+	CModernButton m_btnTerminate;
 	CToolTipCtrl m_windowFinderToolTip;
 	CEvent m_evlock;
 	//CButton m_btnAuto;
@@ -139,6 +143,10 @@ private:
 	DWORD m_processNameSearchTick;
 	HWND m_finderTargetWindow;
 	CWindowFinderOverlay m_finderOverlay;
+	BOOL m_terminating;
+	DWORD m_launchedProcessId;
+	ULONGLONG m_launchedProcessTime;
+	DWORD m_launchSelectionTick;
 
 	static int CALLBACK CompareProcessItems(LPARAM leftParam, LPARAM rightParam, LPARAM sortParam);
 	void BuildProcessTree();
@@ -161,6 +169,10 @@ private:
 		DWORD rootProcessId,
 		std::vector<DWORD>& descendants) const;
 	void RestoreProcessPageSubtitle();
+	void RefreshLaunchedProcess(DWORD pid, HANDLE process = NULL, ULONGLONG creationTime = 0);
+	BOOL TrySelectLaunchedProcess();
+	void CancelLaunchSelection();
+	void LayoutProcessPage();
 
 public:
 
@@ -173,11 +185,15 @@ public:
 		LPCTSTR fileName,
 		const std::vector<CString>& extraArguments,
 		BOOL strictInjection,
-		AppLaunchElevationMode elevationMode = APP_LAUNCH_ELEVATION_AUTO);
+		AppLaunchElevationMode elevationMode = APP_LAUNCH_ELEVATION_AUTO,
+		const CString& initialArguments = CString(),
+		const CString& initialWorkingDirectory = CString());
+	AppLaunchResult LaunchPackagedAppById(LPCTSTR aumid, const CString& arguments);
 	AppLaunchResult LaunchPackagedAppAndProxy(
 		LPCTSTR fileName,
 		const CString& manifestDir,
-		const std::vector<CString>& extraArguments);
+		const std::vector<CString>& extraArguments,
+		const CString& initialArguments = CString());
 	BOOL InjectNewProcess(LPHookNewProcessInfo lphnpi);
 	BOOL ShouldProxyChildProcess(LPHookNewProcessInfo lphnpi);
 
@@ -208,6 +224,9 @@ public:
 	afx_msg void OnBnClickedCancel();
 	afx_msg void OnBnClickedRefresh();
 	afx_msg void OnBnClickedInjectdll();
+	afx_msg void OnBnClickedSelectApp();
+	afx_msg void OnBnClickedTerminateProcess();
+	afx_msg void OnProcessSelectionChanged(NMHDR* header, LRESULT* result);
 	afx_msg void OnTimer(UINT_PTR nIDEvent);
 	afx_msg void OnLvnColumnClickProcessList(NMHDR* notifyHeader, LRESULT* result);
 	afx_msg void OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result);

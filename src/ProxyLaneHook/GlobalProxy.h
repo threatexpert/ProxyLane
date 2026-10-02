@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ProxyModule.h"
+#include "AppContainerPipeAccess.h"
 #include <list>
 
 using namespace std;
@@ -29,6 +30,7 @@ public:
 	BOOL IsProxyEnabled();
 	BOOL EnableProxy();
 	BOOL DisableProxy();
+	CAppContainerPipeAccess& GetPipeAccess() { return GetProxyLanePipeAccess(); }
 
 	INT  AddRef();
 	INT  Release();

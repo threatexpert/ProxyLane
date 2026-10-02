@@ -18,6 +18,69 @@
 //CString g_szPRCPipeServerName;
 GUID g_GuidPipeName;
 
+static BOOL AuthorizeAppContainerChild(CGlobalProxy *proxy,
+	const HookNewProcessInfo& child, DWORD pipeClientPid)
+{
+	// A PID received from a client must not authorize an unrelated package.
+	// Bind a package grant to the actual parent's PID and child's creation time.
+	HANDLE process = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */,
+		FALSE, child.dwProcessId);
+	if (!process) process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, child.dwProcessId);
+	if (!process)
+	{
+		// An alternate-user/elevated parent may hold an injection handle that
+		// this PRC cannot obtain. Keep that existing path; do not grant any SID
+		// when the target identity cannot be inspected.
+		return GetLastError() == ERROR_ACCESS_DENIED;
+	}
+	std::vector<BYTE> sid;
+	BOOL success = QueryProcessAppContainerSid(process, sid);
+	DWORD error = success ? ERROR_SUCCESS : GetLastError();
+	if (!success && error == ERROR_ACCESS_DENIED)
+	{
+		CloseHandle(process);
+		return TRUE; // Same compatibility case as above; no authorization added.
+	}
+	if (success && !sid.empty())
+	{
+		struct ProcessBasicInfo
+		{
+			LONG exitStatus;
+			PVOID peb;
+			ULONG_PTR affinityMask;
+			LONG basePriority;
+			ULONG_PTR processId;
+			ULONG_PTR parentProcessId;
+		} info = { 0 };
+		typedef LONG (WINAPI *QueryProcessInfo)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+		QueryProcessInfo query = reinterpret_cast<QueryProcessInfo>(GetProcAddress(
+			GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess"));
+		FILETIME created, exited, kernel, user;
+		ULARGE_INTEGER creation = { 0 };
+		if (GetProcessTimes(process, &created, &exited, &kernel, &user))
+		{
+			creation.LowPart = created.dwLowDateTime;
+			creation.HighPart = created.dwHighDateTime;
+		}
+		if (!pipeClientPid || !child.processCreateTime ||
+			creation.QuadPart != child.processCreateTime || !query ||
+			query(process, 0, &info, sizeof(info), NULL) < 0 ||
+			info.processId != child.dwProcessId || info.parentProcessId != pipeClientPid)
+		{
+			success = FALSE;
+			error = ERROR_ACCESS_DENIED;
+		}
+		else
+		{
+			success = proxy->GetPipeAccess().AuthorizePackageSid(&sid[0]);
+			error = success ? ERROR_SUCCESS : GetLastError();
+		}
+	}
+	CloseHandle(process);
+	SetLastError(error);
+	return success;
+}
+
 CPRCPipeServer::CPRCPipeServer(CProxyReceptionCentre *pPRC)
 	: CPRCXServer(pPRC)
 {
@@ -178,7 +241,7 @@ DWORD WINAPI CPRCPipeServer::_mainThread()
 
 	for(;;)
 	{
-		m_hPipeServer = CreateNamedPipe( 
+		m_hPipeServer = m_pPRC->m_pGlobalProxy->GetPipeAccess().CreateServerPipe(
 			m_szPipeName,             // pipe name 
 			PIPE_ACCESS_DUPLEX,       // read/write access 
 			PIPE_TYPE_MESSAGE |       // message type pipe 
@@ -188,7 +251,7 @@ DWORD WINAPI CPRCPipeServer::_mainThread()
 			MAXBUFSIZE,                  // output buffer size 
 			MAXBUFSIZE,                  // input buffer size 
 			INFINITE,                   // client time-out 
-			&sa);                    // default security attribute 
+			sa);                    // baseline plus authorized AppContainer SIDs
 
 		if (m_hPipeServer == INVALID_HANDLE_VALUE) 
 		{
@@ -209,7 +272,7 @@ DWORD WINAPI CPRCPipeServer::_mainThread()
 		{
 			if (fConnected)
 				DisconnectNamedPipe(m_hPipeServer);
-			CloseHandle(m_hPipeServer);
+			m_pPRC->m_pGlobalProxy->GetPipeAccess().CloseServerPipe(m_hPipeServer);
 			m_hPipeServer = NULL;
 			SetThreadStatus(threadstatus_abort);
 			break;
@@ -221,7 +284,7 @@ DWORD WINAPI CPRCPipeServer::_mainThread()
 			if (!pParam)
 			{
 				DisconnectNamedPipe(m_hPipeServer);
-				CloseHandle(m_hPipeServer);
+				m_pPRC->m_pGlobalProxy->GetPipeAccess().CloseServerPipe(m_hPipeServer);
 				m_hPipeServer = NULL;
 				continue;
 			}
@@ -233,7 +296,7 @@ DWORD WINAPI CPRCPipeServer::_mainThread()
 			{
 				delete[] pParam;
 				DisconnectNamedPipe(m_hPipeServer);
-				CloseHandle(m_hPipeServer);
+				m_pPRC->m_pGlobalProxy->GetPipeAccess().CloseServerPipe(m_hPipeServer);
 				m_hPipeServer = NULL;
 				continue;
 			}
@@ -257,7 +320,7 @@ DWORD WINAPI CPRCPipeServer::_mainThread()
 				CloseHandle(hThread);
 				delete[] pParam;
 				DisconnectNamedPipe(m_hPipeServer);
-				CloseHandle(m_hPipeServer);
+				m_pPRC->m_pGlobalProxy->GetPipeAccess().CloseServerPipe(m_hPipeServer);
 				m_hPipeServer = NULL;
 				if (InterlockedDecrement(&m_dwThreadCount) == 0)
 					SetEvent(m_hNoThreadEvent);
@@ -270,7 +333,7 @@ DWORD WINAPI CPRCPipeServer::_mainThread()
 		}
 		else
 		{
-			CloseHandle(m_hPipeServer);
+			m_pPRC->m_pGlobalProxy->GetPipeAccess().CloseServerPipe(m_hPipeServer);
 			m_hPipeServer = NULL;
 		}
 	}
@@ -494,6 +557,16 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 				hdr.dataSize = 0;
 
 				hdr.flag = (BYTE)m_pPRC->m_pGlobalProxy->GetLogInstance()->ShouldInjectNewProcess(&hnpi);
+				if (hdr.flag && !AuthorizeAppContainerChild(
+					m_pPRC->m_pGlobalProxy, hnpi, pipeClientPid))
+				{
+					const DWORD error = GetLastError();
+					CString text;
+					text.Format(_T("Failed to authorize child PRC pipe access: PID %lu, error %lu.\r\n"),
+						hnpi.dwProcessId, error);
+					m_pPRC->m_pGlobalProxy->GetLogInstance()->LogText(text);
+					hdr.flag = false;
+				}
 
 				if (! WritePipe(hPipe, &hdr, sizeof(hdr)))
 					goto SEC_ERROR;
@@ -669,7 +742,7 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 
 SEC_ERROR:
 	DisconnectNamedPipe(hPipe);
-	CloseHandle(hPipe);
+	m_pPRC->m_pGlobalProxy->GetPipeAccess().CloseServerPipe(hPipe);
 
 	CTSList<HANDLE>::critical lc = m_ChildThreadList;
 	m_ChildThreadList.remove(hThread);

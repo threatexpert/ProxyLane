@@ -5,6 +5,7 @@
 
 #include "MainTab.h"
 #include "ModernUI.h"
+#include "InstalledApplications.h"
 #include <vector>
 
 class CProxyLaneFileDropTarget;
@@ -56,6 +57,9 @@ protected:
 	void PositionNormalDropBanner();
 	BOOL IsPointInAdminDropOverlay(CPoint clientPoint) const;
 	BOOL HandleDroppedFiles(HDROP dropInfo, AppLaunchElevationMode elevationMode);
+	BOOL HandleDroppedShellItems(HGLOBAL data, AppLaunchElevationMode elevationMode);
+	void LaunchDroppedApplication(const InstalledApplications::Application& application,
+		AppLaunchElevationMode elevationMode);
 
 	// 生成的消息映射函数
 	virtual BOOL OnInitDialog();

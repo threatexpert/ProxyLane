@@ -33,10 +33,14 @@
       <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebugDLL</RuntimeLibrary>
       <RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreadedDLL</RuntimeLibrary>
     </ClCompile>
-    <Link><AdditionalDependencies>ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><AdditionalDependencies>ws2_32.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ProxyLaneTestsMain.cpp" />
+    <ClCompile Include="ProcessActionsTests.cpp" />
+    <ClCompile Include="ScopedProcessSuspensionTests.cpp" />
+    <ClCompile Include="AppContainerPipeAccessTests.cpp"><PreprocessorDefinitions>main=AppContainerPipeAccessTestsMain;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
+    <ClCompile Include="..\src\ProxyLaneHook\AppContainerPipeAccess.cpp"><PreprocessorDefinitions>PROXYLANE_PIPE_ACCESS_STANDALONE;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
     <ClCompile Include="Socks5UdpCodecTests.cpp"><PreprocessorDefinitions>main=Socks5UdpCodecTestsMain;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
     <ClCompile Include="BoundedLogQueueTests.cpp"><PreprocessorDefinitions>main=BoundedLogQueueTestsMain;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
     <ClCompile Include="UdpAssociationPolicyTests.cpp"><PreprocessorDefinitions>main=UdpAssociationPolicyTestsMain;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>

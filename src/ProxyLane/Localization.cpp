@@ -241,7 +241,8 @@ void Localization::ApplyDialog(CWnd* dialog, UINT dialogId)
 	};
 	static const ControlTranslation page3[] = {
 		{ IDC_STATIC_PAGE_TITLE, _T("page3.title") }, { IDC_STATIC_PAGE_SUBTITLE, _T("page3.subtitle") },
-		{ IDC_REFRESH, _T("action.refresh") }, { IDC_INJECTDLL, _T("action.proxy_selected") }
+		{ IDC_REFRESH, _T("action.refresh") }, { IDC_INJECTDLL, _T("action.proxy_selected") },
+		{ IDC_SELECT_APP, _T("apps.select") }, { IDC_TERMINATE_PROCESS, _T("action.end_process") }
 	};
 	static const ControlTranslation page4[] = {
 		{ IDC_STATIC_PAGE_TITLE, _T("page4.title") }, { IDC_STATIC_PAGE_SUBTITLE, _T("page4.subtitle") },

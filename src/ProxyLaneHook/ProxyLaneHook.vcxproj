@@ -312,6 +312,9 @@
   <ItemGroup>
 	<ClCompile Include="ElevatedLauncher.cpp" />
     <ClCompile Include="GlobalProxy.cpp" />
+    <ClCompile Include="AppContainerPipeAccess.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="ProxyLaneHook.cpp" />
     <ClCompile Include="HookWinsock.cpp">
       <Optimization Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">MinSpace</Optimization>
@@ -358,6 +361,7 @@
     <ClInclude Include="asynsocket\types.h" />
     <ClInclude Include="detour.h" />
     <ClInclude Include="GlobalProxy.h" />
+    <ClInclude Include="AppContainerPipeAccess.h" />
     <ClInclude Include="HookWinsock.h" />
     <ClInclude Include="InjectDll.h" />
     <ClInclude Include="inlinehook.h" />

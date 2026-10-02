@@ -9,6 +9,7 @@
 #define IDD_Page3                       131
 #define IDD_Page4                       132
 #define IDD_Page5                       133
+#define IDD_APPLICATION_PICKER          134
 #define IDR_LANG_ZH_CN                  200
 #define IDR_LANG_EN_US                  201
 #define IDC_EDIT1                       1000
@@ -87,6 +88,15 @@
 #define IDC_STATIC_PSK_LABEL            1069
 #define IDC_EDIT_TRANSPORT_PSK          1070
 #define IDC_CHECK_BLOCK_IPV6            1071
+#define IDC_SELECT_APP                  1072
+#define IDC_APP_SEARCH                  1073
+#define IDC_APP_LIST                    1074
+#define IDC_APP_STATUS                  1075
+#define IDC_APP_SEARCH_LABEL            1076
+#define IDC_APP_HINT                    1077
+#define IDC_APP_EMPTY_STATE             1078
+#define IDC_APP_REFRESH                 1079
+#define IDC_TERMINATE_PROCESS           1080
 
 // Next default values for new objects
 // 
@@ -94,7 +104,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        202
 #define _APS_NEXT_COMMAND_VALUE         32771
-#define _APS_NEXT_CONTROL_VALUE         1072
+#define _APS_NEXT_CONTROL_VALUE         1081
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

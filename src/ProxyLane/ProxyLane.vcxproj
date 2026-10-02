@@ -263,6 +263,9 @@
     <ClCompile Include="ProxyController.cpp" />
     <ClCompile Include="ProxyProfileStore.cpp" />
     <ClCompile Include="PackagedAppSupport.cpp" />
+    <ClCompile Include="InstalledApplications.cpp" />
+    <ClCompile Include="ApplicationPicker.cpp" />
+    <ClCompile Include="ApplicationCatalogCache.cpp" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
@@ -292,6 +295,11 @@
     <ClInclude Include="ProxyController.h" />
     <ClInclude Include="ProxyProfileStore.h" />
     <ClInclude Include="PackagedAppSupport.h" />
+    <ClInclude Include="InstalledApplications.h" />
+    <ClInclude Include="ApplicationPicker.h" />
+    <ClInclude Include="ApplicationCatalogCache.h" />
+    <ClInclude Include="ProcessActions.h" />
+    <ClInclude Include="ScopedProcessSuspension.h" />
     <ClInclude Include="Resource.h" />
     <ClInclude Include="stdafx.h" />
   </ItemGroup>

@@ -12,6 +12,9 @@ int DnsAddressFamilyPolicyTestsMain();
 int DnsNamePolicyTestsMain();
 int DnsQueryPolicyTestsMain();
 int DeferredMitigationPolicyTestsMain();
+int AppContainerPipeAccessTestsMain();
+int ProcessActionsTestsMain();
+int ScopedProcessSuspensionTestsMain();
 
 int main()
 {
@@ -38,6 +41,12 @@ int main()
 	if (DnsQueryPolicyTestsMain() != 0)
 		return 1;
 	if (DeferredMitigationPolicyTestsMain() != 0)
+		return 1;
+	if (AppContainerPipeAccessTestsMain() != 0)
+		return 1;
+	if (ProcessActionsTestsMain() != 0)
+		return 1;
+	if (ScopedProcessSuspensionTestsMain() != 0)
 		return 1;
 	std::cout << "ProxyLane tests passed" << std::endl;
 	return 0;

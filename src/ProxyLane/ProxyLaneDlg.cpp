@@ -310,7 +310,7 @@ class CProxyLaneFileDropTarget : public COleDropTarget
 {
 public:
 	explicit CProxyLaneFileDropTarget(CProxyLaneDlg* owner)
-		: m_owner(owner)
+		: m_owner(owner), m_shellIdListFormat(static_cast<CLIPFORMAT>(RegisterClipboardFormat(CFSTR_SHELLIDLIST)))
 	{
 	}
 
@@ -329,7 +329,7 @@ public:
 		DWORD,
 		CPoint point)
 	{
-		if (!m_owner || !dataObject || !dataObject->IsDataAvailable(CF_HDROP))
+		if (!Supports(dataObject))
 			return DROPEFFECT_NONE;
 
 		m_owner->BeginFileDrag();
@@ -357,7 +357,7 @@ public:
 		DROPEFFECT,
 		CPoint point)
 	{
-		if (!m_owner || !dataObject || !dataObject->IsDataAvailable(CF_HDROP))
+		if (!Supports(dataObject))
 			return FALSE;
 
 		CPoint ownerPoint(point);
@@ -372,24 +372,40 @@ public:
 			: APP_LAUNCH_ELEVATION_AUTO;
 
 		STGMEDIUM medium = { 0 };
-		FORMATETC format = { CF_HDROP, NULL, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
-		if (!dataObject->GetData(CF_HDROP, &medium, &format))
+		BOOL files = dataObject->IsDataAvailable(CF_HDROP);
+		CLIPFORMAT clipboardFormat = files ? CF_HDROP : m_shellIdListFormat;
+		FORMATETC format = { clipboardFormat, NULL, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+		BOOL acquired = dataObject->GetData(clipboardFormat, &medium, &format);
+		if (!acquired && files && m_shellIdListFormat && dataObject->IsDataAvailable(m_shellIdListFormat))
+		{
+			files = FALSE;
+			format.cfFormat = m_shellIdListFormat;
+			acquired = dataObject->GetData(m_shellIdListFormat, &medium, &format);
+		}
+		if (!acquired)
 		{
 			m_owner->EndFileDrag();
 			return FALSE;
 		}
 
 		m_owner->EndFileDrag();
-		const BOOL handled = medium.tymed == TYMED_HGLOBAL && medium.hGlobal
-			? m_owner->HandleDroppedFiles(
-				reinterpret_cast<HDROP>(medium.hGlobal), elevationMode)
-			: FALSE;
+		BOOL handled = FALSE;
+		if (medium.tymed == TYMED_HGLOBAL && medium.hGlobal)
+			handled = files ? m_owner->HandleDroppedFiles(
+				reinterpret_cast<HDROP>(medium.hGlobal), elevationMode) :
+				m_owner->HandleDroppedShellItems(medium.hGlobal, elevationMode);
 		ReleaseStgMedium(&medium);
 		return handled;
 	}
 
 private:
+	BOOL Supports(COleDataObject* dataObject) const
+	{
+		return m_owner && dataObject && (dataObject->IsDataAvailable(CF_HDROP) ||
+			(m_shellIdListFormat && dataObject->IsDataAvailable(m_shellIdListFormat)));
+	}
 	CProxyLaneDlg* m_owner;
+	CLIPFORMAT m_shellIdListFormat;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -703,7 +719,8 @@ LRESULT CProxyLaneDlg::OnAutomationStart(WPARAM wParam, LPARAM lParam)
 		else if (launchResult == APP_LAUNCH_UAC_CANCELLED ||
 			launchResult == APP_LAUNCH_ELEVATED_HELPER_FAILED)
 			exitCode = AUTOMATION_EXIT_CREATE_PROCESS_FAILED;
-		else if (launchResult == APP_LAUNCH_INJECTION_FAILED)
+		else if (launchResult == APP_LAUNCH_INJECTION_FAILED ||
+			launchResult == APP_LAUNCH_PACKAGED_INJECTION_FAILED)
 			exitCode = AUTOMATION_EXIT_INJECTION_FAILED;
 		FailAutomation(exitCode);
 		return 0;
@@ -804,6 +821,7 @@ LRESULT CProxyLaneDlg::OnProfileCommandRequest(WPARAM, LPARAM lParam)
 				exitCode = AUTOMATION_EXIT_TARGET_INVALID;
 				break;
 			case APP_LAUNCH_INJECTION_FAILED:
+			case APP_LAUNCH_PACKAGED_INJECTION_FAILED:
 				exitCode = AUTOMATION_EXIT_INJECTION_FAILED;
 				break;
 			default:
@@ -1228,7 +1246,6 @@ BOOL CProxyLaneDlg::HandleDroppedFiles(
 	}
 
 	const UINT fileCount = DragQueryFile(dropInfo, 0xFFFFFFFF, NULL, 0);
-	std::vector<CString> noExtraArguments;
 	for (UINT index = 0; index < fileCount; ++index)
 	{
 		const UINT pathLength = DragQueryFile(dropInfo, index, NULL, 0);
@@ -1239,38 +1256,66 @@ BOOL CProxyLaneDlg::HandleDroppedFiles(
 		if (!DragQueryFile(dropInfo, index, &pathBuffer[0], pathLength + 1))
 			continue;
 
-		CString path(&pathBuffer[0]);
-		const AppLaunchResult result = page3->LaunchAndProxyApp(
-			path, noExtraArguments, TRUE, elevationMode);
-		if (result == APP_LAUNCH_SUCCESS)
-		{
-			int slash = max(path.ReverseFind(_T('\\')), path.ReverseFind(_T('/')));
-			CString displayName = slash >= 0 ? path.Mid(slash + 1) : path;
-			CString status;
-			status = Localization::Format(
-				elevationMode == APP_LAUNCH_ELEVATION_FORCE_ADMIN
-				? _T("dialog.started_proxy_admin")
-				: _T("dialog.started_proxy"),
-				static_cast<LPCTSTR>(displayName));
-			m_MainTab.ShowTransientStatus(status, CStatusLabel::TONE_SUCCESS);
-			continue;
-		}
-
-		CString message;
-		if (result == APP_LAUNCH_INVALID_TARGET)
-			message = Localization::Get(_T("dialog.drop_invalid"));
-		else if (result == APP_LAUNCH_UAC_CANCELLED)
-			message = Localization::Get(_T("dialog.drop_uac_cancelled"));
-		else if (result == APP_LAUNCH_INJECTION_FAILED)
-			message = Localization::Get(_T("dialog.drop_inject_failed"));
-		else if (result == APP_LAUNCH_ELEVATED_HELPER_FAILED)
-			message = Localization::Get(_T("dialog.drop_elevated_failed"));
-		else
-			message = Localization::Get(_T("dialog.drop_launch_failed"));
-
-		MessageBox(message, Localization::Get(_T("dialog.drop_failed_title")), MB_OK | MB_ICONERROR);
+		InstalledApplications::Application app;
+		app.path = &pathBuffer[0];
+		const int slash = max(app.path.ReverseFind(_T('\\')), app.path.ReverseFind(_T('/')));
+		app.name = slash >= 0 ? app.path.Mid(slash + 1) : app.path;
+		LaunchDroppedApplication(app, elevationMode);
 	}
 	return fileCount > 0;
+}
+
+BOOL CProxyLaneDlg::HandleDroppedShellItems(HGLOBAL data, AppLaunchElevationMode elevationMode)
+{
+	std::vector<InstalledApplications::Application> applications;
+	if (!InstalledApplications::ResolveShellDrop(data, applications))
+	{
+		MessageBox(Localization::Get(_T("dialog.drop_invalid")),
+			Localization::Get(_T("dialog.drop_failed_title")), MB_OK | MB_ICONERROR);
+		return TRUE;
+	}
+	for (size_t index = 0; index < applications.size(); ++index)
+		LaunchDroppedApplication(applications[index], elevationMode);
+	return !applications.empty();
+}
+
+void CProxyLaneDlg::LaunchDroppedApplication(const InstalledApplications::Application& app,
+	AppLaunchElevationMode elevationMode)
+{
+	CPage1* page1 = m_MainTab.GetPage1();
+	CPage3* page3 = m_MainTab.GetPage3();
+	if (!page1 || !page3 || !page1->IsProxyRunning())
+	{
+		m_MainTab.ShowTransientStatus(Localization::Get(_T("dialog.unsaved_drop")), CStatusLabel::TONE_INFO);
+		return;
+	}
+	std::vector<CString> noExtraArguments;
+	const AppLaunchResult result = app.IsPackaged() ?
+		page3->LaunchPackagedAppById(app.aumid, app.arguments) :
+		page3->LaunchAndProxyApp(app.path, noExtraArguments, TRUE, elevationMode,
+			app.arguments, app.workingDirectory);
+	if (result == APP_LAUNCH_SUCCESS)
+	{
+		m_MainTab.ShowTransientStatus(Localization::Format(
+			!app.IsPackaged() && elevationMode == APP_LAUNCH_ELEVATION_FORCE_ADMIN ?
+			_T("dialog.started_proxy_admin") : _T("dialog.started_proxy"),
+			static_cast<LPCTSTR>(app.name)), CStatusLabel::TONE_SUCCESS);
+		return;
+	}
+	CString message;
+	if (result == APP_LAUNCH_INVALID_TARGET)
+		message = Localization::Get(_T("dialog.drop_invalid"));
+	else if (result == APP_LAUNCH_UAC_CANCELLED)
+		message = Localization::Get(_T("dialog.drop_uac_cancelled"));
+	else if (result == APP_LAUNCH_INJECTION_FAILED)
+		message = Localization::Get(_T("dialog.drop_inject_failed"));
+	else if (result == APP_LAUNCH_PACKAGED_INJECTION_FAILED)
+		message = Localization::Get(_T("apps.packaged_injection_failed"));
+	else if (result == APP_LAUNCH_ELEVATED_HELPER_FAILED)
+		message = Localization::Get(_T("dialog.drop_elevated_failed"));
+	else
+		message = Localization::Get(_T("dialog.drop_launch_failed"));
+	MessageBox(message, Localization::Get(_T("dialog.drop_failed_title")), MB_OK | MB_ICONERROR);
 }
 
 

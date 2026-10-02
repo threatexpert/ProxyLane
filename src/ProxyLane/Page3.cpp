@@ -11,6 +11,9 @@
 #include "..\ProxyLaneHook\token.h"
 #include "..\ProxyLaneHook\ElevatedLaunchProtocol.h"
 #include "PackagedAppSupport.h"
+#include "ApplicationPicker.h"
+#include "ProcessActions.h"
+#include "ScopedProcessSuspension.h"
 
 #include "..\ProxyLaneHook\ProxyModule.h"
 
@@ -576,6 +579,17 @@ BOOL InjectDll2(HANDLE hProc, DWORD dwPid, DWORD dwTid, LPCSTR lpszPipeName)
 
 BOOL InjectDll(HANDLE hProc, DWORD dwPid, DWORD dwTid, LPCSTR lpszPipeName)
 {
+	IProxyReceptionCentre *prc = g_GlobalProxy ? g_GlobalProxy->GetPRCInstance() : NULL;
+	if (!prc || !prc->AuthorizeProcessPipeAccess(hProc))
+	{
+		const DWORD error = prc ? GetLastError() : ERROR_PIPE_NOT_CONNECTED;
+		CString text;
+		text.Format(_T("Failed to authorize PRC pipe access: PID %lu, error %lu.\r\n"),
+			dwPid, error);
+		if (g_GlobalProxy) g_GlobalProxy->GetLogInstance()->LogText(text);
+		SetLastError(error);
+		return FALSE;
+	}
 #ifdef _WIN64
 	if (is64Process(hProc))
 		return AttachToI(dwPid, dwTid, lpszPipeName) == 0xFF01;
@@ -786,6 +800,10 @@ CPage3::CPage3(CWnd* pParent /*=NULL*/)
 	, m_sortState(PROCESS_SORT_NONE)
 	, m_processNameSearchTick(0)
 	, m_finderTargetWindow(NULL)
+	, m_terminating(FALSE)
+	, m_launchedProcessId(0)
+	, m_launchedProcessTime(0)
+	, m_launchSelectionTick(0)
 {
 	//m_pEdit = NULL;
 	//m_pEdit = new CMyEdit;
@@ -805,6 +823,8 @@ void CPage3::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_WINDOW_FINDER, m_btnWindowFinder);
 	DDX_Control(pDX, IDC_REFRESH, m_btnRefresh);
 	DDX_Control(pDX, IDC_INJECTDLL, m_btnInject);
+	DDX_Control(pDX, IDC_SELECT_APP, m_btnSelectApp);
+	DDX_Control(pDX, IDC_TERMINATE_PROCESS, m_btnTerminate);
 
 	//DDX_Control(pDX, IDC_CHECK1, m_btnAuto);
 }
@@ -816,7 +836,10 @@ BOOL CPage3::OnInitDialog()
 	m_ListCtrl.DragAcceptFiles(FALSE);
 	m_btnWindowFinder.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	m_btnRefresh.SetVisualStyle(CModernButton::STYLE_SECONDARY);
-	m_btnInject.SetVisualStyle(CModernButton::STYLE_PRIMARY);
+	m_btnSelectApp.SetVisualStyle(CModernButton::STYLE_PRIMARY);
+	m_btnInject.SetVisualStyle(CModernButton::STYLE_SECONDARY);
+	m_btnTerminate.SetVisualStyle(CModernButton::STYLE_DANGER);
+	m_btnTerminate.EnableWindow(FALSE);
 	RestoreProcessPageSubtitle();
 	if (m_windowFinderToolTip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX))
 	{
@@ -870,6 +893,10 @@ BOOL CPage3::OnInitDialog()
 		m_rcHintInit = rc;
 	}
 
+	// Do not call a message handler directly from WM_INITDIALOG: MFC's
+	// OnSize base implementation calls Default() for the *current* message,
+	// which would dispatch WM_INITDIALOG again and recurse until stack overflow.
+	LayoutProcessPage();
 	return TRUE;
 }
 
@@ -877,8 +904,12 @@ static AppLaunchResult LaunchElevatedAndProxy(
 	HWND ownerWindow,
 	LPCTSTR targetPath,
 	LPCTSTR commandLine,
-	LPCTSTR workingDirectory)
+	LPCTSTR workingDirectory,
+	DWORD& launchedPid,
+	ULONGLONG& launchedTime)
 {
+	launchedPid = 0;
+	launchedTime = 0;
 	if (!targetPath || !commandLine ||
 		_tcslen(targetPath) >= PROXYLANE_ELEVATED_TARGET_CCH ||
 		_tcslen(commandLine) >= PROXYLANE_ELEVATED_COMMAND_CCH ||
@@ -1041,6 +1072,25 @@ static AppLaunchResult LaunchElevatedAndProxy(
 	DWORD helperExitCode = PROXYLANE_ELEVATED_INTERNAL_ERROR;
 	const BOOL gotExitCode = waitResult == WAIT_OBJECT_0 &&
 		GetExitCodeProcess(shellInfo.hProcess, &helperExitCode);
+	if (gotExitCode && helperExitCode == PROXYLANE_ELEVATED_SUCCESS)
+	{
+		// Keep the helper handle alive while matching its immediate child.
+		// A process name alone is not a safe launch identity.
+		const DWORD helperPid = GetProcessId(shellInfo.hProcess);
+		const ULONGLONG helperTime = ProcessActions::CreationTime(shellInfo.hProcess);
+		list<_myPROCESSINFO> processes;
+		GetProcessList(processes);
+		for (list<_myPROCESSINFO>::const_iterator it = processes.begin(); it != processes.end(); ++it)
+		{
+			if (helperPid && helperTime && it->parentPid == helperPid && it->hasStartTime &&
+				it->startTimeValue >= helperTime && _tcsicmp(it->propath, targetPath) == 0)
+			{
+				launchedPid = it->pid;
+				launchedTime = it->startTimeValue;
+				break;
+			}
+		}
+	}
 	CloseHandle(shellInfo.hProcess);
 	if (!gotExitCode)
 		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
@@ -1071,6 +1121,9 @@ BOOL CPage3::PreTranslateMessage(MSG* message)
 
 	if (!message || !m_ListCtrl.GetSafeHwnd() || message->hwnd != m_ListCtrl.m_hWnd)
 		return CModernDialog::PreTranslateMessage(message);
+	if (message->message == WM_LBUTTONDOWN || message->message == WM_RBUTTONDOWN ||
+		message->message == WM_MBUTTONDOWN || message->message == WM_KEYDOWN)
+		CancelLaunchSelection();
 
 	if (message->message == WM_LBUTTONDOWN
 		|| message->message == WM_RBUTTONDOWN
@@ -1160,6 +1213,9 @@ BEGIN_MESSAGE_MAP(CPage3, CModernDialog)
 	ON_WM_SIZE()
 	ON_BN_CLICKED(IDC_REFRESH, &CPage3::OnBnClickedRefresh)
 	ON_BN_CLICKED(IDC_INJECTDLL, &CPage3::OnBnClickedInjectdll)
+	ON_BN_CLICKED(IDC_SELECT_APP, &CPage3::OnBnClickedSelectApp)
+	ON_BN_CLICKED(IDC_TERMINATE_PROCESS, &CPage3::OnBnClickedTerminateProcess)
+	ON_NOTIFY(LVN_ITEMCHANGED, IDC_PSLIST, &CPage3::OnProcessSelectionChanged)
 	ON_NOTIFY(LVN_COLUMNCLICK, IDC_PSLIST, &CPage3::OnLvnColumnClickProcessList)
 	ON_NOTIFY(NM_CUSTOMDRAW, IDC_PSLIST, &CPage3::OnNMCustomdrawProcessList)
 	ON_MESSAGE(WM_WINDOW_FINDER_BEGIN, &CPage3::OnWindowFinderBegin)
@@ -1175,51 +1231,209 @@ END_MESSAGE_MAP()
 void CPage3::OnSize(UINT nType, int cx, int cy)
 {
 	CModernDialog::OnSize(nType, cx, cy);
+	LayoutProcessPage();
+}
+
+void CPage3::LayoutProcessPage()
+{
+	if (!GetSafeHwnd()) return;
+	LayoutPageHeader();
 	CRect rcClient;
 	GetClientRect(&rcClient);
 	if (rcClient.Width() <= 0 || rcClient.Height() <= 0)
 		return;
-
-	if (m_ListCtrl.GetSafeHwnd())
-	{
-		int margin = UiTheme::ScaleForWindow(m_hWnd, 8);
-		int top = UiTheme::ScaleForWindow(m_hWnd, 58);
-		int bottom = UiTheme::ScaleForWindow(m_hWnd, 8);
-		CRect rc(margin, top, rcClient.right - margin, rcClient.bottom - bottom);
-		m_ListCtrl.MoveWindow(&rc);
-		int pathWidth = rc.Width() - UiTheme::ScaleForWindow(m_hWnd, 445);
-		if (pathWidth > UiTheme::ScaleForWindow(m_hWnd, 140))
-			m_ListCtrl.SetColumnWidth(3, pathWidth);
-	}
 
 	int margin = UiTheme::ScaleForWindow(m_hWnd, 8);
 	int gap = UiTheme::ScaleForWindow(m_hWnd, 6);
 	int finderWidth = UiTheme::ScaleForWindow(m_hWnd, 30);
 	int refreshWidth = UiTheme::ScaleForWindow(m_hWnd, 70);
 	int injectWidth = UiTheme::ScaleForWindow(m_hWnd, 96);
+	if (m_btnInject.GetSafeHwnd())
+	{
+		CString buttonText;
+		m_btnInject.GetWindowText(buttonText);
+		CClientDC buttonDC(&m_btnInject);
+		CFont* buttonFont = m_btnInject.GetFont();
+		CFont* oldFont = buttonFont ? buttonDC.SelectObject(buttonFont) : NULL;
+		injectWidth = max(injectWidth, buttonDC.GetTextExtent(buttonText).cx
+			+ UiTheme::ScaleForWindow(m_hWnd, 28));
+		if (oldFont)
+			buttonDC.SelectObject(oldFont);
+	}
 	int buttonHeight = UiTheme::ScaleForWindow(m_hWnd, 30);
+	int selectWidth = UiTheme::ScaleForWindow(m_hWnd, 120);
+	if (m_btnSelectApp.GetSafeHwnd())
+	{
+		CString text;
+		m_btnSelectApp.GetWindowText(text);
+		CClientDC dc(&m_btnSelectApp);
+		CFont* font = m_btnSelectApp.GetFont();
+		CFont* oldFont = font ? dc.SelectObject(font) : NULL;
+		selectWidth = max(selectWidth, dc.GetTextExtent(text).cx
+			+ UiTheme::ScaleForWindow(m_hWnd, 28));
+		if (oldFont) dc.SelectObject(oldFont);
+	}
 	int buttonTop = UiTheme::ScaleForWindow(m_hWnd, 8);
-	const int toolbarLeft = rcClient.right - margin - injectWidth - gap
-		- refreshWidth - gap - finderWidth;
+	int terminateWidth = UiTheme::ScaleForWindow(m_hWnd, 90);
+	if (m_btnTerminate.GetSafeHwnd())
+	{
+		CString text;
+		m_btnTerminate.GetWindowText(text);
+		CClientDC dc(&m_btnTerminate);
+		CFont* font = m_btnTerminate.GetFont();
+		CFont* oldFont = font ? dc.SelectObject(font) : NULL;
+		terminateWidth = max(terminateWidth, dc.GetTextExtent(text).cx
+			+ UiTheme::ScaleForWindow(m_hWnd, 28));
+		if (oldFont) dc.SelectObject(oldFont);
+	}
+	const int toolbarWidth = selectWidth + finderWidth + refreshWidth + injectWidth + terminateWidth + gap * 4;
+	int toolbarLeft = rcClient.right - margin - toolbarWidth;
+	int listTop = UiTheme::ScaleForWindow(m_hWnd, 58);
+	const BOOL separateRow = toolbarLeft < UiTheme::ScaleForWindow(m_hWnd, 160);
+	if (separateRow)
+	{
+		buttonTop = listTop;
+		toolbarLeft = margin;
+		listTop += buttonHeight + margin;
+	}
 	if (CWnd* title = GetDlgItem(IDC_STATIC_PAGE_TITLE))
 	{
 		CRect titleRect;
 		title->GetWindowRect(&titleRect);
 		ScreenToClient(&titleRect);
 		title->MoveWindow(titleRect.left, titleRect.top,
-			max(0, toolbarLeft - gap - titleRect.left), titleRect.Height());
+			max(0, (separateRow ? rcClient.right - margin : toolbarLeft - gap) - titleRect.left),
+			titleRect.Height());
 	}
-	if (m_btnInject.GetSafeHwnd())
-		m_btnInject.MoveWindow(rcClient.right - margin - injectWidth, buttonTop, injectWidth, buttonHeight);
-	if (m_btnRefresh.GetSafeHwnd())
-		m_btnRefresh.MoveWindow(rcClient.right - margin - injectWidth - gap - refreshWidth,
-			buttonTop, refreshWidth, buttonHeight);
-	if (m_btnWindowFinder.GetSafeHwnd())
-		m_btnWindowFinder.MoveWindow(
-			rcClient.right - margin - injectWidth - gap - refreshWidth - gap - finderWidth,
-			buttonTop,
-			finderWidth,
-			buttonHeight);
+	CWnd* buttons[] = { &m_btnSelectApp, &m_btnWindowFinder, &m_btnRefresh, &m_btnInject, &m_btnTerminate };
+	const int widths[] = { selectWidth, finderWidth, refreshWidth, injectWidth, terminateWidth };
+	int left = toolbarLeft;
+	for (int i = 0; i < _countof(buttons); ++i)
+	{
+		if (separateRow && left > margin && left + widths[i] > rcClient.right - margin)
+		{
+			left = margin;
+			buttonTop += buttonHeight + gap;
+			listTop = buttonTop + buttonHeight + margin;
+		}
+		if (buttons[i]->GetSafeHwnd()) buttons[i]->MoveWindow(left, buttonTop, widths[i], buttonHeight);
+		left += widths[i] + gap;
+	}
+	if (m_ListCtrl.GetSafeHwnd())
+	{
+		CRect rc(margin, listTop, rcClient.right - margin, max(listTop, rcClient.bottom - margin));
+		m_ListCtrl.MoveWindow(&rc);
+		int pathWidth = rc.Width() - UiTheme::ScaleForWindow(m_hWnd, 445);
+		if (pathWidth > UiTheme::ScaleForWindow(m_hWnd, 140)) m_ListCtrl.SetColumnWidth(3, pathWidth);
+	}
+}
+
+void CPage3::OnProcessSelectionChanged(NMHDR*, LRESULT* result)
+{
+	if (m_btnTerminate.GetSafeHwnd())
+		m_btnTerminate.EnableWindow(!m_terminating && m_ListCtrl.GetSelectedCount() > 0);
+	*result = 0;
+}
+
+void CPage3::OnBnClickedTerminateProcess()
+{
+	if (m_terminating) return;
+	CancelLaunchSelection();
+	struct Target { DWORD pid; CString name; HANDLE handle; DWORD error; };
+	std::vector<Target> targets;
+	struct Cleanup
+	{
+		std::vector<Target>& targets;
+		BOOL& busy;
+		CWnd& button;
+		CListCtrl& list;
+		Cleanup(std::vector<Target>& t, BOOL& b, CWnd& c, CListCtrl& l)
+			: targets(t), busy(b), button(c), list(l) { busy = TRUE; button.EnableWindow(FALSE); }
+		~Cleanup() { for (size_t i = 0; i < targets.size(); ++i)
+			if (targets[i].handle) CloseHandle(targets[i].handle);
+			busy = FALSE; button.EnableWindow(list.GetSelectedCount() > 0); }
+	} cleanup(targets, m_terminating, m_btnTerminate, m_ListCtrl);
+	POSITION position = m_ListCtrl.GetFirstSelectedItemPosition();
+	while (position)
+	{
+		const int item = m_ListCtrl.GetNextSelectedItem(position);
+		const DWORD pid = static_cast<DWORD>(m_ListCtrl.GetItemData(item));
+		std::map<DWORD, _myPROCESSINFO>::const_iterator it = m_processSortData.find(pid);
+		if (it == m_processSortData.end()) continue;
+		Target target = { pid, CString(it->second.proname), NULL, ERROR_SUCCESS };
+		targets.push_back(target);
+		Target& stored = targets.back();
+		stored.handle = ProcessActions::OpenForTermination(pid,
+			it->second.hasStartTime ? it->second.startTimeValue : 0);
+		if (!stored.handle) stored.error = GetLastError();
+	}
+	if (targets.empty()) return;
+	CString names;
+	for (size_t i = 0; i < targets.size() && i < 10; ++i)
+	{
+		CString line;
+		line.Format(_T("%s (PID %lu)\r\n"), static_cast<LPCTSTR>(targets[i].name), targets[i].pid);
+		names += line;
+	}
+	if (targets.size() > 10) names += _T("...\r\n");
+	if (MessageBox(Localization::Format(_T("page3.end_confirm"),
+		static_cast<int>(targets.size()), static_cast<LPCTSTR>(names)),
+		Localization::Get(_T("action.end_process")), MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING) != IDYES)
+		return;
+	int succeeded = 0, failed = 0;
+	CString errors;
+	for (size_t i = 0; i < targets.size(); ++i)
+	{
+		Target& target = targets[i];
+		if (target.handle)
+		{
+			if (WaitForSingleObject(target.handle, 0) == WAIT_OBJECT_0 || TerminateProcess(target.handle, 1))
+			{ ++succeeded; continue; }
+			target.error = GetLastError();
+		}
+		++failed;
+		if (failed <= 10) errors += Localization::Format(_T("page3.end_error"),
+			static_cast<LPCTSTR>(target.name), target.pid, target.error);
+	}
+	CString summary = Localization::Format(_T("page3.end_summary"), succeeded, failed);
+	if (failed) MessageBox(summary + _T("\r\n\r\n") + errors,
+		Localization::Get(_T("action.end_process")), MB_OK | MB_ICONWARNING);
+	else if (g_MainTab) g_MainTab->ShowTransientStatus(summary, CStatusLabel::TONE_SUCCESS);
+	UpdatePslist(FALSE);
+}
+
+void CPage3::OnBnClickedSelectApp()
+{
+	if (!g_MainTab || !g_MainTab->IsProxyRunning())
+	{
+		MessageBox(Localization::Get(_T("page3.start_proxy_first")),
+			Localization::Get(_T("apps.title")), MB_OK | MB_ICONINFORMATION);
+		return;
+	}
+	CApplicationPicker picker(this);
+	if (picker.DoModal() != IDOK) return;
+	const InstalledApplications::Application& app = picker.m_selectedApplication;
+	std::vector<CString> arguments;
+	const AppLaunchResult result = app.IsPackaged() ?
+		LaunchPackagedAppById(app.aumid, app.arguments) :
+		LaunchAndProxyApp(app.path, arguments, TRUE, APP_LAUNCH_ELEVATION_AUTO,
+			app.arguments, app.workingDirectory);
+	if (result == APP_LAUNCH_SUCCESS)
+	{
+		g_MainTab->ShowTransientStatus(Localization::Format(_T("dialog.started_proxy"),
+			static_cast<LPCTSTR>(app.name)), CStatusLabel::TONE_SUCCESS);
+		return;
+	}
+	LPCTSTR messageKey = _T("dialog.drop_launch_failed");
+	if (result == APP_LAUNCH_INVALID_TARGET) messageKey = _T("dialog.drop_invalid");
+	else if (result == APP_LAUNCH_UAC_CANCELLED) messageKey = _T("dialog.drop_uac_cancelled");
+	else if (result == APP_LAUNCH_ELEVATED_HELPER_FAILED) messageKey = _T("dialog.drop_elevated_failed");
+	else if (result == APP_LAUNCH_INJECTION_FAILED)
+		messageKey = _T("dialog.drop_inject_failed");
+	else if (result == APP_LAUNCH_PACKAGED_INJECTION_FAILED)
+		messageKey = _T("apps.packaged_injection_failed");
+	MessageBox(Localization::Get(messageKey), Localization::Get(_T("dialog.drop_failed_title")),
+		MB_OK | MB_ICONERROR);
 }
 
 static BOOL ResolveWindowFinderTarget(
@@ -1283,6 +1497,52 @@ BOOL CPage3::SelectProcessByPid(DWORD processId)
 	if (processId)
 		processIds.push_back(processId);
 	return SelectProcessesByPid(processIds);
+}
+
+void CPage3::CancelLaunchSelection()
+{
+	KillTimer(TIMER_LAUNCHED_PROCESS);
+	m_launchedProcessId = 0;
+	m_launchedProcessTime = 0;
+}
+
+BOOL CPage3::TrySelectLaunchedProcess()
+{
+	if (!IsWindowVisible() || !m_ListCtrl.IsWindowVisible())
+	{
+		CancelLaunchSelection();
+		return FALSE;
+	}
+	std::map<DWORD, _myPROCESSINFO>::const_iterator process =
+		m_processSortData.find(m_launchedProcessId);
+	if (process == m_processSortData.end() || !process->second.hasStartTime ||
+		process->second.startTimeValue != m_launchedProcessTime) return FALSE;
+	const DWORD pid = m_launchedProcessId;
+	CancelLaunchSelection();
+	return SelectProcessByPid(pid);
+}
+
+void CPage3::RefreshLaunchedProcess(DWORD pid, HANDLE process, ULONGLONG creationTime)
+{
+	CancelLaunchSelection();
+	// Launching from another page or a background instance must not switch
+	// pages, enumerate hidden processes, or schedule a later forced selection.
+	if (!IsWindowVisible() || !m_ListCtrl.IsWindowVisible()) return;
+	HANDLE queried = NULL;
+	if (pid && !process && !creationTime)
+	{
+		queried = OpenProcess(0x1000, FALSE, pid);
+		if (!queried) queried = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid);
+		process = queried;
+	}
+	if (!creationTime && process) creationTime = ProcessActions::CreationTime(process);
+	if (queried) CloseHandle(queried);
+	m_launchedProcessId = pid;
+	m_launchedProcessTime = creationTime;
+	m_launchSelectionTick = GetTickCount();
+	UpdatePslist(FALSE);
+	if (!pid || !creationTime || TrySelectLaunchedProcess()) CancelLaunchSelection();
+	else SetTimer(TIMER_LAUNCHED_PROCESS, 150, NULL);
 }
 
 BOOL CPage3::SelectProcessesByPid(const std::vector<DWORD>& processIds)
@@ -2196,8 +2456,20 @@ void CPage3::OnTimer(UINT_PTR nIDEvent)
 		{
 			// Hidden pages and a hidden top-level window still receive WM_TIMER.
 			// Avoid enumerating every process while the list cannot be seen.
-			if (IsWindowVisible() && !m_btnWindowFinder.IsTracking())
+			if (IsWindowVisible() && !m_btnWindowFinder.IsTracking() && !m_terminating)
 				UpdatePslist(FALSE);
+		}
+		break;
+	case TIMER_LAUNCHED_PROCESS:
+		if (!IsWindowVisible() || !m_ListCtrl.IsWindowVisible())
+		{
+			CancelLaunchSelection();
+			break;
+		}
+		if (!m_terminating && m_launchedProcessId)
+		{
+			if (GetTickCount() - m_launchSelectionTick >= 2000) CancelLaunchSelection();
+			else { UpdatePslist(FALSE); TrySelectLaunchedProcess(); }
 		}
 		break;
 	}
@@ -2316,108 +2588,6 @@ void CPage3::LogText(LPCWSTR lpText)
 {
 }
 
-// GetLinkInfo() fills the filename and path buffer
-// with relevant information.
-// hWnd         - calling application's window handle.
-//
-// lpszLinkName - name of the link file passed into the function.
-//
-// lpszPath     - the buffer that receives the file's path name.
-//
-// lpszDescription - the buffer that receives the file's
-// description.
-HRESULT
-GetLinkInfo( HWND    hWnd,
-			LPCTSTR lpszLinkName,
-			LPTSTR   lpszPath,
-			LPTSTR   lpszDir,
-			LPTSTR   lpszArgs,
-			int ccArgs)
-{
-
-	HRESULT hres;
-	IShellLink *pShLink;
-	WIN32_FIND_DATA wfd;
-
-	// Initialize the return parameters to null strings.
-	*lpszPath = '\0';
-	//*lpszDescription = '\0';
-
-	// Call CoCreateInstance to obtain the IShellLink
-	// Interface pointer. This call fails if
-	// CoInitialize is not called, so it is assumed that
-	// CoInitialize has been called.
-	hres = CoCreateInstance( CLSID_ShellLink,
-		NULL,
-		CLSCTX_INPROC_SERVER,
-		IID_IShellLink,
-		(LPVOID *)&pShLink );
-
-	if (SUCCEEDED(hres))
-	{
-		IPersistFile *ppf;
-
-		// The IShellLink Interface supports the IPersistFile
-		// interface. Get an interface pointer to it.
-		hres = pShLink->QueryInterface(IID_IPersistFile,
-			(LPVOID *)&ppf );
-		if (SUCCEEDED(hres))
-		{
-#ifdef _UNICODE
-			// Load the file.
-			hres = ppf->Load(lpszLinkName, STGM_READ);
-#else
-			WCHAR wsz[MAX_PATH];
-
-			// Convert the given link name string to a wide character string.
-			MultiByteToWideChar(CP_ACP, 0,
-				lpszLinkName,
-				-1, wsz, MAX_PATH);
-			// Load the file.
-			hres = ppf->Load(wsz, STGM_READ);
-#endif
-			if (SUCCEEDED(hres))
-			{
-				// Resolve the link by calling the Resolve() interface function.
-				// This enables us to find the file the link points to even if
-				// it has been moved or renamed.
-				hres = pShLink->Resolve(hWnd,
-					SLR_ANY_MATCH | SLR_NO_UI);
-				if (SUCCEEDED(hres))
-				{
-					// Get the path of the file the link points to.
-					hres = pShLink->GetPath( lpszPath,
-						MAX_PATH,
-						&wfd,
-						0 );
-
-					if (lpszDir)
-					{
-						pShLink->GetWorkingDirectory(lpszDir, MAX_PATH);
-					}
-
-					if (lpszArgs)
-					{
-						pShLink->GetArguments(lpszArgs, ccArgs);
-					}
-
-					// Only get the description if we successfully got the path
-					// (We can't return immediately because we need to release ppf &
-					//  pShLink.)
-// 					if(SUCCEEDED(hres))
-// 					{
-// 						// Get the description of the link.
-// 						hres = pShLink->GetDescription(lpszDescription,
-// 							MAX_PATH );
-// 					}
-				}
-			}
-			ppf->Release();
-		}
-		pShLink->Release();
-	}
-	return hres;
-}
 
 BOOL IsLnk(LPCTSTR pFileName)
 {
@@ -2463,7 +2633,9 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 	LPCTSTR fileName,
 	const std::vector<CString>& extraArguments,
 	BOOL strictInjection,
-	AppLaunchElevationMode elevationMode)
+	AppLaunchElevationMode elevationMode,
+	const CString& initialArguments,
+	const CString& initialWorkingDirectory)
 {
 	if (!fileName || !fileName[0])
 		return APP_LAUNCH_INVALID_TARGET;
@@ -2476,34 +2648,48 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 
 	HookNewProcessInfo hnpi = {0};
 	TCHAR szTargetPath[MAX_PATH+1024];
-	TCHAR szArgs[1024];
+	CString launchArguments = initialArguments;
 	TCHAR szBaseDir[MAX_PATH] = _T("\0");
 	PVOID WowRedirOldValue = NULL;
 
 	ZeroMemory(szTargetPath, sizeof(szTargetPath));
-	ZeroMemory(szArgs, sizeof(szArgs));
+	if (initialWorkingDirectory.GetLength() >= _countof(szBaseDir))
+		return APP_LAUNCH_INVALID_TARGET;
+	_tcscpy(szBaseDir, initialWorkingDirectory);
 
 	myWow64DisableWow64FsRedirection(&WowRedirOldValue);
 
 	if (IsLnk(fileName))
 	{
-		TCHAR szTmp[MAX_PATH] = _T("\0");
-		if (FAILED(GetLinkInfo(
-			*this,
-			fileName,
-			szTargetPath,
-			szTmp,
-			szArgs,
-			_countof(szArgs))))
+		InstalledApplications::Application shortcut;
+		if (!InstalledApplications::ResolveShortcut(fileName, shortcut))
 		{
 			myWow64RevertWow64FsRedirection(WowRedirOldValue);
 			return APP_LAUNCH_INVALID_TARGET;
 		}
-		ExpandEnvironmentStrings(szTmp, szBaseDir, MAX_PATH);
+		launchArguments = shortcut.arguments;
+		if (shortcut.IsPackaged())
+		{
+			for (size_t i = 0; i < extraArguments.size(); ++i)
+			{
+				if (!launchArguments.IsEmpty()) launchArguments += _T(" ");
+				launchArguments += QuoteCommandLineArgument(extraArguments[i]);
+			}
+			myWow64RevertWow64FsRedirection(WowRedirOldValue);
+			return LaunchPackagedAppById(shortcut.aumid, launchArguments);
+		}
+		if (shortcut.path.GetLength() >= _countof(szTargetPath) ||
+			shortcut.workingDirectory.GetLength() >= _countof(szBaseDir))
+		{
+			myWow64RevertWow64FsRedirection(WowRedirOldValue);
+			return APP_LAUNCH_INVALID_TARGET;
+		}
+		_tcscpy(szTargetPath, shortcut.path);
+		_tcscpy(szBaseDir, shortcut.workingDirectory);
 	}else
 	{
 		_tcsncpy(szTargetPath, fileName, _countof(szTargetPath) - 1);
-		GetAppFolderPath(szTargetPath, szBaseDir);
+		if (!szBaseDir[0]) GetAppFolderPath(szTargetPath, szBaseDir);
 	}
 
 	DWORD targetAttributes = GetFileAttributes(szTargetPath);
@@ -2518,11 +2704,16 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 	CString manifestDir;
 	if (PackagedAppSupport::IsPackagedAppPath(szTargetPath, manifestDir))
 	{
-		AppLaunchResult pkgResult = LaunchPackagedAppAndProxy(szTargetPath, manifestDir, extraArguments);
+		AppLaunchResult pkgResult = LaunchPackagedAppAndProxy(szTargetPath, manifestDir, extraArguments, launchArguments);
 		if (pkgResult == APP_LAUNCH_SUCCESS)
 		{
 			myWow64RevertWow64FsRedirection(WowRedirOldValue);
 			return APP_LAUNCH_SUCCESS;
+		}
+		if (pkgResult == APP_LAUNCH_PACKAGED_INJECTION_FAILED)
+		{
+			myWow64RevertWow64FsRedirection(WowRedirOldValue);
+			return pkgResult;
 		}
 		// 若包模式激活失败（如未向系统注册/解压目录），自动降级尝试下方常规 CreateProcess
 	}
@@ -2531,10 +2722,10 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 		GetAppFolderPath(szTargetPath, szBaseDir);
 
 	CString commandLine = QuoteCommandLineArgument(szTargetPath);
-	if (szArgs[0])
+	if (!launchArguments.IsEmpty())
 	{
 		commandLine += _T(" ");
-		commandLine += szArgs;
+		commandLine += launchArguments;
 	}
 	for (size_t i = 0; i < extraArguments.size(); ++i)
 	{
@@ -2545,11 +2736,15 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 	if (elevationMode == APP_LAUNCH_ELEVATION_FORCE_ADMIN)
 	{
 		myWow64RevertWow64FsRedirection(WowRedirOldValue);
-		return LaunchElevatedAndProxy(
+		DWORD launchedPid;
+		ULONGLONG launchedTime;
+		AppLaunchResult result = LaunchElevatedAndProxy(
 			GetSafeHwnd(),
 			szTargetPath,
 			commandLine,
-			szBaseDir[0] == 0 ? NULL : szBaseDir);
+			szBaseDir[0] == 0 ? NULL : szBaseDir, launchedPid, launchedTime);
+		if (result == APP_LAUNCH_SUCCESS) RefreshLaunchedProcess(launchedPid, NULL, launchedTime);
+		return result;
 	}
 
 	LPTSTR mutableCommandLine = commandLine.GetBuffer();
@@ -2573,11 +2768,15 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 	{
 		if (createProcessError == ERROR_ELEVATION_REQUIRED)
 		{
-			return LaunchElevatedAndProxy(
+			DWORD launchedPid;
+			ULONGLONG launchedTime;
+			AppLaunchResult result = LaunchElevatedAndProxy(
 				GetSafeHwnd(),
 				szTargetPath,
 				commandLine,
-				szBaseDir[0] == 0 ? NULL : szBaseDir);
+				szBaseDir[0] == 0 ? NULL : szBaseDir, launchedPid, launchedTime);
+			if (result == APP_LAUNCH_SUCCESS) RefreshLaunchedProcess(launchedPid, NULL, launchedTime);
+			return result;
 		}
 #ifndef APPMODEL_ERROR_NO_PACKAGE
 #define APPMODEL_ERROR_NO_PACKAGE 15700L
@@ -2590,11 +2789,14 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 				AppLaunchResult pkgResult = LaunchPackagedAppAndProxy(
 					szTargetPath,
 					fallbackManifestDir,
-					extraArguments);
+					extraArguments,
+					launchArguments);
 				if (pkgResult == APP_LAUNCH_SUCCESS)
 				{
 					return APP_LAUNCH_SUCCESS;
 				}
+				if (pkgResult == APP_LAUNCH_PACKAGED_INJECTION_FAILED)
+					return pkgResult;
 			}
 		}
 		return APP_LAUNCH_CREATE_PROCESS_FAILED;
@@ -2637,6 +2839,7 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 		return APP_LAUNCH_CREATE_PROCESS_FAILED;
 	}
 
+	RefreshLaunchedProcess(pi.dwProcessId, pi.hProcess);
 	CloseHandle(pi.hProcess);
 	CloseHandle(pi.hThread);
 	return APP_LAUNCH_SUCCESS;
@@ -2645,8 +2848,24 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 AppLaunchResult CPage3::LaunchPackagedAppAndProxy(
 	LPCTSTR fileName,
 	const CString& manifestDir,
-	const std::vector<CString>& extraArguments)
+	const std::vector<CString>& extraArguments,
+	const CString& initialArguments)
 {
+	CString aumid, packageFullName;
+	if (!PackagedAppSupport::ResolvePackagedAppAumid(fileName, manifestDir, aumid, packageFullName))
+		return APP_LAUNCH_INVALID_TARGET;
+	CString arguments = initialArguments;
+	for (size_t i = 0; i < extraArguments.size(); ++i)
+	{
+		if (!arguments.IsEmpty()) arguments += _T(" ");
+		arguments += QuoteCommandLineArgument(extraArguments[i]);
+	}
+	return LaunchPackagedAppById(aumid, arguments);
+}
+
+AppLaunchResult CPage3::LaunchPackagedAppById(LPCTSTR aumid, const CString& arguments)
+{
+	if (!aumid || !aumid[0]) return APP_LAUNCH_INVALID_TARGET;
 	TCHAR szModulePath[MAX_PATH] = { 0 };
 	if (GetModuleFileName(NULL, szModulePath, _countof(szModulePath)))
 	{
@@ -2654,20 +2873,6 @@ AppLaunchResult CPage3::LaunchPackagedAppAndProxy(
 		TCHAR szAppDir[MAX_PATH] = { 0 };
 		GetAppFolderPath(szModulePath, szAppDir);
 		PackagedAppSupport::EnsureAppContainerAccess(szAppDir);
-	}
-
-	CString aumid, packageFullName;
-	if (!PackagedAppSupport::ResolvePackagedAppAumid(fileName, manifestDir, aumid, packageFullName))
-	{
-		return APP_LAUNCH_INVALID_TARGET;
-	}
-
-	CString arguments;
-	for (size_t i = 0; i < extraArguments.size(); ++i)
-	{
-		if (!arguments.IsEmpty())
-			arguments += _T(" ");
-		arguments += QuoteCommandLineArgument(extraArguments[i]);
 	}
 
 	char szPipeName[MAX_PATH] = "\0";
@@ -2708,16 +2913,26 @@ AppLaunchResult CPage3::LaunchPackagedAppAndProxy(
 		return APP_LAUNCH_CREATE_PROCESS_FAILED;
 	}
 
-	// 尝试物理冻结挂起目标进程（免开发者模式），最大化前置可靠性
 	HANDLE hTargetProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processId);
-	BOOL processSuspended = FALSE;
-	if (hTargetProc && s_pfnNtSuspendProcess)
+	if (!hTargetProc)
 	{
-		if (s_pfnNtSuspendProcess(hTargetProc) >= 0)
-		{
-			processSuspended = TRUE;
-		}
+		RefreshLaunchedProcess(processId);
+		return APP_LAUNCH_PACKAGED_INJECTION_FAILED;
 	}
+	const ULONGLONG creationTime = ProcessActions::CreationTime(hTargetProc);
+	// Authorization must finish before freezing the app. It used to query a
+	// busy synchronous server pipe, stranding the app while the GUI waited.
+	if (!pPRC->AuthorizeProcessPipeAccess(hTargetProc))
+	{
+		const DWORD error = GetLastError();
+		CloseHandle(hTargetProc);
+		CString text;
+		text.Format(_T("Packaged app pipe authorization failed: PID %lu, error %lu.\r\n"), processId, error);
+		g_GlobalProxy->GetLogInstance()->LogText(text);
+		RefreshLaunchedProcess(processId, NULL, creationTime);
+		return APP_LAUNCH_PACKAGED_INJECTION_FAILED;
+	}
+	CScopedProcessSuspension suspension(hTargetProc, s_pfnNtSuspendProcess, s_pfnNtResumeProcess);
 
 	// 消除先发延迟：第 0 毫秒立即发起 HookProcess，仅在失败时密集快速重试（前 3 次仅等待 5ms）
 	BOOL injected = FALSE;
@@ -2733,21 +2948,21 @@ AppLaunchResult CPage3::LaunchPackagedAppAndProxy(
 		Sleep(attempt < 3 ? 5 : 15);
 	}
 
-	if (hTargetProc)
+	if (!suspension.Resume())
 	{
-		if (processSuspended && s_pfnNtResumeProcess)
-		{
-			s_pfnNtResumeProcess(hTargetProc);
-		}
-		CloseHandle(hTargetProc);
+		CString text;
+		text.Format(_T("Failed to resume packaged app: PID %lu, NTSTATUS 0x%08lX.\r\n"),
+			processId, static_cast<ULONG>(suspension.ResumeStatus()));
+		g_GlobalProxy->GetLogInstance()->LogText(text);
+		injected = FALSE;
 	}
 
+	RefreshLaunchedProcess(processId, NULL, creationTime);
 	if (!injected)
 	{
-		return APP_LAUNCH_INJECTION_FAILED;
+		return APP_LAUNCH_PACKAGED_INJECTION_FAILED;
 	}
 
-	UpdatePslist(FALSE);
 	return APP_LAUNCH_SUCCESS;
 }
 

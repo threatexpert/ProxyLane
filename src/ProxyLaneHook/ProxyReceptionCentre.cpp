@@ -736,6 +736,12 @@ BOOL CProxyReceptionCentre::GetPRCPipeName(LPSTR lpBuf, int bufsize)
 	return TRUE;
 }
 
+BOOL CProxyReceptionCentre::AuthorizeProcessPipeAccess(HANDLE targetProcess)
+{
+	if (!m_pPipeServer) { SetLastError(ERROR_PIPE_NOT_CONNECTED); return FALSE; }
+	return m_pGlobalProxy->GetPipeAccess().AuthorizeProcess(targetProcess);
+}
+
 IProxyTaskMgr* CProxyReceptionCentre::GetPTMInstance(int type)
 {
 	if(type == 0)//tcp

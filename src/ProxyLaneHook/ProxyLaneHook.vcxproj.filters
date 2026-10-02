@@ -24,6 +24,9 @@
     <ClCompile Include="GlobalProxy.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="AppContainerPipeAccess.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="ProxyLaneHook.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -117,6 +120,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="GlobalProxy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="AppContainerPipeAccess.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="HookWinsock.h">
