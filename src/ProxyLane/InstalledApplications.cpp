@@ -52,11 +52,17 @@ namespace
 		return id;
 	}
 
-	BOOL IsExecutable(const CString& path)
+	BOOL IsLaunchableTarget(const CString& path)
 	{
-		return !path.IsEmpty() && !PathIsRelative(path) &&
-			CString(PathFindExtension(path)).CompareNoCase(L".exe") == 0 &&
-			GetFileAttributes(path) != INVALID_FILE_ATTRIBUTES && !PathIsDirectory(path);
+		if (path.IsEmpty() || PathIsRelative(path)) return FALSE;
+		const CString extension(PathFindExtension(path));
+		// Keep shortcuts and Shell items consistent with direct script drops.
+		// Do not accept arbitrary documents that would require ShellExecute.
+		if (extension.CompareNoCase(L".exe") != 0 &&
+			extension.CompareNoCase(L".bat") != 0 &&
+			extension.CompareNoCase(L".cmd") != 0) return FALSE;
+		const DWORD attributes = GetFileAttributes(path);
+		return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY);
 	}
 
 	typedef std::map<CString, std::vector<size_t> > CatalogIndex;
@@ -164,7 +170,7 @@ namespace
 			return TRUE;
 		}
 		app.arguments = Property(details, child, PKEY_Link_Arguments);
-		return IsExecutable(app.path);
+		return IsLaunchableTarget(app.path);
 	}
 
 	HRESULT ReadAppsFolder(std::vector<InstalledApplications::Application>& entries,
@@ -197,7 +203,7 @@ namespace
 			app.aumid = PackagedId(id);
 			if (app.aumid.IsEmpty())
 				app.aumid = PackagedId(parsingName);
-			if (!app.name.IsEmpty() && (app.IsPackaged() || IsExecutable(app.path)))
+			if (!app.name.IsEmpty() && (app.IsPackaged() || IsLaunchableTarget(app.path)))
 			{
 				LPITEMIDLIST absolute = ILCombine(root, item);
 				SHFILEINFO info = {0};
@@ -317,7 +323,7 @@ BOOL InstalledApplications::ResolveShortcut(LPCTSTR path, Application& applicati
 		if (length && length <= _countof(expanded))
 			result.workingDirectory = expanded;
 	}
-	if (!IsExecutable(result.path))
+	if (!IsLaunchableTarget(result.path))
 	{
 		LPITEMIDLIST target = NULL;
 		CComPtr<IShellFolder> desktop;

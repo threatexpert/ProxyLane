@@ -12,6 +12,10 @@ checks cover quoted EXE paths, activation IDs, and arguments over 1024 character
 It resolves a real Claude Shell drag-and-drop data object when
 installed, and rejects malformed Shell IDList Array offsets/counts/lengths.
 The optional shortcut is checked through both .lnk and Shell-drop resolution.
+Shortcut checks accept BAT/CMD targets (including upper-case extensions and
+paths with spaces), preserving arguments and working directories. Text files,
+missing files and directories remain rejected. Temporary script fixtures are
+never executed.
 It does not launch apps or simulate a mouse drag.
 
 Build and run from the repository root (VS 2019 MSBuild):
@@ -22,7 +26,7 @@ Build and run from the repository root (VS 2019 MSBuild):
 ```
 
 Use `Platform=Win32` and `bin\Win32` to check the 32-bit build. An optional first
-argument names a Store-app shortcut to verify against the catalog, for example:
+argument names an ordinary or Store-app shortcut to resolve, for example:
 
 ```powershell
 & .\tests\tools\ApplicationCatalogProbe\bin\x64\ApplicationCatalogProbe.exe "$env:USERPROFILE\Desktop\Claude.lnk"

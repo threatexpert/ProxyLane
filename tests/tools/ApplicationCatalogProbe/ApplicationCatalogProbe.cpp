@@ -190,6 +190,62 @@ static BOOL CheckLaunchDisplay()
 	return passed;
 }
 
+static BOOL CheckShortcutFileTargets()
+{
+	WCHAR tempDir[MAX_PATH] = {0};
+	if (!GetTempPath(_countof(tempDir), tempDir)) return FALSE;
+	struct TestCase { LPCWSTR suffix; BOOL exists; BOOL directory; BOOL accepted; };
+	const TestCase cases[] = {
+		{L" target.BAT", TRUE, FALSE, TRUE},
+		{L" target.cmd", TRUE, FALSE, TRUE},
+		{L" target.txt", TRUE, FALSE, FALSE},
+		{L" missing.bat", FALSE, FALSE, FALSE},
+		{L" directory.exe", TRUE, TRUE, FALSE}
+	};
+	BOOL allPassed = TRUE;
+	for (size_t i = 0; i < _countof(cases); ++i)
+	{
+		WCHAR temporary[MAX_PATH] = {0};
+		if (!GetTempFileName(tempDir, L"PLB", 0, temporary)) return FALSE;
+		const CString target = CString(temporary) + cases[i].suffix;
+		const CString shortcut = CString(temporary) + L".lnk";
+		// These fixtures only test resolution; no script is executed.
+		const BOOL created = !cases[i].exists || (cases[i].directory ?
+			CreateDirectory(target, NULL) : CopyFile(temporary, target, TRUE));
+		CComPtr<IShellLinkW> link;
+		HRESULT hr = created ? link.CoCreateInstance(CLSID_ShellLink) : E_FAIL;
+		if (SUCCEEDED(hr)) hr = link->SetPath(target);
+		if (SUCCEEDED(hr)) hr = link->SetArguments(L"\"hello world\" --flag");
+		if (SUCCEEDED(hr)) hr = link->SetWorkingDirectory(tempDir);
+		CComQIPtr<IPersistFile> persist(link);
+		if (SUCCEEDED(hr)) hr = persist ? persist->Save(shortcut, TRUE) : E_NOINTERFACE;
+		InstalledApplications::Application resolved;
+		resolved.name = L"sentinel";
+		const BOOL accepted = SUCCEEDED(hr) && InstalledApplications::ResolveShortcut(shortcut, resolved);
+		BOOL passed = SUCCEEDED(hr) && accepted == cases[i].accepted;
+		if (accepted)
+		{
+			passed = passed && !resolved.IsPackaged() && resolved.path.CompareNoCase(target) == 0 &&
+				resolved.arguments == L"\"hello world\" --flag" && resolved.workingDirectory == tempDir;
+			std::vector<InstalledApplications::Application> dropped;
+			passed = GetShellData(shortcut, dropped) && dropped.size() == 1 &&
+				!dropped[0].IsPackaged() && dropped[0].path.CompareNoCase(target) == 0 &&
+				dropped[0].arguments == resolved.arguments && dropped[0].workingDirectory == resolved.workingDirectory && passed;
+		}
+		else passed = passed && resolved.name == L"sentinel";
+		std::wcout << L"shortcut_target" << cases[i].suffix << L"=" << (passed ? L"PASS" : L"FAIL") << L"\n";
+		allPassed = passed && allPassed;
+		DeleteFile(shortcut);
+		if (created && cases[i].exists)
+		{
+			if (cases[i].directory) RemoveDirectory(target);
+			else DeleteFile(target);
+		}
+		DeleteFile(temporary);
+	}
+	return allPassed;
+}
+
 int wmain(int argc, wchar_t** argv)
 {
 	if (!AfxWinInit(GetModuleHandle(NULL), NULL, GetCommandLine(), 0)) return 1;
@@ -240,6 +296,7 @@ int wmain(int argc, wchar_t** argv)
 	if (debugManagerCount > 1 || developerCmdCount > 1 || developerPowerShellCount > 1) ++failures;
 	if (!CheckCatalogMerge()) ++failures;
 	if (!CheckLaunchDisplay()) ++failures;
+	if (!CheckShortcutFileTargets()) ++failures;
 	if (!CheckCatalogCache()) ++failures;
 	std::wcout << L"edge_dedup=" << (defaultEdgeCount <= 1 ? L"PASS" : L"FAIL") << L"\n";
 	if (!claudeId.IsEmpty() && !CheckShellDataObject(claudeId)) ++failures;
@@ -287,15 +344,17 @@ int wmain(int argc, wchar_t** argv)
 	if (argc > 1)
 	{
 		InstalledApplications::Application resolved;
-		const BOOL passed = InstalledApplications::ResolveShortcut(argv[1], resolved) &&
-			resolved.IsPackaged() && (claudeId.IsEmpty() || resolved.aumid == claudeId);
-		std::wcout << L"packaged_shortcut=" << (passed ? L"PASS" : L"FAIL")
-			<< L" aumid=" << static_cast<LPCWSTR>(resolved.aumid) << L"\n";
+		const BOOL passed = InstalledApplications::ResolveShortcut(argv[1], resolved);
+		std::wcout << L"requested_shortcut=" << (passed ? L"PASS" : L"FAIL")
+			<< L" target=" << static_cast<LPCWSTR>(resolved.IsPackaged() ? resolved.aumid : resolved.path)
+			<< L" args=" << static_cast<LPCWSTR>(resolved.arguments)
+			<< L" cwd=" << static_cast<LPCWSTR>(resolved.workingDirectory) << L"\n";
 		if (!passed) ++failures;
 		std::vector<InstalledApplications::Application> dropped;
-		const BOOL shellPassed = GetShellData(argv[1], dropped) && dropped.size() == 1 &&
-			dropped[0].aumid == resolved.aumid;
-		std::wcout << L"packaged_shortcut_shell_idlist=" << (shellPassed ? L"PASS" : L"FAIL") << L"\n";
+		const BOOL shellPassed = passed && GetShellData(argv[1], dropped) && dropped.size() == 1 &&
+			dropped[0].aumid == resolved.aumid && dropped[0].path.CompareNoCase(resolved.path) == 0 &&
+			dropped[0].arguments == resolved.arguments && dropped[0].workingDirectory == resolved.workingDirectory;
+		std::wcout << L"requested_shortcut_shell_idlist=" << (shellPassed ? L"PASS" : L"FAIL") << L"\n";
 		if (!shellPassed) ++failures;
 	}
 	CoUninitialize();

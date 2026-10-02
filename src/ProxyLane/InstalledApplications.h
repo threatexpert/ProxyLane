@@ -40,7 +40,7 @@ namespace InstalledApplications
 	// Merge equivalent launch entries, filling absent cwd metadata rather than
 	// treating it as a different launch configuration. Retains icon ownership.
 	void Deduplicate(std::vector<Application>& applications);
-	// Ordinary targets are quoted EXE paths; packaged targets are activation IDs.
+	// Ordinary targets are quoted EXE/BAT/CMD paths; packaged targets are activation IDs.
 	CString LaunchTargetAndArguments(const Application& application);
 	BOOL ResolveShortcut(LPCTSTR path, Application& application);
 	// Accepts the Shell IDList Array used by virtual Start-menu app entries.
