@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  Join the community discussion on <a href="https://linux.do/">Linux.do</a> and <a href="https://v2ex.com/t/1242151">V2EX</a>
+  Join the community discussion on <a href="https://linux.do/t/topic/2980923">Linux.do</a> and <a href="https://v2ex.com/t/1242151">V2EX</a>
 </p>
 
 <p align="center"><a href="README.md">简体中文</a> | English</p>

@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  欢迎来 <a href="https://linux.do/">Linux.do</a>、<a href="https://v2ex.com/t/1242151">V2EX</a> 社区讨论
+  欢迎来 <a href="https://linux.do/t/topic/2980923">Linux.do</a>、<a href="https://v2ex.com/t/1242151">V2EX</a> 社区讨论
 </p>
 
 <p align="center">简体中文 | <a href="README_EN.md">English</a></p>
