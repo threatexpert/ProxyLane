@@ -1,6 +1,16 @@
-[简体中文](README.md) | [English](README_EN.md)
+<h1 align="center">ProxyLane</h1>
 
-# ProxyLane
+<p align="center">
+  <strong>Transparent per-process proxy for Windows · No TUN required · Separate proxy settings · Automatic child-process inheritance</strong>
+</p>
+
+<p align="center">
+  <a href="https://linux.do/"><img src="https://img.shields.io/badge/Community-LINUX%20DO-2563eb?logo=linux&amp;logoColor=white" alt="Linux.do community discussion"></a>&nbsp;&nbsp;<a href="https://v2ex.com/t/1242151"><img src="https://img.shields.io/badge/Community-V2EX-334155?logo=v2ex&amp;logoColor=white" alt="V2EX community discussion"></a>
+</p>
+
+<p align="center"><a href="README.md">简体中文</a> | English</p>
+
+---
 
 ProxyLane is an application-level transparent proxy for Windows. It uses process injection and network API hooks to route selected applications through a separately configured proxy without changing the system-wide proxy settings.
 

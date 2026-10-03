@@ -1,6 +1,16 @@
-[简体中文](README.md) | [English](README_EN.md)
+<h1 align="center">ProxyLane</h1>
 
-# ProxyLane
+<p align="center">
+  <strong>Windows 应用进程级透明代理 · 免 TUN · 独立代理配置 · 子进程自动继承</strong>
+</p>
+
+<p align="center">
+  <a href="https://linux.do/"><img src="https://img.shields.io/badge/Community-LINUX%20DO-2563eb?logo=linux&amp;logoColor=white" alt="Linux.do 社区讨论"></a>&nbsp;&nbsp;<a href="https://v2ex.com/t/1242151"><img src="https://img.shields.io/badge/Community-V2EX-334155?logo=v2ex&amp;logoColor=white" alt="V2EX 社区讨论"></a>
+</p>
+
+<p align="center">简体中文 | <a href="README_EN.md">English</a></p>
+
+---
 
 ProxyLane 是一款面向 Windows 的应用进程级透明代理工具。它通过进程注入和网络 API Hook，让指定程序的网络连接使用单独配置的代理，而不需要修改系统全局代理。
 
