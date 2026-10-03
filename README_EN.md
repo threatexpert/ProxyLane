@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="https://linux.do/"><img src="https://img.shields.io/badge/Community-LINUX%20DO-2563eb?logo=linux&amp;logoColor=white" alt="Linux.do community discussion"></a>&nbsp;&nbsp;<a href="https://v2ex.com/t/1242151"><img src="https://img.shields.io/badge/Community-V2EX-334155?logo=v2ex&amp;logoColor=white" alt="V2EX community discussion"></a>
+  Join the community discussion on <a href="https://linux.do/">Linux.do</a> and <a href="https://v2ex.com/t/1242151">V2EX</a>
 </p>
 
 <p align="center"><a href="README.md">简体中文</a> | English</p>
