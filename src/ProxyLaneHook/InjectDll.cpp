@@ -71,31 +71,35 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 	LPVOID lpROnldParam = NULL;
 	CONTEXT ctx;
 
-	unsigned char lvJmper[78] = {
+	// Save RAX at trampoline entry: the loader may have changed the startup
+	// context since GetThreadContext. remoteCode's retval is only a legacy return value.
+	unsigned char lvJmper[80] = {
 		0x9C,                                           // 00: pushfq (保存 CPU 状态标志 RFLAGS)
-		0x55,                                           // 01: push rbp
-		0x48, 0x89, 0xE5,                               // 02: mov rbp, rsp (建立标准栈帧，保存原始 RSP)
-		0x48, 0x83, 0xE4, 0xF0,                         // 05: and rsp, 0xFFFFFFFFFFFFFFF0 (强制栈 16 字节对齐，防止崩溃)
+		0x50,                                           // 01: push rax (保存跳板入口时的 RAX)
+		0x55,                                           // 02: push rbp
+		0x48, 0x89, 0xE5,                               // 03: mov rbp, rsp (记录对齐前的栈位置)
+		0x48, 0x83, 0xE4, 0xF0,                         // 06: and rsp, 0xFFFFFFFFFFFFFFF0 (强制栈 16 字节对齐，防止崩溃)
 
-		0x51, 0x52, 0x41, 0x50, 0x41, 0x51,             // 09-14: push rcx, rdx, r8, r9
-		0x41, 0x52, 0x41, 0x53,                         // 15-18: push r10, r11 (额外保护 r10 和 r11 免受 remoteCode 破坏)
-		0x48, 0x83, 0xEC, 0x20,                         // 19-22: sub rsp, 0x20 (分配 32 字节 Shadow Space)
+		0x51, 0x52, 0x41, 0x50, 0x41, 0x51,             // 10-15: push rcx, rdx, r8, r9
+		0x41, 0x52, 0x41, 0x53,                         // 16-19: push r10, r11 (额外保护 r10 和 r11 免受 remoteCode 破坏)
+		0x48, 0x83, 0xEC, 0x20,                         // 20-23: sub rsp, 0x20 (分配 32 字节 Shadow Space)
 
-		0x48, 0xB9, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x1F, // 23-32: mov rcx, lpParam (Offset 25)
-		0x48, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x1F, // 33-42: mov rax, lpSC    (Offset 35)
-		0xFF, 0xD0,                                                 // 43-44: call rax
+		0x48, 0xB9, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x1F, // 24-33: mov rcx, lpParam (Offset 26)
+		0x48, 0xB8, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x1F, // 34-43: mov rax, lpSC    (Offset 36)
+		0xFF, 0xD0,                                                 // 44-45: call rax
 
-		0x48, 0x83, 0xC4, 0x20,                         // 45-48: add rsp, 0x20 (清理 Shadow Space)
-		0x41, 0x5B, 0x41, 0x5A,                         // 49-52: pop r11, r10
-		0x41, 0x59, 0x41, 0x58, 0x5A, 0x59,             // 53-58: pop r9, r8, rdx, rcx
+		0x48, 0x83, 0xC4, 0x20,                         // 46-49: add rsp, 0x20 (清理 Shadow Space)
+		0x41, 0x5B, 0x41, 0x5A,                         // 50-53: pop r11, r10
+		0x41, 0x59, 0x41, 0x58, 0x5A, 0x59,             // 54-59: pop r9, r8, rdx, rcx
 
-		0x48, 0x89, 0xEC,                               // 59-61: mov rsp, rbp (恢复原始栈顶，清除所有对齐操作带来的偏移)
-		0x5D,                                           // 62:    pop rbp
-		0x9D,                                           // 63:    popfq (恢复 CPU 状态标志 RFLAGS)
+		0x48, 0x89, 0xEC,                               // 60-62: mov rsp, rbp (恢复对齐前的栈位置)
+		0x5D,                                           // 63:    pop rbp
+		0x58,                                           // 64:    pop rax (丢弃 remoteCode 返回的旧 RAX)
+		0x9D,                                           // 65:    popfq (恢复 CPU 状态标志 RFLAGS)
 
 		// ---- 绕过 CET 的绝对跳转核心 ----
-		0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // 64-69: jmp qword ptr [rip + 0]
-		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x1F  // 70-77: [Original_RIP] 占位符 (Offset 70)
+		0xFF, 0x25, 0x00, 0x00, 0x00, 0x00,             // 66-71: jmp qword ptr [rip + 0]
+		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x1F  // 72-79: [Original_RIP] 占位符 (Offset 72)
 	};
 
 
@@ -105,7 +109,7 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 		goto __CleanUp;
 	}
 
-	//改变EIP到remoteCode函数执行完后返回这个值，用意就是恢复之前的EAX
+	// Keep the remoteCode ABI unchanged; the trampoline restores its entry-time RAX.
 	param_myapi.retval = ctx.Rax;
 
 	lpParam = VirtualAllocEx(hProc, 0, sizeof(myapi), MEM_COMMIT, PAGE_READWRITE);
@@ -135,9 +139,9 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 	//准备更改主线程的eip，先执行我的一个函数
 	//先配置一段跳转并调用remoteCode的代码
 
-	*(DWORD_PTR*)&lvJmper[25] = (DWORD_PTR)lpParam;
-	*(DWORD_PTR*)&lvJmper[35] = (DWORD_PTR)lpSC;
-	*(DWORD_PTR*)&lvJmper[70] = (DWORD_PTR)ctx.Rip;
+	*(DWORD_PTR*)&lvJmper[26] = (DWORD_PTR)lpParam;
+	*(DWORD_PTR*)&lvJmper[36] = (DWORD_PTR)lpSC;
+	*(DWORD_PTR*)&lvJmper[72] = (DWORD_PTR)ctx.Rip;
 
 	if (!WriteProcessMemory(hProc, lpJmper, &lvJmper, sizeof(lvJmper), NULL))
 	{
@@ -214,6 +218,7 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 		BYTE  pushfd_op;      // 0x9C (pushfd - 保护状态标志)
 		BYTE  push_ecx;       // 0x51 (push ecx - 保护易失寄存器)
 		BYTE  push_edx;       // 0x52 (push edx - 保护易失寄存器)
+		BYTE  push_eax;       // 0x50 (push eax - 保存跳板入口时的启动入口)
 
 		BYTE  push_param_op;  // 0x68 (push lpParam - 压入参数)
 		DWORD lpParam;        // 参数地址
@@ -222,6 +227,7 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 		DWORD lpSC;           // 目标函数地址
 		BYTE  call_eax[2];    // 0xFF 0xD0 (call eax - 真正的Call，完美满足影子栈)
 
+		BYTE  pop_eax;        // 0x58 (pop eax - 丢弃 remoteCode 返回的旧 EAX)
 		BYTE  pop_edx;        // 0x5A (pop edx - 恢复易失寄存器)
 		BYTE  pop_ecx;        // 0x59 (pop ecx - 恢复易失寄存器)
 		BYTE  popfd_op;       // 0x9D (popfd - 恢复状态标志)
@@ -238,7 +244,8 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 		goto __CleanUp;
 	}
 
-	//改变EIP到remoteCode函数执行完后返回这个值，用意就是恢复之前的EAX
+	// The loader can replace EAX with _CorExeMain before the trampoline runs.
+	// Keep this legacy return value, but restore the entry-time EAX in the trampoline.
 	param_myapi.retval = ctx.Eax;
 
 	lpParam = VirtualAllocEx(hProc, 0, sizeof(myapi), MEM_COMMIT, PAGE_READWRITE);
@@ -273,6 +280,7 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 	lvJmper.pushfd_op = 0x9C;
 	lvJmper.push_ecx = 0x51;
 	lvJmper.push_edx = 0x52;
+	lvJmper.push_eax = 0x50;
 
 	lvJmper.push_param_op = 0x68;
 	lvJmper.lpParam = (DWORD)lpParam;
@@ -283,6 +291,7 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 	lvJmper.call_eax[0] = 0xFF;
 	lvJmper.call_eax[1] = 0xD0;
 
+	lvJmper.pop_eax = 0x58;
 	lvJmper.pop_edx = 0x5A;
 	lvJmper.pop_ecx = 0x59;
 	lvJmper.popfd_op = 0x9D;
@@ -293,6 +302,10 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 	// 公式：目标绝对地址 - JMP指令的下一条指令绝对地址
 	// JMP 指令的下一条指令地址，正好就是这块内存 (lpJmper) 的末尾处
 	lvJmper.jmp_offset = (DWORD)ctx.Eip - ((DWORD)lpJmper + sizeof(_JMPER));
+
+	// DEBUG ONLY
+	//lvJmper.pushfd_op = 0xEB;
+	//lvJmper.push_ecx = 0xFE;
 
 	if (!WriteProcessMemory(hProc, lpJmper, &lvJmper, sizeof(lvJmper), NULL))
 	{

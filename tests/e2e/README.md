@@ -94,6 +94,32 @@ bin/ProxyLane64.exe --auto --profile E2E --run `
 The servers, temporary profiles and ports are test-owned resources. Do not run
 these mappings against production proxy settings.
 
+## Managed process startup
+
+After building both Release platforms, use 64-bit Python with `psutil` and
+the .NET Framework 4 C# compiler installed:
+
+```powershell
+python tests/ManagedStartupE2ETests.py --bin bin
+```
+
+Optionally add `--msbuild-dir` with the Visual Studio 2019
+`MSBuild/Current/Bin` directory to also run both MSBuild executables with
+`-nologo -version` through the hooked shells.
+
+The runner compiles `managed_startup_probe.cs` for x86 and x64 and tests all
+four shell/managed-child architecture combinations. Each managed child
+starts a managed grandchild of the other bitness. Both must load the test
+Hook DLL and exchange PING/PONG through a local SOCKS5 server, for eight
+proxied connections in total. Reports and isolated binaries are retained
+under `build/qa/managed-startup-*`; only test-owned processes are stopped.
+An inherited Hook is disabled only in the disposable Python runner.
+
+This covers the startup-context regression where a newly created x86 CLR
+process receives `_CorExeMain` in EAX during loader initialization, but the
+injection trampoline used to overwrite it with the pre-initialization
+snapshot on return from `remoteCode`.
+
 ## Alternate-user process creation
 
 Build `logon_child_probe.cpp` from both x64 and x86 Visual Studio developer
