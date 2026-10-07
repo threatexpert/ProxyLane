@@ -14,9 +14,9 @@
 
 ProxyLane is an application-level transparent proxy for Windows. It uses process injection and network API hooks to route selected applications through a separately configured proxy without changing the system-wide proxy settings.
 
-## UI Preview
+## Usage Demo
 
-![ProxyLane UI](UI_en.png)
+![ProxyLane usage demo](demo.gif)
 
 ## Use Case
 

@@ -14,9 +14,9 @@
 
 ProxyLane 是一款面向 Windows 的应用进程级透明代理工具。它通过进程注入和网络 API Hook，让指定程序的网络连接使用单独配置的代理，而不需要修改系统全局代理。
 
-## 界面预览
+## 操作演示
 
-![ProxyLane 界面预览](UI.png)
+![ProxyLane 操作演示](demo.gif)
 
 ## 使用场景
 
