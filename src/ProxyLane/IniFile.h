@@ -9,9 +9,15 @@
 #pragma once
 #endif // _MSC_VER > 1000
 
+#include <map>
+
 class CIniFile  
 {
 public:
+	struct KeyLess { bool operator()(const CString& a, const CString& b) const { return a.CompareNoCase(b) < 0; } };
+	typedef std::map<CString, CString, KeyLess> Section;
+	BOOL ReadSection(const CString& name, Section& values);
+	BOOL WriteSection(const CString& name, const Section& values);
 	CIniFile();
 	virtual ~CIniFile();
 	void	SetIniFileName(CString FileName);

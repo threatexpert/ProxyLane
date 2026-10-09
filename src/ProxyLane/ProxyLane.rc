@@ -174,6 +174,7 @@ BEGIN
     LTEXT           "",IDC_APP_EMPTY_STATE,16,80,298,38,SS_CENTER | SS_NOPREFIX
     LTEXT           "",IDC_APP_HINT,8,174,314,20
     LTEXT           "",IDC_APP_STATUS,8,200,150,12
+    PUSHBUTTON      "",IDC_APP_REMOVE_RECENT,8,196,94,18
     DEFPUSHBUTTON   "",IDOK,174,196,94,18
     PUSHBUTTON      "",IDCANCEL,274,196,48,18
 END
@@ -216,8 +217,8 @@ END
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,2,13,0
- PRODUCTVERSION 1,2,13,0
+ FILEVERSION 1,2,15,0
+ PRODUCTVERSION 1,2,15,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -233,11 +234,11 @@ BEGIN
         BLOCK "080404b0"
         BEGIN
             VALUE "FileDescription", "ProxyLane"
-            VALUE "FileVersion", "1.2.13.0"
+            VALUE "FileVersion", "1.2.15.0"
             VALUE "InternalName", "ProxyLane"
             VALUE "LegalCopyright", "Copyright (C) 2026 ProxyLane contributors"
             VALUE "ProductName", "ProxyLane"
-            VALUE "ProductVersion", "1.2.13.0"
+            VALUE "ProductVersion", "1.2.15.0"
         END
     END
     BLOCK "VarFileInfo"

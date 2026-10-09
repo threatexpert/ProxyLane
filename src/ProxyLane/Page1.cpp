@@ -78,6 +78,9 @@ CPage1::CPage1(CWnd* pParent /*=NULL*/)
 	, m_profileStore(g_ini)
 	, m_filterEditBaseHeight(0)
 {
+	m_recentFileStamp = 0;
+	m_recentLaunching = FALSE;
+	m_recentLaunchTick = 0;
 	m_pTestProxy = 0;
 	m_pProxyTester = 0;
 	m_bIsTesting = FALSE;
@@ -178,6 +181,10 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_BN_CLICKED(IDC_RADIO_TAB_CHILD, &CPage1::OnBnClickedTabChild)
 	ON_BN_CLICKED(IDC_RADIO_TAB_TARGET, &CPage1::OnBnClickedTabTarget)
 	ON_BN_CLICKED(IDC_BTN_WORKFLOW_NEXT, &CPage1::OnBnClickedWorkflowNext)
+	ON_MESSAGE(WM_RECENT_APPLICATIONS_CHANGED, &CPage1::OnRecentApplicationsChanged)
+	ON_NOTIFY(NM_DBLCLK, IDC_RECENT_LIST, &CPage1::OnRecentApplicationClick)
+	ON_NOTIFY(NM_RETURN, IDC_RECENT_LIST, &CPage1::OnRecentApplicationClick)
+	ON_WM_TIMER()
 END_MESSAGE_MAP()
 
 BOOL CPage1::OnInitDialog()
@@ -281,12 +288,127 @@ void CPage1::CreateWorkflowCard()
 	m_workflowText.SetFont(&m_uiFont, FALSE);
 	m_workflowNext.SetFont(&m_uiFont, FALSE);
 	m_workflowNext.SetVisualStyle(CModernButton::STYLE_PRIMARY);
+	m_recentTitle.Create(Localization::Get(L"recent.title"), WS_CHILD | SS_LEFT, emptyRect, this, IDC_RECENT_TITLE);
+	m_recentEmpty.Create(Localization::Get(L"recent.empty"), WS_CHILD | SS_LEFT, emptyRect, this, IDC_RECENT_EMPTY);
+	m_recentList.Create(WS_CHILD | WS_TABSTOP | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL,
+		emptyRect, this, IDC_RECENT_LIST);
+	m_recentTitle.SetFont(&m_uiFont, FALSE);
+	m_recentEmpty.SetFont(&m_uiFont, FALSE);
+	m_recentList.SetFont(&m_uiFont, FALSE);
+	m_recentList.SetExtendedStyle(LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+	m_recentList.SetBkColor(UiTheme::PageBackground());
+	m_recentList.SetTextBkColor(UiTheme::PageBackground());
+	m_recentList.InsertColumn(0, L"", LVCFMT_LEFT, 120);
+	const int iconSize = UiTheme::ScaleForWindow(m_hWnd, 20);
+	m_recentIcons.Create(iconSize, iconSize, ILC_COLOR32 | ILC_MASK, 7, 1);
+	m_recentList.SetImageList(&m_recentIcons, LVSIL_SMALL);
+	if (m_recentTooltip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX))
+	{
+		m_recentTooltip.AddTool(&m_recentList, LPSTR_TEXTCALLBACK);
+		m_recentTooltip.SetMaxTipWidth(UiTheme::ScaleForWindow(m_hWnd, 540));
+		m_recentTooltip.SetDelayTime(TTDT_AUTOPOP, 30000);
+	}
+	ReloadRecentApplications(TRUE);
+	SetTimer(0x310, 2000, NULL);
 	LayoutWorkflowCard();
+}
+
+void CPage1::ReloadRecentApplications(BOOL force)
+{
+	if (!m_recentList.GetSafeHwnd()) return;
+	const CString profile = g_MainTab && g_MainTab->IsProxyRunning() ? g_MainTab->GetRunningProfileName() : CString();
+	const CString identity = g_MainTab ? g_MainTab->GetRunningRecentProfileId() : CString();
+	WIN32_FILE_ATTRIBUTE_DATA data = {0};
+	ULONGLONG stamp = 0;
+	if (GetFileAttributesEx(RecentApplications::DefaultPath(), GetFileExInfoStandard, &data))
+		stamp = (static_cast<ULONGLONG>(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime;
+	if (!force && stamp == m_recentFileStamp && identity == m_recentProfileId) return;
+	std::vector<RecentApplications::Entry> entries;
+	const BOOL loaded = identity.IsEmpty() || RecentApplications::Store(profile, RecentApplications::DefaultPath(), identity).Read(entries);
+	if (loaded) m_recentFileStamp = stamp;
+	m_recentProfileId = identity;
+	m_recentEntries.swap(entries);
+	if (m_recentEntries.size() > 7) m_recentEntries.resize(7);
+	m_recentHoverText.Empty();
+	if (m_recentTooltip.GetSafeHwnd()) m_recentTooltip.Pop();
+	m_recentList.SetRedraw(FALSE);
+	m_recentList.DeleteAllItems();
+	m_recentIcons.SetImageCount(0);
+	for (size_t i = 0; i < m_recentEntries.size(); ++i)
+	{
+		HICON icon = RecentApplications::LoadIcon(m_recentEntries[i]);
+		const int image = icon ? m_recentIcons.Add(icon) : -1;
+		if (icon) DestroyIcon(icon);
+		m_recentList.InsertItem(static_cast<int>(i), m_recentEntries[i].app.name, image);
+	}
+	m_recentEmpty.SetWindowText(Localization::Get(loaded ? L"recent.empty" : L"recent.read_failed"));
+	m_recentList.SetRedraw(TRUE);
+	m_recentList.Invalidate(FALSE);
+	LayoutWorkflowCard();
+}
+
+LRESULT CPage1::OnRecentApplicationsChanged(WPARAM, LPARAM)
+{
+	ReloadRecentApplications(TRUE);
+	return 0;
+}
+
+void CPage1::OnTimer(UINT_PTR timer)
+{
+	if (timer == 0x310 && IsWindowVisible() && !m_recentLaunching) ReloadRecentApplications(FALSE);
+	CModernDialog::OnTimer(timer);
+}
+
+void CPage1::OnRecentApplicationClick(NMHDR* header, LRESULT* result)
+{
+	*result = 0;
+	if (!m_proxyController.IsRunning() || m_recentLaunching || !g_MainTab) return;
+	const int row = header->code == NM_DBLCLK ? reinterpret_cast<NMITEMACTIVATE*>(header)->iItem :
+		m_recentList.GetNextItem(-1, LVNI_SELECTED);
+	if (row < 0 || static_cast<size_t>(row) >= m_recentEntries.size()) return;
+	if (m_recentLaunchTick && GetTickCount() - m_recentLaunchTick < GetDoubleClickTime()) return;
+	const RecentApplications::Entry entry = m_recentEntries[row];
+	m_recentLaunching = TRUE;
+	struct Reset { BOOL& flag; ~Reset() { flag = FALSE; } } reset = { m_recentLaunching };
+	g_MainTab->GetPage3()->LaunchRecentApplication(entry);
+	m_recentLaunchTick = GetTickCount();
+}
+
+BOOL CPage1::PreTranslateMessage(MSG* message)
+{
+	if (m_recentTooltip.GetSafeHwnd())
+	{
+		if (message->message == WM_MOUSEMOVE && message->hwnd == m_recentList.GetSafeHwnd())
+		{
+			LVHITTESTINFO hit = {0};
+			hit.pt = CPoint(static_cast<short>(LOWORD(message->lParam)), static_cast<short>(HIWORD(message->lParam)));
+			const int row = m_recentList.SubItemHitTest(&hit);
+			CString text;
+			if (row >= 0 && static_cast<size_t>(row) < m_recentEntries.size())
+				text = RecentApplications::Description(m_recentEntries[row],
+					g_MainTab && g_MainTab->IsProxyRunning() ? g_MainTab->GetRunningProfileName() : CString());
+			if (text != m_recentHoverText) { m_recentTooltip.Pop(); m_recentHoverText = text; }
+			m_recentTooltip.Activate(!text.IsEmpty());
+		}
+		m_recentTooltip.RelayEvent(message);
+	}
+	return CModernDialog::PreTranslateMessage(message);
+}
+
+BOOL CPage1::OnNotify(WPARAM wParam, LPARAM lParam, LRESULT* result)
+{
+	NMHDR* header = reinterpret_cast<NMHDR*>(lParam);
+	if (header && m_recentTooltip.GetSafeHwnd() && header->hwndFrom == m_recentTooltip.GetSafeHwnd() && header->code == TTN_NEEDTEXT)
+	{
+		reinterpret_cast<NMTTDISPINFO*>(header)->lpszText = const_cast<LPTSTR>(static_cast<LPCTSTR>(m_recentHoverText));
+		*result = 0; return TRUE;
+	}
+	return CModernDialog::OnNotify(wParam, lParam, result);
 }
 
 void CPage1::LayoutWorkflowCard()
 {
-	if (!m_workflowGroup.GetSafeHwnd())
+	if (!m_workflowGroup.GetSafeHwnd() || !m_recentList.GetSafeHwnd())
 		return;
 
 	CWnd* optionsGroup = GetDlgItem(IDC_STATIC_GROUP_OTHER);
@@ -321,6 +443,9 @@ void CPage1::LayoutWorkflowCard()
 	if (!showCard)
 	{
 		m_workflowNext.ShowWindow(SW_HIDE);
+		m_recentTitle.ShowWindow(SW_HIDE);
+		m_recentList.ShowWindow(SW_HIDE);
+		m_recentEmpty.ShowWindow(SW_HIDE);
 		return;
 	}
 
@@ -343,13 +468,32 @@ void CPage1::LayoutWorkflowCard()
 		buttonWidth, buttonHeight);
 
 	const int textTop = statusTop + statusHeight + UiTheme::ScaleForWindow(m_hWnd, 14);
-	const int textBottom = m_proxyController.IsRunning()
-		? buttonTop - UiTheme::ScaleForWindow(m_hWnd, 12)
-		: cardBottom - inner;
+	const int textBottom = buttonTop - UiTheme::ScaleForWindow(m_hWnd, 12);
+	const int contentWidth = max(1, cardRight - cardLeft - inner * 2);
+	CString guidance;
+	m_workflowText.GetWindowText(guidance);
+	CClientDC dc(this);
+	CFont* oldFont = dc.SelectObject(&m_uiFont);
+	CRect measured(0, 0, contentWidth, 0);
+	dc.DrawText(guidance, measured, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+	if (oldFont) dc.SelectObject(oldFont);
+	const int textHeight = min(max(0, textBottom - textTop), measured.Height());
 	m_workflowText.MoveWindow(cardLeft + inner, textTop,
-		cardRight - cardLeft - inner * 2, max(0, textBottom - textTop));
+		contentWidth, textHeight);
+	const int recentTop = textTop + textHeight + UiTheme::ScaleForWindow(m_hWnd, 12);
+	const int titleHeight = UiTheme::ScaleForWindow(m_hWnd, 22);
+	const int listTop = recentTop + titleHeight;
+	const BOOL showRecent = textBottom - listTop >= UiTheme::ScaleForWindow(m_hWnd, 30);
+	m_recentTitle.MoveWindow(cardLeft + inner, recentTop, contentWidth, titleHeight);
+	m_recentList.MoveWindow(cardLeft + inner, listTop, contentWidth, max(0, textBottom - listTop));
+	m_recentList.SetColumnWidth(0, max(1, contentWidth - UiTheme::ScaleForWindow(m_hWnd, 20)));
+	m_recentEmpty.MoveWindow(cardLeft + inner, listTop, contentWidth, max(0, textBottom - listTop));
+	m_recentTitle.ShowWindow(showRecent ? SW_SHOW : SW_HIDE);
+	m_recentList.ShowWindow(showRecent && !m_recentEntries.empty() ? SW_SHOW : SW_HIDE);
+	m_recentEmpty.ShowWindow(showRecent && m_recentEntries.empty() ? SW_SHOW : SW_HIDE);
+	m_recentList.SetTextColor(m_proxyController.IsRunning() ? UiTheme::Accent() : UiTheme::TextSecondary());
 
-	m_workflowNext.ShowWindow(m_proxyController.IsRunning() ? SW_SHOW : SW_HIDE);
+	m_workflowNext.ShowWindow(SW_SHOW);
 }
 
 void CPage1::UpdateWorkflowCard()
@@ -1429,7 +1573,12 @@ void CPage1::OnCfgoptDelete()
 				return;
 			}
 
-			m_profileStore.Delete(strName);
+			if (!m_profileStore.Delete(strName))
+			{
+				MessageBox(Localization::Get(L"recent.write_failed"), Localization::Get(L"profile.delete_title"), MB_OK | MB_ICONWARNING);
+				return;
+			}
+			ReloadRecentApplications(TRUE);
 			m_cfgls.DeleteString(idx);
 			m_loadingProfile = TRUE;
 			m_cfgls.SetCurSel(-1);

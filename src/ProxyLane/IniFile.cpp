@@ -4,6 +4,7 @@
 
 #include "stdafx.h"
 #include "IniFile.h"
+#include <vector>
 
 #ifdef _DEBUG
 #undef THIS_FILE
@@ -51,90 +52,80 @@ void CIniFile::SetIniFileName(CString FileName)
 	}
 }
 
-DWORD SeparateSection(TCHAR *InPutBuf, TCHAR *ReturnString)
+namespace
 {
-	DWORD len = 0;
-	TCHAR *in = InPutBuf;
-	TCHAR *out = ReturnString;
-
-	while(*in && len < 128)
+	const DWORD kMaxIniCharacters = 1024 * 1024;
+	BOOL ReadIniBuffer(const CString& path, LPCTSTR section, LPCTSTR key,
+		LPCTSTR fallback, BOOL sections, BOOL wholeSection, std::vector<TCHAR>& buffer)
 	{
-		*out = *in;
-		in++;
-		out++;
-		len++;
+		for (DWORD size = 512; size <= kMaxIniCharacters; size *= 2)
+		{
+			buffer.assign(size, 0);
+			SetLastError(ERROR_SUCCESS);
+			DWORD used = sections ? GetPrivateProfileSectionNames(&buffer[0], size, path) :
+				(wholeSection ? GetPrivateProfileSection(section, &buffer[0], size, path) :
+				 GetPrivateProfileString(section, key, fallback, &buffer[0], size, path));
+			DWORD error = GetLastError();
+			if (!used && error && error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)
+				return FALSE;
+			const DWORD reserve = sections || wholeSection ? 2 : 1;
+			if (used < size - reserve) return TRUE;
+		}
+		SetLastError(ERROR_BUFFER_OVERFLOW);
+		return FALSE;
 	}
-	ReturnString[len] = '\0';
-	return len;
 }
 
-int CIniFile::GetSectionList(list<CString> &ls)
+int CIniFile::GetSectionList(list<CString>& ls)
 {
-	int nSize = 0;
-	LPTSTR lpszReturnBuffer = NULL;
-	DWORD ret;
-
-	while (1)
+	std::vector<TCHAR> buffer;
+	if (!ReadIniBuffer(IniFileName, NULL, NULL, NULL, TRUE, FALSE, buffer)) return -1;
+	int count = 0;
+	for (LPCTSTR item = &buffer[0]; *item; item += _tcslen(item) + 1)
 	{
-		ret = GetPrivateProfileSectionNames(lpszReturnBuffer, nSize, IniFileName);
-		if (nSize - ret > 2)
-			break;
-
-		delete lpszReturnBuffer;
-		nSize += 8192;
-		lpszReturnBuffer = new TCHAR[nSize];
-		lpszReturnBuffer[0] = '\0';
+		ls.push_back(item);
+		++count;
 	}
-
-	int n = 0;
-	DWORD len;
-	TCHAR szName[128];
-	TCHAR *p = lpszReturnBuffer;
-	while( len = SeparateSection(p, szName) )
-	{
-		p += len+1;
-		n++;
-		ls.push_back((CString)szName);
-	}
-
-	delete lpszReturnBuffer;
-	return n;
+	return count;
 }
 
-int CIniFile::GetKeyList(LPCTSTR lpszAppName, list<CString> &ls)
+BOOL CIniFile::ReadSection(const CString& name, Section& values)
 {
-	int nSize = 0;
-	LPTSTR lpszReturnBuffer = NULL;
-	DWORD ret;
-
-	while (1)
+	std::vector<TCHAR> buffer;
+	if (!ReadIniBuffer(IniFileName, name, NULL, NULL, FALSE, TRUE, buffer)) return FALSE;
+	Section loaded;
+	for (LPCTSTR item = &buffer[0]; *item; item += _tcslen(item) + 1)
 	{
-		ret = GetPrivateProfileSection(lpszAppName, lpszReturnBuffer, nSize, IniFileName);
-		if (nSize - ret > 2)
-			break;
-
-		delete lpszReturnBuffer;
-		nSize += 8192;
-		lpszReturnBuffer = new TCHAR[nSize];
-		lpszReturnBuffer[0] = '\0';
+		LPCTSTR separator = _tcschr(item, L'=');
+		if (separator) loaded[CString(item, static_cast<int>(separator - item))] = separator + 1;
 	}
+	values.swap(loaded);
+	return TRUE;
+}
 
-	int n = 0;
-	DWORD len;
-	TCHAR szName[128];
-	TCHAR *p = lpszReturnBuffer;
-	while( len = SeparateSection(p, szName) )
+BOOL CIniFile::WriteSection(const CString& name, const Section& values)
+{
+	std::vector<TCHAR> buffer;
+	for (Section::const_iterator i = values.begin(); i != values.end(); ++i)
 	{
-		p += len+1;
-		TCHAR *pE = _tcschr(szName, '=');
-		if (pE)
-			*pE = '\0';
-		n++;
-		ls.push_back((CString)szName);
+		if (i->first.IsEmpty() || i->first.FindOneOf(L"=\r\n") >= 0 || i->second.FindOneOf(L"\r\n") >= 0)
+		{ SetLastError(ERROR_INVALID_DATA); return FALSE; }
+		CString line = i->first + L"=" + i->second;
+		buffer.insert(buffer.end(), static_cast<LPCTSTR>(line), static_cast<LPCTSTR>(line) + line.GetLength() + 1);
 	}
+	buffer.push_back(0);
+	if (values.empty()) buffer.push_back(0);
+	// Preserve the XP whole-section limit (65535 bytes).
+	if (buffer.size() * sizeof(TCHAR) > 65534) { SetLastError(ERROR_BUFFER_OVERFLOW); return FALSE; }
+	return WritePrivateProfileSection(name, &buffer[0], IniFileName);
+}
 
-	delete lpszReturnBuffer;
-	return n;
+int CIniFile::GetKeyList(LPCTSTR name, list<CString>& ls)
+{
+	Section values;
+	if (!ReadSection(name, values)) return -1;
+	for (Section::const_iterator i = values.begin(); i != values.end(); ++i) ls.push_back(i->first);
+	return static_cast<int>(values.size());
 }
 
 BOOL CIniFile::DeleteSection(CString AppName)
@@ -142,33 +133,10 @@ BOOL CIniFile::DeleteSection(CString AppName)
 	return ::WritePrivateProfileString(AppName, 0, 0, IniFileName);
 }
 
-CString CIniFile::GetString(CString AppName,CString KeyName,CString Default)
+CString CIniFile::GetString(CString section, CString key, CString fallback)
 {
-	TCHAR buf[MAX_LENGTH];
-	DWORD dwRet;
-	DWORD countofBuf = MAX_LENGTH;
-
-	dwRet = ::GetPrivateProfileString(AppName, KeyName, Default, buf, countofBuf, IniFileName);
-	if (dwRet < countofBuf-2)
-	{
-		return buf;
-	}
-
-	countofBuf = countofBuf+4096;
-	for (;;)
-	{
-		CString str;
-		TCHAR *p = str.GetBuffer(countofBuf);
-		if (!p)
-			return _T("");
-
-		dwRet = ::GetPrivateProfileString(AppName, KeyName, Default, p, countofBuf, IniFileName);
-		if (dwRet < countofBuf-2)
-		{
-			str.ReleaseBuffer(dwRet);
-			return str;
-		}
-	}
+	std::vector<TCHAR> buffer;
+	return ReadIniBuffer(IniFileName, section, key, fallback, FALSE, FALSE, buffer) ? CString(&buffer[0]) : fallback;
 }
 
 int CIniFile::GetInt(CString AppName,CString KeyName,int Default)

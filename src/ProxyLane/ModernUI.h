@@ -91,6 +91,7 @@ public:
 	CStatusLabel();
 	void SetStatus(LPCTSTR text, Tone tone);
 	void SetTwoLineStatus(LPCTSTR primaryText, LPCTSTR secondaryText, Tone tone);
+	void SetTrafficRates(LPCTSTR uploadText, LPCTSTR downloadText);
 
 protected:
 	virtual void PreSubclassWindow();
@@ -104,6 +105,8 @@ protected:
 	BOOL m_twoLine;
 	CString m_primaryText;
 	CString m_secondaryText;
+	CString m_uploadText;
+	CString m_downloadText;
 	CString m_tooltipText;
 	CToolTipCtrl m_tooltip;
 

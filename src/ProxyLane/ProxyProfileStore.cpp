@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "ProxyLane.h"
 #include "ProxyProfileStore.h"
+#include "RecentApplications.h"
 
 namespace
 {
@@ -90,7 +91,7 @@ int CProxyProfileStore::LoadAll(std::list<CfgProxyItem>& items, CString& lastSel
 {
 	lastSelectedName = m_ini.GetString(_T("options"), _T("lastselected"));
 	std::list<CString> sections;
-	if (!m_ini.GetSectionList(sections))
+	if (m_ini.GetSectionList(sections) < 0)
 		return -1;
 
 	for (std::list<CString>::const_iterator it = sections.begin(); it != sections.end(); ++it)
@@ -139,11 +140,9 @@ void CProxyProfileStore::Save(CfgProxyItem& item)
 	m_ini.SetString(section, _T("PSK"), item.strTransportPsk);
 }
 
-void CProxyProfileStore::Delete(LPCTSTR name)
+BOOL CProxyProfileStore::Delete(LPCTSTR name)
 {
-	CString section = kProfilePrefix;
-	section += name;
-	m_ini.DeleteSection(section);
+	return RecentApplications::DeleteProfile(name, m_ini.GetIniFileName());
 }
 
 void CProxyProfileStore::SetLastSelected(LPCTSTR name)

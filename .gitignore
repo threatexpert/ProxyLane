@@ -3,6 +3,7 @@ build/
 tests/obj/
 tests/tools/MitigationAttributeProbe/obj/
 tests/tools/ApplicationCatalogProbe/obj/
+tests/tools/RecentApplicationsTests/obj/
 src/ProxyLaneSecureTransport/target/
 dist/
 .vs/

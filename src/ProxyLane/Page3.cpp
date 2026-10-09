@@ -1404,24 +1404,68 @@ void CPage3::OnBnClickedTerminateProcess()
 
 void CPage3::OnBnClickedSelectApp()
 {
-	if (!g_MainTab || !g_MainTab->IsProxyRunning())
-	{
-		MessageBox(Localization::Get(_T("page3.start_proxy_first")),
-			Localization::Get(_T("apps.title")), MB_OK | MB_ICONINFORMATION);
-		return;
-	}
 	CApplicationPicker picker(this);
 	if (picker.DoModal() != IDOK) return;
+	if (!picker.m_selectedRecent.id.IsEmpty())
+	{
+		LaunchRecentApplication(picker.m_selectedRecent);
+		return;
+	}
 	const InstalledApplications::Application& app = picker.m_selectedApplication;
+	ShowApplicationLaunchResult(app.name, LaunchInteractiveApplication(app));
+}
+
+AppLaunchResult CPage3::LaunchInteractiveApplication(const InstalledApplications::Application& app,
+	AppLaunchElevationMode elevationMode, const RecentApplications::Entry* saved)
+{
+	if (!g_MainTab || !g_MainTab->IsProxyRunning()) return APP_LAUNCH_CREATE_PROCESS_FAILED;
+	const CString runningProfile = g_MainTab->GetRunningProfileName();
+	const CString runningIdentity = g_MainTab->GetRunningRecentProfileId();
+	RecentApplications::Entry entry = saved ? *saved : RecentApplications::FromApplication(app,
+		elevationMode == APP_LAUNCH_ELEVATION_FORCE_ADMIN);
+	InstalledApplications::Application resolved;
+	if (!RecentApplications::Resolve(entry, resolved)) return APP_LAUNCH_INVALID_TARGET;
+	const CString name = entry.app.name;
+	entry.app = resolved;
+	entry.app.icon = NULL;
+	if (entry.app.name.IsEmpty()) entry.app.name = name;
 	std::vector<CString> arguments;
-	const AppLaunchResult result = app.IsPackaged() ?
-		LaunchPackagedAppById(app.aumid, app.arguments) :
-		LaunchAndProxyApp(app.path, arguments, TRUE, APP_LAUNCH_ELEVATION_AUTO,
-			app.arguments, app.workingDirectory);
+	const AppLaunchResult result = resolved.IsPackaged() ?
+		LaunchPackagedAppById(resolved.aumid, resolved.arguments) :
+		LaunchAndProxyApp(resolved.path, arguments, TRUE, elevationMode, resolved.arguments, resolved.workingDirectory);
+	if (result == APP_LAUNCH_SUCCESS)
+	{
+		if (!runningIdentity.IsEmpty() && !RecentApplications::Store(runningProfile, RecentApplications::DefaultPath(), runningIdentity).Remember(entry))
+		{
+			CString text;
+			text.Format(L"Failed to save recently launched application: error %lu.\r\n", GetLastError());
+			g_MainTab->AddLogText(0, text);
+		}
+		g_MainTab->GetPage1()->PostMessage(WM_RECENT_APPLICATIONS_CHANGED);
+	}
+	return result;
+}
+
+void CPage3::LaunchRecentApplication(const RecentApplications::Entry& entry)
+{
+	if (!g_MainTab || !g_MainTab->IsProxyRunning()) return;
+	if (entry.profileId != g_MainTab->GetRunningRecentProfileId()) return;
+	const AppLaunchResult result = LaunchInteractiveApplication(entry.app,
+		entry.elevated ? APP_LAUNCH_ELEVATION_FORCE_ADMIN : APP_LAUNCH_ELEVATION_AUTO, &entry);
+	if (result == APP_LAUNCH_INVALID_TARGET)
+	{
+		MessageBox(Localization::Get(L"recent.unavailable"), Localization::Get(L"recent.title"), MB_OK | MB_ICONWARNING);
+		return;
+	}
+	ShowApplicationLaunchResult(entry.app.name, result);
+}
+
+void CPage3::ShowApplicationLaunchResult(const CString& name, AppLaunchResult result)
+{
 	if (result == APP_LAUNCH_SUCCESS)
 	{
 		g_MainTab->ShowTransientStatus(Localization::Format(_T("dialog.started_proxy"),
-			static_cast<LPCTSTR>(app.name)), CStatusLabel::TONE_SUCCESS);
+			static_cast<LPCTSTR>(name)), CStatusLabel::TONE_SUCCESS);
 		return;
 	}
 	LPCTSTR messageKey = _T("dialog.drop_launch_failed");

@@ -382,6 +382,7 @@
     <ClInclude Include="ProxyTaskMgr.h" />
     <ClInclude Include="ProxyTesterMgr.h" />
     <ClInclude Include="StdAfx.h" />
+    <ClInclude Include="TrafficStatistics.h" />
     <ClInclude Include="structinfo.h" />
     <ClInclude Include="TcpProxyTask.h" />
     <ClInclude Include="TimeoutMonitor.h" />

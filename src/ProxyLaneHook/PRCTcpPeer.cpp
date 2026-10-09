@@ -361,6 +361,9 @@ int CPRCTcpPeer::TransferSend()
 		nBytesSent += nRetVal;
 		nBytesLeft -= nRetVal;
 		m_DataLenSent += nRetVal;
+		// Count only the portion accepted by the destination, once per hop.
+		m_pNotify->m_pTaskmgr->m_pPRC->RecordTraffic(
+			m_pNotify->m_ProxyInfo, m_pProxyLayer != NULL, nRetVal);
 	}
 
 	//if(nBytesLeft > 0 && nBytesSent)

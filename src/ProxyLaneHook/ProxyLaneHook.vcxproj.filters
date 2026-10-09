@@ -179,6 +179,9 @@
     <ClInclude Include="StdAfx.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="TrafficStatistics.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="structinfo.h">
       <Filter>Header Files</Filter>
     </ClInclude>

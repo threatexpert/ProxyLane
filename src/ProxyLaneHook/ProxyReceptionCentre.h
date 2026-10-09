@@ -5,6 +5,7 @@
 #include "PRCTcpServer.h"
 #include "PRCUdpServer.h"
 #include "TimerQueue.h"
+#include "TrafficStatistics.h"
 #include <map>
 
 class CGlobalProxy;
@@ -23,6 +24,15 @@ public:
 	BOOL AuthorizeProcessPipeAccess(HANDLE targetProcess);
 	IProxyTaskMgr* GetPTMInstance(int type);
 	IProxyDataHandle* GetPDHInstance();
+	void GetTrafficTotals(ULONGLONG& upload, ULONGLONG& download)
+	{
+		m_traffic.GetTotals(upload, download);
+	}
+	void RecordTraffic(ProxyInfo& proxy, bool download, int bytes)
+	{
+		if (proxy.GetProxyType() != PROXYTYPE_NOPROXY)
+			m_traffic.RecordTransfer(download, bytes);
+	}
 	//
 	BOOL CreatePRC();
 	BOOL DestroyPRC();
@@ -83,6 +93,7 @@ protected:
 	BOOL ShutdownPRCServer();
 
 private:
+	CTrafficStatistics m_traffic;
 	struct SuspendedChildObservation
 	{
 		ULONGLONG processCreateTime;

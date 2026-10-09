@@ -15,9 +15,12 @@ int DeferredMitigationPolicyTestsMain();
 int AppContainerPipeAccessTestsMain();
 int ProcessActionsTestsMain();
 int ScopedProcessSuspensionTestsMain();
+int TrafficStatisticsTestsMain();
 
 int main()
 {
+	if (TrafficStatisticsTestsMain() != 0)
+		return 1;
 	if (Socks5UdpCodecTestsMain() != 0)
 		return 1;
 	if (BoundedLogQueueTestsMain() != 0)

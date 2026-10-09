@@ -21,6 +21,9 @@
     <ClCompile Include="ApplicationCatalogCache.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="RecentApplications.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="ApplicationPicker.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -155,6 +158,9 @@
     <ClInclude Include="ApplicationCatalogCache.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="RecentApplications.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ProcessActions.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -168,6 +174,9 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="stdafx.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="TrafficRateSampler.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="..\ProxyLaneHook\token.h">

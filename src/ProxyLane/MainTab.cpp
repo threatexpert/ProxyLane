@@ -10,6 +10,21 @@ namespace
 	const UINT kTransientStatusId = 0x1007;
 	const UINT_PTR kTransientStatusTimer = 0x1008;
 	const UINT kSidebarStatusId = 0x1009;
+	const UINT_PTR kTrafficRateTimer = 0x100A;
+
+	CString FormatTrafficRate(double bytesPerSecond)
+	{
+		LPCTSTR units[] = { _T("B/s"), _T("KB/s"), _T("MB/s"), _T("GB/s") };
+		int unit = 0;
+		while (bytesPerSecond >= 1024.0 && unit < 3)
+		{
+			bytesPerSecond /= 1024.0;
+			++unit;
+		}
+		CString text;
+		text.Format(unit == 0 ? _T("%.0f %s") : _T("%.1f %s"), bytesPerSecond, units[unit]);
+		return text;
+	}
 	LPCTSTR kNavigationKeys[] =
 	{
 		_T("nav.proxy"), _T("nav.apps"), _T("nav.log"),
@@ -267,7 +282,7 @@ void CMainTab::PositionWnd()
 	{
 		const int sidebarMargin = UiTheme::ScaleForWindow(m_hWnd, 10);
 		const int sidebarStatusHeight = UiTheme::ScaleForWindow(m_hWnd,
-			m_proxyRunning ? 56 : 34);
+			m_proxyRunning ? 104 : 34);
 		m_sidebarStatus.MoveWindow(
 			sidebarMargin,
 			content.bottom - sidebarStatusHeight,
@@ -378,14 +393,20 @@ void CMainTab::SetRunningProfile(LPCTSTR profileName, BOOL running)
 {
 	CString name(profileName ? profileName : _T(""));
 	name.Trim();
+	CString recentId;
+	if (running && !name.IsEmpty() && !RecentApplications::EnsureProfileId(name, recentId))
+		AddLogText(0, L"Could not initialize recent applications for the running profile.\r\n");
 	if (running && name.IsEmpty())
 		name = Localization::Get(_T("nav.current_profile"));
 
-	if (m_proxyRunning == running && m_runningProfileName == name)
+	if (m_proxyRunning == running && m_runningProfileName == name && m_runningRecentProfileId == recentId)
 		return;
 
+	const BOOL wasRunning = m_proxyRunning;
 	m_proxyRunning = running;
 	m_runningProfileName = running ? name : _T("");
+	m_runningRecentProfileId = recentId;
+	if (m_page1.GetSafeHwnd()) m_page1.SendMessage(WM_RECENT_APPLICATIONS_CHANGED);
 	if (m_sidebarStatus.GetSafeHwnd())
 	{
 		if (running)
@@ -393,6 +414,17 @@ void CMainTab::SetRunningProfile(LPCTSTR profileName, BOOL running)
 				CStatusLabel::TONE_SUCCESS);
 		else
 			m_sidebarStatus.SetStatus(Localization::Get(_T("status.proxy_stopped")), CStatusLabel::TONE_NEUTRAL);
+
+		if (running)
+		{
+			UpdateTrafficRates(!wasRunning);
+			SetTimer(kTrafficRateTimer, 1000, NULL);
+		}
+		else
+		{
+			KillTimer(kTrafficRateTimer);
+			m_trafficSampler.Reset(0, 0, 0);
+		}
 
 		if (m_sidebarTooltip.GetSafeHwnd())
 		{
@@ -412,6 +444,11 @@ void CMainTab::SetRunningProfile(LPCTSTR profileName, BOOL running)
 
 void CMainTab::OnTimer(UINT_PTR eventId)
 {
+	if (eventId == kTrafficRateTimer)
+	{
+		UpdateTrafficRates(FALSE);
+		return;
+	}
 	if (eventId == kTransientStatusTimer)
 	{
 		KillTimer(kTransientStatusTimer);
@@ -420,6 +457,26 @@ void CMainTab::OnTimer(UINT_PTR eventId)
 	}
 
 	CWnd::OnTimer(eventId);
+}
+
+void CMainTab::UpdateTrafficRates(BOOL reset)
+{
+	if (!m_proxyRunning || !g_GlobalProxy || !m_sidebarStatus.GetSafeHwnd())
+		return;
+	IProxyReceptionCentre* centre = g_GlobalProxy->GetPRCInstance();
+	if (!centre)
+		return;
+	ULONGLONG upload = 0, download = 0;
+	centre->GetTrafficTotals(upload, download);
+	const DWORD now = GetTickCount();
+	double uploadRate = 0, downloadRate = 0;
+	if (reset)
+		m_trafficSampler.Reset(upload, download, now);
+	else
+		m_trafficSampler.Sample(upload, download, now, uploadRate, downloadRate);
+	m_sidebarStatus.SetTrafficRates(
+		CString(_T("\u2191 ")) + FormatTrafficRate(uploadRate),
+		CString(_T("\u2193 ")) + FormatTrafficRate(downloadRate));
 }
 
 void CMainTab::OnLButtonDown(UINT flags, CPoint point)

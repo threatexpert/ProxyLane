@@ -281,6 +281,8 @@ void CStatusLabel::SetStatus(LPCTSTR text, Tone tone)
 	m_twoLine = FALSE;
 	m_primaryText.Empty();
 	m_secondaryText.Empty();
+	m_uploadText.Empty();
+	m_downloadText.Empty();
 	SetWindowText(text ? text : _T(""));
 	if (GetSafeHwnd())
 	{
@@ -295,12 +297,25 @@ void CStatusLabel::SetTwoLineStatus(LPCTSTR primaryText, LPCTSTR secondaryText, 
 	m_twoLine = TRUE;
 	m_primaryText = primaryText ? primaryText : _T("");
 	m_secondaryText = secondaryText ? secondaryText : _T("");
+	m_uploadText.Empty();
+	m_downloadText.Empty();
 	SetWindowText(m_secondaryText);
 	if (GetSafeHwnd())
 	{
 		Invalidate(FALSE);
 		UpdateOverflowTooltip();
 	}
+}
+
+void CStatusLabel::SetTrafficRates(LPCTSTR uploadText, LPCTSTR downloadText)
+{
+	if (m_uploadText == uploadText && m_downloadText == downloadText)
+		return;
+	m_uploadText = uploadText;
+	m_downloadText = downloadText;
+	SetWindowText(m_secondaryText + _T("\r\n") + m_uploadText + _T("\r\n") + m_downloadText);
+	Invalidate(FALSE);
+	UpdateOverflowTooltip();
 }
 
 void CStatusLabel::PreSubclassWindow()
@@ -386,6 +401,12 @@ void CStatusLabel::UpdateOverflowTooltip()
 			if (!fullText.IsEmpty())
 				fullText += _T("\r\n");
 			fullText += m_secondaryText;
+		}
+		if (!m_uploadText.IsEmpty())
+		{
+			truncated = truncated || dc.GetTextExtent(m_uploadText).cx > innerWidth ||
+				dc.GetTextExtent(m_downloadText).cx > innerWidth;
+			fullText += _T("\r\n") + m_uploadText + _T("\r\n") + m_downloadText;
 		}
 	}
 	else
@@ -493,9 +514,23 @@ void CStatusLabel::DrawItem(LPDRAWITEMSTRUCT info)
 			DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
 		CRect secondaryRect(inner.left, primaryRect.bottom, inner.right, inner.bottom);
+		if (!m_uploadText.IsEmpty())
+			secondaryRect.bottom = min(inner.bottom, secondaryRect.top + primaryHeight);
 		dc.SetTextColor(UiTheme::TextPrimary());
 		dc.DrawText(m_secondaryText, secondaryRect,
 			DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+		if (!m_uploadText.IsEmpty())
+		{
+			CRect rateRect(inner.left, secondaryRect.bottom + UiTheme::ScaleForWindow(m_hWnd, 4),
+				inner.right, inner.bottom);
+			rateRect.bottom = min(inner.bottom, rateRect.top + primaryHeight);
+			dc.SetTextColor(UiTheme::TextSecondary());
+			dc.DrawText(m_uploadText, rateRect,
+				DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+			rateRect.OffsetRect(0, primaryHeight);
+			dc.DrawText(m_downloadText, rateRect,
+				DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+		}
 	}
 	else
 	{

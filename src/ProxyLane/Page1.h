@@ -6,6 +6,7 @@
 #include "ModernUI.h"
 #include "ProxyController.h"
 #include "ProxyProfileStore.h"
+#include "RecentApplications.h"
 #include <afxmt.h>
 #include <vector>
 
@@ -86,6 +87,18 @@ private:
 	CStatusLabel m_workflowStatus;
 	CStatic m_workflowText;
 	CModernButton m_workflowNext;
+	CStatic m_recentTitle;
+	CStatic m_recentEmpty;
+	CListCtrl m_recentList;
+	CImageList m_recentIcons;
+	CToolTipCtrl m_recentTooltip;
+	CString m_recentHoverText;
+	std::vector<RecentApplications::Entry> m_recentEntries;
+	ULONGLONG m_recentFileStamp;
+	CString m_recentProfileId;
+	BOOL m_recentLaunching;
+	DWORD m_recentLaunchTick;
+	void ReloadRecentApplications(BOOL force);
 
 	void LayoutFilterEditor(UINT groupId, CEdit& editor, UINT hintId);
 	void CreateWorkflowCard();
@@ -126,6 +139,11 @@ public:
 protected:
 	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV 支持
 	virtual BOOL OnInitDialog();
+	virtual BOOL PreTranslateMessage(MSG* message);
+	virtual BOOL OnNotify(WPARAM wParam, LPARAM lParam, LRESULT* result);
+	afx_msg LRESULT OnRecentApplicationsChanged(WPARAM, LPARAM);
+	afx_msg void OnRecentApplicationClick(NMHDR* header, LRESULT* result);
+	afx_msg void OnTimer(UINT_PTR timer);
 
 	DECLARE_MESSAGE_MAP()
 public:

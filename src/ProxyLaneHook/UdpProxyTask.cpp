@@ -9,6 +9,7 @@
 #include "PRCUdpPeer.h"
 #include "ProxyLog.h"
 #include "UdpAssociationPolicy.h"
+#include "ProxyReceptionCentre.h"
 
 static const DWORD UDP_ASSOCIATION_IDLE_TIMEOUT = 5 * 60 * 1000;
 
@@ -411,6 +412,7 @@ VOID CUdpProxyTask::OnServerWritable()
 		}
 		m_pendingBytes -= (DWORD)packet.data.size();
 		m_pending.pop_front();
+		m_pTaskmgr->m_pPRC->RecordTraffic(m_ProxyInfo, false, sent);
 	}
 
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
@@ -580,7 +582,10 @@ BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer *routePeer,
 				target.dstAddr.Size());
 		}
 		if (sent != SOCKET_ERROR)
+		{
+			m_pTaskmgr->m_pPRC->RecordTraffic(m_ProxyInfo, false, sent);
 			return TRUE;
+		}
 		if (WSAGetLastError() != WSAEWOULDBLOCK)
 			ScheduleServerReconnect(WSAGetLastError());
 	}
@@ -634,7 +639,10 @@ BOOL CUdpProxyTask::ForwardServerDatagram(_SockAddr source,
 	int sent = selected->peer->SendTo(data, length, &application,
 		application.Size());
 	if (sent == length)
+	{
+		m_pTaskmgr->m_pPRC->RecordTraffic(m_ProxyInfo, true, sent);
 		return TRUE;
+	}
 	return QueueReply(selected->peer, application, data, length);
 }
 
@@ -692,6 +700,7 @@ VOID CUdpProxyTask::FlushPendingReplies(CPRCUdpPeer *routePeer)
 		}
 		m_pendingReplyBytes -= (DWORD)it->data.size();
 		it = m_pendingReplies.erase(it);
+		m_pTaskmgr->m_pPRC->RecordTraffic(m_ProxyInfo, true, sent);
 	}
 }
 

@@ -5,6 +5,7 @@
 #include "Page3.h"
 #include "Page4.h"
 #include "Page5.h"
+#include "TrafficRateSampler.h"
 
 #define WM_PROXY_STATUS_CHANGED (WM_APP + 102)
 #define WM_MAIN_TAB_FINALIZE_LAYOUT (WM_APP + 103)
@@ -39,6 +40,7 @@ public:
 	void SetRunningProfile(LPCTSTR profileName, BOOL running);
 	BOOL IsProxyRunning() const { return m_proxyRunning; }
 	CString GetRunningProfileName() const { return m_runningProfileName; }
+	CString GetRunningRecentProfileId() const { return m_runningRecentProfileId; }
 
 	CPage1* GetPage1() { return &m_page1; }
 	CPage2* GetPage2() { return &m_page2; }
@@ -54,12 +56,15 @@ protected:
 	int HitTestNavigation(CPoint point) const;
 	CRect NavigationItemRect(int index) const;
 	int NavigationWidth() const;
+	void UpdateTrafficRates(BOOL reset);
 
 	int m_currentPage;
 	int m_hoverPage;
 	int m_attentionPage;
 	BOOL m_proxyRunning;
 	CString m_runningProfileName;
+	CString m_runningRecentProfileId;
+	CTrafficRateSampler m_trafficSampler;
 	CPage1 m_page1;
 	CPage2 m_page2;
 	CPage3 m_page3;

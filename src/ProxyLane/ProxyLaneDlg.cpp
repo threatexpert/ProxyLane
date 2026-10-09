@@ -1098,7 +1098,7 @@ void CProxyLaneDlg::OnGetMinMaxInfo(MINMAXINFO* minMaxInfo)
 {
 	CModernDialog::OnGetMinMaxInfo(minMaxInfo);
 	minMaxInfo->ptMinTrackSize.x = UiTheme::ScaleForWindow(m_hWnd, 640);
-	minMaxInfo->ptMinTrackSize.y = UiTheme::ScaleForWindow(m_hWnd, 440);
+	minMaxInfo->ptMinTrackSize.y = UiTheme::ScaleForWindow(m_hWnd, 488);
 }
 
 BOOL CProxyLaneDlg::RegisterFileDropTarget(CWnd* window)
@@ -1289,11 +1289,7 @@ void CProxyLaneDlg::LaunchDroppedApplication(const InstalledApplications::Applic
 		m_MainTab.ShowTransientStatus(Localization::Get(_T("dialog.unsaved_drop")), CStatusLabel::TONE_INFO);
 		return;
 	}
-	std::vector<CString> noExtraArguments;
-	const AppLaunchResult result = app.IsPackaged() ?
-		page3->LaunchPackagedAppById(app.aumid, app.arguments) :
-		page3->LaunchAndProxyApp(app.path, noExtraArguments, TRUE, elevationMode,
-			app.arguments, app.workingDirectory);
+	const AppLaunchResult result = page3->LaunchInteractiveApplication(app, elevationMode);
 	if (result == APP_LAUNCH_SUCCESS)
 	{
 		m_MainTab.ShowTransientStatus(Localization::Format(

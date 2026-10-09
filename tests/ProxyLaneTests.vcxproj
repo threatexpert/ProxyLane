@@ -37,6 +37,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ProxyLaneTestsMain.cpp" />
+    <ClCompile Include="TrafficStatisticsTests.cpp" />
     <ClCompile Include="ProcessActionsTests.cpp" />
     <ClCompile Include="ScopedProcessSuspensionTests.cpp" />
     <ClCompile Include="AppContainerPipeAccessTests.cpp"><PreprocessorDefinitions>main=AppContainerPipeAccessTestsMain;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>

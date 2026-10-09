@@ -94,6 +94,25 @@ bin/ProxyLane64.exe --auto --profile E2E --run `
 The servers, temporary profiles and ports are test-owned resources. Do not run
 these mappings against production proxy settings.
 
+## Traffic statistics
+
+`traffic_statistics.cpp` checks exact upstream/downstream payload byte counts
+through the real Hook DLL, including TCP, initial queued UDP datagrams, and
+reset after stopping and restarting the proxy. The Python runner starts local
+TCP/UDP endpoints that reply with twice the request payload, so swapped
+directions, duplicate counting, and inclusion of SOCKS framing fail the test.
+
+After building x64 Release, compile in an x64 Visual Studio developer prompt:
+
+```bat
+cl /nologo /EHsc /O2 /DUNICODE /D_UNICODE tests\e2e\traffic_statistics.cpp /Fo:build\qa\traffic_statistics.obj /Fe:bin\traffic_statistics.exe /link /LIBPATH:bin\x64\Release ProxyLaneHook.lib ws2_32.lib user32.lib
+python tests\TrafficStatisticsE2ETests.py --probe bin\traffic_statistics.exe --socks-server build\qa\go\socks5_e2e_server.exe
+```
+
+For Win32, use an x86 developer prompt and `bin\Win32\Release` as the library
+directory. The probe must reside beside the matching Hook DLL. All proxy and
+echo server ports are temporary loopback ports; no saved profiles are changed.
+
 ## Managed process startup
 
 After building both Release platforms, use 64-bit Python with `psutil` and

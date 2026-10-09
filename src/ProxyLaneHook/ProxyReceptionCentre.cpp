@@ -467,6 +467,7 @@ LRESULT CALLBACK CProxyReceptionCentre::PRCWndProc(HWND hWnd, UINT uMsg, WPARAM 
 BOOL CProxyReceptionCentre::CreatePRC()
 {
 	ATLASSERT(m_hTestEvent == NULL);
+	m_traffic.Reset();
 
 	m_ThreadStatus = threadstatus_inactive;
 

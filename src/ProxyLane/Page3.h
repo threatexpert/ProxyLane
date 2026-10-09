@@ -4,6 +4,7 @@
 #include "..\ProxyLaneHook\ProxyModule.h"
 #include "ListCtrlEx.h"
 #include "ModernUI.h"
+#include "RecentApplications.h"
 #include <map>
 #include <set>
 #include <vector>
@@ -189,6 +190,11 @@ public:
 		const CString& initialArguments = CString(),
 		const CString& initialWorkingDirectory = CString());
 	AppLaunchResult LaunchPackagedAppById(LPCTSTR aumid, const CString& arguments);
+	AppLaunchResult LaunchInteractiveApplication(const InstalledApplications::Application& app,
+		AppLaunchElevationMode elevationMode = APP_LAUNCH_ELEVATION_AUTO,
+		const RecentApplications::Entry* saved = NULL);
+	void LaunchRecentApplication(const RecentApplications::Entry& entry);
+	void ShowApplicationLaunchResult(const CString& name, AppLaunchResult result);
 	AppLaunchResult LaunchPackagedAppAndProxy(
 		LPCTSTR fileName,
 		const CString& manifestDir,

@@ -60,6 +60,9 @@ public:
 		DWORD *hookError) = 0;
 	// Must succeed before injection; ordinary processes need no extra grant.
 	virtual BOOL AuthorizeProcessPipeAccess(HANDLE targetProcess) = 0;
+	// Successfully forwarded application payload, excluding direct routes and
+	// proxy/TLS framing. Appended to preserve existing virtual method slots.
+	virtual void GetTrafficTotals(ULONGLONG& upload, ULONGLONG& download) = 0;
 };
 
 template<typename T>
