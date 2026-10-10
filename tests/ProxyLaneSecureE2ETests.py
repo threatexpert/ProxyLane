@@ -87,15 +87,20 @@ def main():
     parser.add_argument("--bin", required=True)
     parser.add_argument("--gonc", required=True)
     parser.add_argument("--plain", action="store_true")
+    parser.add_argument("--target-rule", choices=("none", "bypass", "proxy-miss"),
+                        default="none")
+    parser.add_argument("--target-host", help="Optional hostname resolving to this machine")
     parser.add_argument("--proxy-type", choices=("SOCKS5", "HTTP10", "HTTP11"),
                         default="SOCKS5")
     args = parser.parse_args()
-    test_udp = args.proxy_type == "SOCKS5"
+    test_udp = args.proxy_type == "SOCKS5" and args.target_rule == "none"
+    bypass = args.target_rule != "none"
+    executable = "ProxyLane64.exe"
 
     # Hook a LAN destination so the target stays entirely local and the test
-    # does not depend on external DNS. The observed target PID below proves
-    # that gonc, rather than the proxied client, established the connection.
-    target_host = local_ipv4()
+    # does not depend on external DNS by default. A hostname can exercise fake
+    # DNS. The observed target PID proves whether gonc or PRC connected.
+    target_host = args.target_host or local_ipv4()
 
     tcp_listener = socket.socket()
     tcp_listener.bind(("0.0.0.0", 0))
@@ -110,10 +115,15 @@ def main():
     tcp_owner, udp_owner = [], []
     threading.Thread(target=tcp_echo, args=(tcp_listener, tcp_owner), daemon=True).start()
     threading.Thread(target=udp_echo, args=(udp_server, udp_owner), daemon=True).start()
+    target_filter = ""
+    if args.target_rule == "bypass":
+        target_filter = f"{target_host}:{tcp_listener.getsockname()[1]}"
+    elif args.target_rule == "proxy-miss":
+        target_filter = "unmatched.invalid:1"
 
     with tempfile.TemporaryDirectory(prefix="ProxyLaneSecureE2E-",
                                      ignore_cleanup_errors=True) as temp:
-        for name in ("ProxyLane64.exe", "ProxyLaneHook32.dll", "ProxyLaneHook64.dll",
+        for name in (executable, "ProxyLaneHook32.dll", "ProxyLaneHook64.dll",
                      "ProxyLaneSecureTransport32.dll", "ProxyLaneSecureTransport64.dll"):
             shutil.copy2(os.path.join(args.bin, name), os.path.join(temp, name))
         ini = f"""[options]
@@ -132,8 +142,8 @@ dnsOpt=1
 RedirectPrivateDNS=0
 ChildFilter=
 ChildFilterMode=1
-TargetFilter=
-TargetFilterMode=0
+TargetFilter={target_filter}
+TargetFilterMode={1 if args.target_rule == 'proxy-miss' else 0}
 Type={args.proxy_type}
 Host=127.0.0.1
 Port={gonc_port}
@@ -165,7 +175,7 @@ PSK={' ' if args.plain else '123'}
         if not test_udp:
             client_arguments.append("tcp-only")
         proxylane = subprocess.Popen(
-            [os.path.join(temp, "ProxyLane64.exe"), "--auto", "--profile",
+            [os.path.join(temp, executable), "--auto", "--profile",
              "SecureTest", "--run", sys.executable, "--"] + client_arguments,
             cwd=temp, env=environment)
         try:
@@ -182,13 +192,16 @@ PSK={' ' if args.plain else '123'}
                                    f"\nProxyLane status: {proxylane.poll()}" +
                                    f"\nTCP observations: {tcp_owner}\nUDP observations: {udp_owner}")
             tcp_pids = [item for item in tcp_owner if isinstance(item, int)]
-            if tcp_pids != [gonc.pid]:
-                raise RuntimeError(f"TCP target owner was {tcp_owner}, expected gonc {gonc.pid}")
+            expected_tcp_pid = proxylane.pid if bypass else gonc.pid
+            if tcp_pids != [expected_tcp_pid]:
+                raise RuntimeError(f"TCP target owner was {tcp_owner}, expected {expected_tcp_pid}")
             if test_udp and udp_owner != [gonc.pid]:
                 raise RuntimeError(f"UDP target owner was {udp_owner}, expected gonc {gonc.pid}")
             suffix = "TCP and UDP" if test_udp else "TCP"
-            print(f"PASS: x64 ProxyLane {args.proxy_type} Hook/PRC gonc "
-                  f"TLS-PSK {suffix} path")
+            route = f"direct ({args.target_rule})" if bypass else "proxy"
+            transport = "PLAIN" if args.plain else "TLS-PSK"
+            print(f"PASS: x64 ProxyLane {args.proxy_type} {transport} "
+                  f"{suffix} {route} path")
         finally:
             proxylane.terminate()
             try:

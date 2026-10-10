@@ -52,9 +52,11 @@ void CPRCTcpPeer::SetPartner(CPRCTcpPeer *pPartner)
 	m_pPartner = pPartner;
 }
 
-BOOL CPRCTcpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo)
+BOOL CPRCTcpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
+	IProxyLog::ConnectionStage& stage)
 {
 
+	stage = IProxyLog::STAGE_TRANSPORT;
 	//设置代理
 	if(!AddProxyLayer(lpProxyInfo))
 		return FALSE;
@@ -79,18 +81,25 @@ BOOL CPRCTcpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo)
 
 	BOOL bConnect = FALSE;
 	const _SockAddr& destination = lpPRCClient->GetProxyDestination();
+	const bool connectByName = lpPRCClient->IsDNValid() &&
+		!lpPRCClient->HasProxyDestination();
 
+	// ConnectRawByName resolves IPv4 with WSAAsyncGetHostByName. The fake
+	// address is only an identity token and must not choose the socket family.
 	int transportFamily = lpProxyInfo &&
 		lpProxyInfo->GetProxyType() == PROXYTYPE_NOPROXY &&
-		destination.IsIPv6() ? AF_INET6 : AF_INET;
+		!connectByName && destination.IsIPv6() ? AF_INET6 : AF_INET;
+	stage = IProxyLog::STAGE_SOCKET;
 	if (!CAsyncSocketEx::Create(0, SOCK_STREAM,
 		FD_READ | FD_WRITE | FD_CONNECT | FD_CLOSE, NULL, FALSE,
 		transportFamily))
 		return FALSE;
-	CAsyncSocketEx::AsyncSelect(FD_READ | FD_WRITE | FD_CONNECT | FD_CLOSE);
+	if (!CAsyncSocketEx::AsyncSelect(FD_READ | FD_WRITE | FD_CONNECT | FD_CLOSE))
+		return FALSE;
 
+	stage = IProxyLog::STAGE_CONNECT;
 	//Is domain name valid?
-	if(lpPRCClient->IsDNValid() && !lpPRCClient->HasProxyDestination())
+	if(connectByName)
 		bConnect = CAsyncSocketEx::Connect(lpPRCClient->szDomainName, lpPRCClient->dstAddr.GetPort());
 	else
 		bConnect = CAsyncSocketEx::Connect(&destination, destination.Size());
@@ -112,8 +121,8 @@ BOOL CPRCTcpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo)
 
 BOOL CPRCTcpPeer::AddProxyLayer(LPProxyInfo lpProxyInfo)
 {
-	if (lpProxyInfo &&
-		lpProxyInfo->reserved == PROXY_TRANSPORT_GONC_TLS_PSK &&
+	const bool useSecureTransport = ProxyTransportPolicy::UsesGoncTlsPsk(lpProxyInfo);
+	if (useSecureTransport &&
 		(!ProxyTransportPolicy::SupportsGoncTlsPsk(
 			lpProxyInfo->GetProxyType()) ||
 		 !lpProxyInfo->strTransportPsk.szbuf[0]))
@@ -124,7 +133,10 @@ BOOL CPRCTcpPeer::AddProxyLayer(LPProxyInfo lpProxyInfo)
 
 	CAsyncProxySocketLayer *pNewLayer = new CAsyncProxySocketLayer;
 	if(pNewLayer == NULL)
+	{
+		WSASetLastError(WSAENOBUFS);
 		return FALSE;
+	}
 
 	int nProxyType;
 
@@ -153,11 +165,15 @@ BOOL CPRCTcpPeer::AddProxyLayer(LPProxyInfo lpProxyInfo)
 	m_pProxyLayer = pNewLayer;
 	if (!AddLayer(m_pProxyLayer))
 		return FALSE;
-	if (lpProxyInfo && lpProxyInfo->reserved == PROXY_TRANSPORT_GONC_TLS_PSK)
+	if (useSecureTransport)
 	{
 		m_pSecureLayer = new CAsyncSecureSocketLayer;
-		if (!m_pSecureLayer ||
-			!m_pSecureLayer->Configure(lpProxyInfo->strTransportPsk.szbuf,
+		if (!m_pSecureLayer)
+		{
+			WSASetLastError(WSAENOBUFS);
+			return FALSE;
+		}
+		if (!m_pSecureLayer->Configure(lpProxyInfo->strTransportPsk.szbuf,
 				lpProxyInfo->strProxyHost.szbuf) ||
 			!AddLayer(m_pSecureLayer))
 			return FALSE;

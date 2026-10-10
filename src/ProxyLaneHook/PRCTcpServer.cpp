@@ -209,9 +209,6 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 
 	ResolveProcPath(m_pPRC, PRCC.dwPid, szChildAppPath, _countof(szChildAppPath), ppszName);
 
-	DWORD nIP = PRCC.dstAddr.GetdwIP();
-	const BYTE* pucIP = (BYTE*)&nIP;
-
 	ProxyInfo pisetting;
 	ProxySettingsInfo psi;
 	memset(&pisetting, 0, sizeof(pisetting));
@@ -220,14 +217,14 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 	IProxySettings *pProxySettings = m_pGlobalProxy->GetSettingsInstance();
 	if(!pProxySettings->GetProxyInfo(&PRCC, &pisetting))
 	{
-		PrintText(_T("ERR: GetProxyInfo\r\n"));
+		LogConnectionEvent(IProxyLog::SETTINGS_FAILED, &PRCC, ppszName);
 		closesocket(sClient);
 		return;
 	}
 
 	if (!pProxySettings->GetProxySettings(&psi))
 	{
-		PrintText(_T("ERR: GetProxySettings\r\n"));
+		LogConnectionEvent(IProxyLog::SETTINGS_FAILED, &PRCC, ppszName);
 		closesocket(sClient);
 		return;
 	}
@@ -238,62 +235,25 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 	{
 		if (isLLMNR(PRCC.szDomainName))
 		{
-#ifdef _UNICODE
-			PrintText(_T("PID: %d(%s), refused: %S:%d\r\n"), PRCC.dwPid, ppszName ? ppszName : L"", PRCC.szDomainName, PRCC.dstAddr.GetPort());
-#else
-			PrintText(_T("PID: %d(%s), refused: %s:%d\r\n"), PRCC.dwPid, ppszName ? ppszName : L"", PRCC.szDomainName, PRCC.dstAddr.GetPort());
-#endif
+			LogConnectionEvent(IProxyLog::ROUTE_BLOCKED, &PRCC, ppszName);
 			closesocket(sClient);
 			return;
 		}
 	}
 
-	if(!m_pProxyTaskMgr->OnNewTask(sClient, &PRCC, &pisetting))
+	IProxyLog::ConnectionStage stage = IProxyLog::STAGE_ALLOCATE;
+	if(!m_pProxyTaskMgr->OnNewTask(sClient, &PRCC, &pisetting, stage))
 	{
-		if (PRCC.dstAddr.IsIPv6())
-		{
-			WCHAR addressText[INET6_ADDRSTRLEN] = L"";
-			ProxyInetNtopW(AF_INET6, (PVOID)PRCC.dstAddr.GetAddr6(), addressText,
-				_countof(addressText));
-			PrintText(_T("Failed to add proxy task. PID: %d(%s), [%s]:%d, domain: %S:%d\r\n"),
-				PRCC.dwPid, ppszName ? ppszName : L"", addressText,
-				PRCC.dstAddr.GetPort(), PRCC.szDomainName, PRCC.dstAddr.GetPort());
-			closesocket(sClient);
-			return;
-		}
-#ifdef _UNICODE
-		PrintText(_T("Failed to add proxy task. PID: %d(%s), %u.%u.%u.%u:%d, domain: %S:%d\r\n"), PRCC.dwPid, ppszName ? ppszName : L"", pucIP[0], pucIP[1], pucIP[2], pucIP[3], PRCC.dstAddr.GetPort(), PRCC.szDomainName, PRCC.dstAddr.GetPort());
-#else
-		PrintText(_T("Failed to add proxy task. PID: %d(%s), %u.%u.%u.%u:%d, domain: %s:%d\r\n"), PRCC.dwPid, ppszName ? ppszName : L"", pucIP[0], pucIP[1], pucIP[2], pucIP[3], PRCC.dstAddr.GetPort(), PRCC.szDomainName, PRCC.dstAddr.GetPort());
-#endif
+		const DWORD error = WSAGetLastError();
+		LogConnectionFailure(&PRCC, ppszName, stage, error);
 		closesocket(sClient);
 		return;
 	}
 
 	LogNewProxyTask(&PRCC);
 
-	LPCTSTR szTag = (pisetting.GetProxyType() == PROXYTYPE_NOPROXY) ? _T("[Bypassed] ") : _T("[Hooked] ");
-	if(PRCC.IsDNValid())
-	{
-#ifdef _UNICODE
-		PrintText(_T("%sPID: %d(%s), connect to: %S:%d\r\n"), szTag, PRCC.dwPid, ppszName ? ppszName : L"", PRCC.szDomainName, PRCC.dstAddr.GetPort());
-#else
-		PrintText(_T("%sPID: %d(%s), connect to: %s:%d\r\n"), szTag, PRCC.dwPid, ppszName ? ppszName : L"", PRCC.szDomainName, PRCC.dstAddr.GetPort());
-#endif
-	}else
-	{
-		if (PRCC.dstAddr.IsIPv6())
-		{
-			WCHAR addressText[INET6_ADDRSTRLEN] = L"";
-			ProxyInetNtopW(AF_INET6, (PVOID)PRCC.dstAddr.GetAddr6(), addressText,
-				_countof(addressText));
-			PrintText(_T("%sPID: %d(%s), connect to: [%s]:%d\r\n"),
-				szTag, PRCC.dwPid, ppszName ? ppszName : L"", addressText,
-				PRCC.dstAddr.GetPort());
-		}
-	else
-			PrintText(_T("%sPID: %d(%s), connect to: %u.%u.%u.%u:%d\r\n"), szTag, PRCC.dwPid, ppszName ? ppszName : L"", pucIP[0], pucIP[1], pucIP[2], pucIP[3], PRCC.dstAddr.GetPort());
-	}
+	LogConnectionEvent(pisetting.GetProxyType() == PROXYTYPE_NOPROXY
+		? IProxyLog::ROUTE_DIRECT : IProxyLog::ROUTE_PROXY, &PRCC, ppszName);
 	LogDnsRedirect(&PRCC);
 
 

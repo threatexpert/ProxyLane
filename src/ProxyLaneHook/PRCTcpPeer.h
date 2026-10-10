@@ -4,7 +4,7 @@
 #include "asynsocket\AsyncSocketEx.h"
 #include "asynsocket\AsyncProxySocketLayer.h"
 #include "asynsocket\AsyncSecureSocketLayer.h"
-#include "structinfo.h"
+#include "ProxyModule.h"
 #include "TimeoutMonitor.h"
 
 class CTcpProxyTask;
@@ -20,7 +20,8 @@ public:
 	CPRCTcpPeer(CTcpProxyTask *pNotify);
 	~CPRCTcpPeer(void);
 
-	BOOL ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo);
+	BOOL ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
+	IProxyLog::ConnectionStage& stage);
 
 	void OnReceive(int nErrorCode);
 	void OnSend(int nErrorCode);

@@ -41,7 +41,8 @@ public:
 	~CProxyTCPTaskMgr(void);
 
 
-	BOOL OnNewTask(SOCKET sClient, LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo);
+	BOOL OnNewTask(SOCKET sClient, LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
+	IProxyLog::ConnectionStage& stage);
 	BOOL OnDeleteTask(CTcpProxyTask *pTask);
 	VOID OnTimer(UINT_PTR nIDEvent);
 

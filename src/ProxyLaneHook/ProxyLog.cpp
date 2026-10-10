@@ -83,6 +83,34 @@ void CProxyLog::OnHookLogtext(LPHookLogtext log)
 	}
 }
 
+void CProxyLog::OnConnectionEvent(ConnectionEvent event, const LPPRCClient client,
+	LPCWSTR processName)
+{
+	for (IProxyLog* p = m_pNext; p; p = p->m_pNext)
+		p->OnConnectionEvent(event, client, processName);
+}
+
+void LogConnectionEvent(IProxyLog::ConnectionEvent event, const LPPRCClient client,
+	LPCWSTR processName)
+{
+	if (g_pProxyLog && client)
+		g_pProxyLog->OnConnectionEvent(event, client, processName);
+}
+
+void CProxyLog::OnConnectionFailure(const LPPRCClient client, LPCWSTR processName,
+	ConnectionStage stage, DWORD error)
+{
+	for (IProxyLog* p = m_pNext; p; p = p->m_pNext)
+		p->OnConnectionFailure(client, processName, stage, error);
+}
+
+void LogConnectionFailure(const LPPRCClient client, LPCWSTR processName,
+	IProxyLog::ConnectionStage stage, DWORD error)
+{
+	if (g_pProxyLog && client)
+		g_pProxyLog->OnConnectionFailure(client, processName, stage, error);
+}
+
 void PrintText(const TCHAR *fmt, ...)
 {
 	if(!g_pProxyLog)
@@ -135,40 +163,8 @@ void LogUdpFirstDatagram(CProxyReceptionCentre *receptionCentre,
 	WCHAR processPath[MAX_PATH];
 	LPWSTR processName = GetUdpProcessName(receptionCentre, lpC->dwPid,
 		processPath, _countof(processPath));
-	LPCTSTR tag = lpPI->GetProxyType() == PROXYTYPE_NOPROXY
-		? _T("[Bypassed] ") : _T("[Hooked] ");
-	if (lpC->IsDNValid())
-	{
-#ifdef _UNICODE
-		PrintText(_T("%sUDP PID: %d(%s), send to: %S:%d\r\n"), tag,
-			lpC->dwPid, processName ? processName : L"",
-			lpC->szDomainName, lpC->dstAddr.GetPort());
-#else
-		PrintText(_T("%sUDP PID: %d(%s), send to: %s:%d\r\n"), tag,
-			lpC->dwPid, processName ? processName : L"",
-			lpC->szDomainName, lpC->dstAddr.GetPort());
-#endif
-		LogDnsRedirect(lpC);
-		return;
-	}
-
-	if (lpC->dstAddr.IsIPv6())
-	{
-		WCHAR addressText[INET6_ADDRSTRLEN] = L"";
-		ProxyInetNtopW(AF_INET6, (PVOID)lpC->dstAddr.GetAddr6(), addressText,
-			_countof(addressText));
-		PrintText(_T("%sUDP PID: %d(%s), send to: [%s]:%d\r\n"), tag,
-			lpC->dwPid, processName ? processName : L"", addressText,
-			lpC->dstAddr.GetPort());
-		LogDnsRedirect(lpC);
-		return;
-	}
-
-	DWORD ip = lpC->dstAddr.GetdwIP();
-	const BYTE *bytes = (const BYTE*)&ip;
-	PrintText(_T("%sUDP PID: %d(%s), send to: %u.%u.%u.%u:%d\r\n"), tag,
-		lpC->dwPid, processName ? processName : L"", bytes[0], bytes[1],
-		bytes[2], bytes[3], lpC->dstAddr.GetPort());
+	LogConnectionEvent(lpPI->GetProxyType() == PROXYTYPE_NOPROXY
+		? IProxyLog::ROUTE_DIRECT : IProxyLog::ROUTE_PROXY, lpC, processName);
 	LogDnsRedirect(lpC);
 }
 

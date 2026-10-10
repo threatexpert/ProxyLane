@@ -1,6 +1,6 @@
 #pragma once
 
-#include "structinfo.h"
+#include "ProxyModule.h"
 
 class CProxyTCPTaskMgr;
 class CPRCTcpPeer;
@@ -14,7 +14,8 @@ public:
 
 
 	VOID EndTask();
-	BOOL SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo);
+	BOOL SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
+	IProxyLog::ConnectionStage& stage);
 
 	VOID OnPeerClosed(CPRCTcpPeer *pPeer);
 	BOOL IsDeletePending() const { return m_bDeletePending; }

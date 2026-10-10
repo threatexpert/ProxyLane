@@ -136,6 +136,22 @@ class IProxyLog
 	: public IInstanceList<IProxyLog>
 {
 public:
+	enum ConnectionEvent
+	{
+		ROUTE_PROXY,
+		ROUTE_DIRECT,
+		ROUTE_BLOCKED,
+		TASK_FAILED,
+		SETTINGS_FAILED
+	};
+	enum ConnectionStage
+	{
+		STAGE_ALLOCATE,
+		STAGE_TRANSPORT,
+		STAGE_SOCKET,
+		STAGE_CONNECT,
+		STAGE_ATTACH
+	};
 	virtual ~IProxyLog(void){}
 
 	virtual void LogText(LPCWSTR lpText) = 0;
@@ -145,6 +161,15 @@ public:
 	virtual void OnHookLogtext(LPHookLogtext log) = 0;
 	// 新增回调放在接口末尾，避免改变既有虚函数在 vtable 中的位置。
 	virtual void OnChildInjectionResult(LPHookNewProcessInfo lphnpi, BOOL succeeded) = 0;
+	// Routing decisions are distinct from successful connection handshakes.
+	// The receiver must copy borrowed strings/client data before returning.
+	virtual void OnConnectionEvent(ConnectionEvent event, const LPPRCClient client,
+		LPCWSTR processName) {}
+	virtual void OnConnectionFailure(const LPPRCClient client, LPCWSTR processName,
+		ConnectionStage stage, DWORD error)
+	{
+		OnConnectionEvent(TASK_FAILED, client, processName);
+	}
 };
 
 

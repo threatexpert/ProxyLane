@@ -38,17 +38,25 @@ CTcpProxyTask 只是负责创建并管理两个CPRCTcpPeer对象分别为m_pClie
 
 PRC Server OnAccept 接收到一个sClient，通过地址信息到PRC查询原请求地址, 并将GlobalProxy当前设置的代理服务器信息传递给CTcpProxyTask.SetTaskInfo
 */
-BOOL CTcpProxyTask::SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo)
+BOOL CTcpProxyTask::SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
+	IProxyLog::ConnectionStage& stage)
 {
+	stage = IProxyLog::STAGE_ALLOCATE;
 	do 
 	{
 		m_pClient = new CPRCTcpPeer(this);
 		if(m_pClient == NULL)
+		{
+			WSASetLastError(WSAENOBUFS);
 			break;
+		}
 
 		m_pServer = new CPRCTcpPeer(this);
 		if(m_pServer == NULL)
+		{
+			WSASetLastError(WSAENOBUFS);
 			break;
+		}
 
 		m_PRCClient = *lpPRCClient;
 		m_ProxyInfo = *lpProxyInfo;
@@ -59,9 +67,10 @@ BOOL CTcpProxyTask::SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxy
 		m_pServer->SetSockOpt(SO_SNDBUF, &socketbufsize,sizeof(socketbufsize));
 		m_pServer->SetSockOpt(SO_RCVBUF, &socketbufsize,sizeof(socketbufsize));
 
-		if(!m_pServer->ConnectProxy(lpPRCClient, lpProxyInfo))
+		if(!m_pServer->ConnectProxy(lpPRCClient, lpProxyInfo, stage))
 			break;
 
+		stage = IProxyLog::STAGE_ATTACH;
 		//先不关注client的读写， 等代理建立成功后再重新设置
 		if(!m_pClient->Attach(sClient, FD_CLOSE))
 			break;
@@ -72,10 +81,12 @@ BOOL CTcpProxyTask::SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxy
 		return TRUE;
 	} while(FALSE);
 
+	const int error = WSAGetLastError();
 	delete m_pClient;
 	delete m_pServer;
 	m_pClient = NULL;
 	m_pServer = NULL;
+	WSASetLastError(error);
 
 	return FALSE;
 }

@@ -636,8 +636,8 @@ BOOL CPage1::GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI)
 		BOOL bGoProxy = (g_TargetInjectFilter.nMode == TARGETFILTER_MODE_PROXY) ? bMatched : !bMatched;
 		if (!bGoProxy)
 		{
-			// 命中放行 → 把代理类型清空，PRC 服务器层会按 NOPROXY 直转到原目标
-			lpPI->strProxyType = _T("");
+			// 放行连接使用独立的直连配置，不继承代理的加密传输设置
+			ProxyTransportPolicy::UseDirectConnection(*lpPI);
 		}
 	}
 

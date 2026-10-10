@@ -4,6 +4,7 @@
 #include "BoundedLogQueue.h"
 #include "ModernUI.h"
 #include <afxmt.h>
+#include <deque>
 
 
 using namespace std;
@@ -34,6 +35,11 @@ public:
 	void OnChildInjectionResult(LPHookNewProcessInfo lphnpi, BOOL succeeded);
 	void OnHookWsock(LPHookWSockResult res);
 	void OnHookLogtext(LPHookLogtext log);
+	void OnConnectionFailure(const LPPRCClient client, LPCWSTR processName,
+		ConnectionStage stage, DWORD error);
+	void OnConnectionEvent(ConnectionEvent event, const LPPRCClient client,
+		LPCWSTR processName);
+	void LogProcessEvent(DWORD processId, LPCTSTR processPath, LPCTSTR messageKey);
 
 public:
 	CEdit m_Edit;
@@ -46,7 +52,12 @@ public:
 
 
 	CCriticalSection m_logLock;
-	CBoundedLogQueue<CString> m_logQueue;
+	struct LogEntry
+	{
+		CString text;
+		SYSTEMTIME time;
+	};
+	CBoundedLogQueue<LogEntry> m_logQueue;
 // 对话框数据
 	enum { IDD = IDD_Page2 };
 
@@ -68,6 +79,14 @@ public:
 	LRESULT OnPrintLogText(WPARAM wParam, LPARAM lParam);
 
 private:
+	struct LogDateMarker
+	{
+		int offset;
+		CString header;
+	};
+	CString m_lastLogDate;
+	std::deque<LogDateMarker> m_logDates;
+	void AppendLogEntry(const LogEntry& entry, CString& output, int baseOffset);
 	void QueueLogText(const CString &text);
 	void PostPrintLogMessageLocked();
 	void TrimLogLines();

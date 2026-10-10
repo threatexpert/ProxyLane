@@ -2558,18 +2558,10 @@ BOOL CPage3::ShouldProxyChildProcess(LPHookNewProcessInfo lphnpi)
 
 	if (!bShouldInject)
 	{
-		CString processName = lphnpi->szAppPath;
-		const int slash = processName.ReverseFind(_T('\\'));
-		if (slash >= 0)
-			processName = processName.Mid(slash + 1);
-		CString text;
-		text.Format(
-			_T("New Process: %d | %s Skipped by filter\r\n"),
-			lphnpi->dwProcessId,
-			(LPCTSTR)processName);
 		CPage2* page2 = g_MainTab ? g_MainTab->GetPage2() : NULL;
 		if (page2)
-			page2->AddLogText(text);
+			page2->LogProcessEvent(lphnpi->dwProcessId, lphnpi->szAppPath,
+				_T("log.process_skipped"));
 	}
 	return bShouldInject;
 }
@@ -2602,22 +2594,8 @@ BOOL CPage3::InjectNewProcess(LPHookNewProcessInfo lphnpi)
 	}
 
 	CPage2 *pPage2 = g_MainTab->GetPage2();
-	CString procName = hnpi.szAppPath;
-	const int nameSlash = procName.ReverseFind(_T('\\'));
-	if (nameSlash >= 0)
-		procName = procName.Mid(nameSlash + 1);
-	if (procName.IsEmpty())
-		procName = _T("Unknown");
-	CString szText;
-
 	bRet = InjectDll(hProcess, hnpi.dwProcessId, hnpi.dwThreadId, szPipeName);
-
-	if (bRet > 0)
-		szText.Format(_T("New Process: %d | %s Hooked\r\n"), hnpi.dwProcessId, (LPCTSTR)procName);
-	else
-		szText.Format(_T("New Process: %d | %s InjectDll Failed\r\n"), hnpi.dwProcessId, (LPCTSTR)procName);
-
-	pPage2->AddLogText(szText);
+	pPage2->OnChildInjectionResult(&hnpi, bRet > 0);
 
 	CloseHandle(hProcess);
 	return bRet > 0;
