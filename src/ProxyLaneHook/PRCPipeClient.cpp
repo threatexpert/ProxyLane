@@ -392,6 +392,14 @@ BOOL CPRCPipeClient::PRCNotifyHookWSockResult(
 	return TRUE;
 }
 
+BOOL CPRCPipeClient::PRCLogBlockedIPv6(const HookBlockedIPv6Info& info)
+{
+	PRCPipeDataHead header = { 0 };
+	header.action = PRCPD_BLOCKED_IPV6;
+	header.dataSize = sizeof(info);
+	return WritePipe(&header, sizeof(header)) && WritePipe(&info, sizeof(info));
+}
+
 BOOL CPRCPipeClient::PRCLogtext(LPCWSTR lpsz)
 {
 	PRCPipeDataHead hdr;

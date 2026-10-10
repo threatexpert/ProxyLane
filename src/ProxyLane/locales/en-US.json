@@ -1,4 +1,5 @@
 {
+  "log.connection_ipv6_blocked": "[Blocked] %s (%lu) → %s · %s · IPv6 disabled\r\n",
   "log.connection_task_detail": "[Failed] %s (%lu) → %s · %s · %s · Error %lu\r\n",
   "log.stage_allocate": "Allocate connection",
   "log.stage_transport": "Initialize transport",

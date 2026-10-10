@@ -1,4 +1,5 @@
 {
+  "log.connection_ipv6_blocked": "[拦截] %s (%lu) → %s · %s · IPv6 已禁用\r\n",
   "log.connection_task_detail": "[失败] %s (%lu) → %s · %s · %s · 错误 %lu\r\n",
   "log.stage_allocate": "分配连接资源",
   "log.stage_transport": "初始化传输",

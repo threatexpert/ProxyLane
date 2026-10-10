@@ -379,6 +379,7 @@ void CPage2::OnConnectionEvent(ConnectionEvent event, const LPPRCClient client,
 	case ROUTE_PROXY: key = _T("log.connection_proxy"); break;
 	case ROUTE_DIRECT: key = _T("log.connection_direct"); break;
 	case ROUTE_BLOCKED: key = _T("log.connection_blocked"); break;
+	case IPV6_BLOCKED: key = _T("log.connection_ipv6_blocked"); break;
 	case TASK_FAILED: key = _T("log.connection_task_failed"); break;
 	case SETTINGS_FAILED: key = _T("log.connection_settings_failed"); break;
 	default: return;
@@ -386,7 +387,8 @@ void CPage2::OnConnectionEvent(ConnectionEvent event, const LPPRCClient client,
 	CString name = LogProcessName(CString(processName ? processName : L""));
 	CString endpoint = LogEndpoint(*client);
 	AddLogText(Localization::Format(key, static_cast<LPCTSTR>(name), client->dwPid,
-		static_cast<LPCTSTR>(endpoint), client->sType == SOCK_DGRAM ? _T("UDP") : _T("TCP")));
+		static_cast<LPCTSTR>(endpoint), client->sType == SOCK_DGRAM ? _T("UDP") :
+		client->sType == SOCK_STREAM ? _T("TCP") : _T("Socket")));
 }
 
 void CPage2::OnConnectionFailure(const LPPRCClient client, LPCWSTR processName,

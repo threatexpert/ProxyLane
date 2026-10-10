@@ -142,7 +142,8 @@ public:
 		ROUTE_DIRECT,
 		ROUTE_BLOCKED,
 		TASK_FAILED,
-		SETTINGS_FAILED
+		SETTINGS_FAILED,
+		IPV6_BLOCKED
 	};
 	enum ConnectionStage
 	{

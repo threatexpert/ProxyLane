@@ -696,6 +696,29 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 		}
 			break;
 
+		case PRCPD_BLOCKED_IPV6:
+		{
+			HookBlockedIPv6Info info;
+			if (hdr.dataSize != sizeof(info) ||
+				!ReadPipeExactly(hPipe, &info, sizeof(info)))
+				goto SEC_ERROR;
+			if ((pipeClientPid && info.processId != pipeClientPid) ||
+				!info.destination.IsIPv6() ||
+				!memchr(info.domain, 0, sizeof(info.domain)) ||
+				!wmemchr(info.processName, 0, _countof(info.processName)))
+				goto SEC_ERROR;
+
+			PRCClient client;
+			client.zero();
+			client.dwPid = info.processId;
+			client.sType = info.socketType;
+			client.dstAddr = info.destination;
+			strcpy_s(client.szDomainName, info.domain);
+			m_pPRC->m_pGlobalProxy->GetLogInstance()->OnConnectionEvent(
+				IProxyLog::IPV6_BLOCKED, &client, info.processName);
+		}
+		break;
+
 		case PRCPD_Logtext:
 		{
 			const DWORD fixedSize = FIELD_OFFSET(HookLogtext, str);

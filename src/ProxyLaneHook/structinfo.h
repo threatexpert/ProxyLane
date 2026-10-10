@@ -412,6 +412,16 @@ typedef struct _tagHookWSockResult
 	DWORD err;
 }HookWSockResult, *LPHookWSockResult;
 
+// Fixed-width log payload shared by 32-bit hooks and 64-bit PRC hosts.
+struct HookBlockedIPv6Info
+{
+	DWORD processId;
+	INT socketType;
+	_SockAddr destination;
+	char domain[256];
+	WCHAR processName[MAX_PATH];
+};
+
 #pragma warning(push)
 #pragma warning(disable : 4200)
 typedef struct _tagHookLogtext
@@ -437,6 +447,7 @@ typedef struct _tagHookLogtext
 #define PRCPD_CHILD_INJECTION_RESULT 11
 #define PRCPD_REGISTER_PROCESS_IDENTITY 12
 #define PRCPD_CHILD_RELEASED 13
+#define PRCPD_BLOCKED_IPV6 14
 
 #pragma pack(pop)
 
