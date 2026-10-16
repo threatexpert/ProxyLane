@@ -5,6 +5,77 @@
 保留当前显式卸载约定：无 HookCallGate，不暂停其他线程，调用者保证卸载时机。
 本分支正在分阶段适配，尚不能发布为支持 ARM64 的完整产品。
 
+## 2026-10-16 第三阶段：ARM64 → ARM64 原生注入
+
+已实现同架构注入，当前只完成交叉编译和机器码仿真，**未在 Windows ARM64 上执行**。
+下文第一、二阶段的禁用状态是历史记录，以本节为准。
+
+- `InjectDllArm64.cpp`：纯 ARM64 宿主对纯 ARM64 目标，覆盖调用者已挂起的主线程与
+  运行中进程的 `CreateRemoteThread` 两条路径。`AttachToHandles`、`AttachToI`、GUI
+  普通附加和已代理进程创建子进程的直接注入路由均已接入。DLL 路径使用 UTF-16。
+- 挂起线程路径不增加或减少挂起计数，由现有调用者恢复线程；在引导代码实际开始运行时
+  保存 X0–X30、SP、PC、NZCV、完整 SIMD 寄存器、FPCR/FPSR，随后使用 `NtContinue`
+  恢复上下文。加载 DLL、找不到入口、入口返回失败均继续原线程；上下文恢复自身失败则
+  fail-fast，不能带着损坏的上下文继续。线程执行约定参考
+  [Windows ARM64 ABI](https://learn.microsoft.com/en-us/cpp/build/arm64-windows-abi-conventions)。
+- 初始挂起进程的 PEB 加载器链表可能尚未就绪，因此通过 `VirtualQueryEx` 与映射文件名
+  找到主映像和 ntdll；验证目标主映像为 ARM64 且无 CHPE 元数据。核对本机/目标 ntdll
+  路径、PE 头后，用目标模块基址加导出 RVA 定位 `LdrLoadDll`、`LdrGetProcedureAddress`
+  和 `NtContinue`，不假设另一进程与当前进程的绝对函数地址相同，也不要求 kernel32 已加载。
+- 参数内存为 RW，机器码写入后改为 RX 并刷新指令缓存。执行发布前失败会释放两块内存；
+  成功安排执行后，保留到目标进程退出，避免异步代码仍执行时释放。短路径通常占两个
+  4 KiB 页面，长 DLL 路径按参数长度增加；每次成功安排注入都会保留一份，运行期不回收。
+- 返回 `0xFF01`/底层 `1` 仅代表已安排执行，不代表 Hook 已成功初始化。保留既有异步
+  PRC 注册确认流程。没有恢复 HookCallGate，没有在 Detours 安装时挂起其他线程，
+  显式卸载仍要求调用者保证安全时机。
+
+机器码源码位于 `src/remotecode/arm64/Bootstrap.S`，生成头文件一并纳入版本控制。
+`scripts/generate-arm64-bootstrap.py` 调用 Clang 生成 ARM64 COFF，拒绝 `.text`
+重定位后提取代码及入口偏移；`--check` 检查源码与生成结果一致。C++ 静态断言验证参数和
+Windows `CONTEXT` 的布局。`build-arm64.ps1` 现在还需要 Python，并在构建前执行该检查。
+
+离线仿真（需要 Python 的 `unicorn` 包）：
+
+```powershell
+python scripts/generate-arm64-bootstrap.py --clang C:\path\to\llvm\bin\clang.exe --check
+python tests/arm64/test_bootstrap.py
+```
+
+仿真执行实际签入的 400 字节机器码，用会破坏易失寄存器的 API 替身覆盖两种入口共 9 条
+成功/失败路径，检查参数、上下文、栈对齐、非易失寄存器和远程线程返回值。它不模拟 Windows
+加载器或 `NtContinue` 内核实现，不能证明真实 Windows 启动与恢复流程已正确。
+
+`build-arm64.ps1` 额外构建 `InjectionTestsARM64.exe` 和 `InjectionFixtureARM64.dll`，
+共验证七个输出文件均为原生 ARM64。虚拟机内将这两个文件放在同一目录，运行：
+
+```powershell
+.\InjectionTestsARM64.exe
+```
+
+该测试使用生产注入器创建自己的测试子进程，覆盖启动前注入、运行中附加、DLL 缺失、
+入口缺失、初始化返回失败、错误进程/线程组合及相对 DLL 路径拒绝，并检查 RX/RW 保护、
+挂起计数、原主线程继续执行及入口调用次序。测试 DLL 不安装 Hook，不需要代理服务器；
+这一步通过后还需要用真实 ProxyLane GUI/PRC 验证网络代理、子孙进程和异常/退出流程。
+
+范围与待验收项：
+
+- ARM64 与 x86/x64 的跨架构注入、ARM 主机上的仿真进程注入仍拒绝；传统 x86/x64
+  Windows 的原有路由保留。目标主映像检测不代表其加载的每个混合系统 DLL 都已验证。
+- 系统 `rundll32` 的 ARM64 提权 helper 尚未开放，GUI 内“以管理员身份启动”的该辅助
+  路径仍不支持。需要管理员权限时先以管理员身份启动原生 GUI，再走直接注入。
+- 远程引导代码尚无动态 unwind 元数据；跨越它的异常展开、调试栈回溯及系统保护策略
+  仍需实机验证。没有添加绕过动态代码限制的机制，相关系统 API 失败会返回错误。
+- 子进程 guard 的 ARM64 PEB/环境读取、延迟恢复 CIG、真实加载器时序、Detours 原生
+  重定位、PRC 确认、TLS/PSK 传输均需在 ARM64 虚拟机继续验收。
+
+本阶段构建与验证日志：`build/qa/arm64-injection-build.log`、
+`arm64-injection-debug.log`、`arm64-injection-regression.log`；产物清单仍在
+`build/qa/arm64-build/{Release,Debug}/verification.json`，`RuntimeTested` 保持 `false`。
+Release/Debug 交叉构建、七个产物的 PE 架构检查、9 条引导代码仿真路径均已通过。
+`tests/run-detours-tests.ps1` 已完整通过：Win32/x64 解决方案及单元测试、TCP/UDP 统计
+与重启/显式卸载、四种父子/孙进程组合（8 次代理连接）、MSBuild 启动和 IPv6/DNS 回归。
+未合并 main，未更新日常发行包。
+
 ## 2026-10-16 第二阶段：原生交叉编译
 
 已新增产品的 `Debug|ARM64` 和 `Release|ARM64` 配置，使用 VS 2019 v142、
@@ -197,4 +268,4 @@ dumpbin /headers build/qa/arm64-assessment/bin/DetoursBuildProbe.exe
   不能错误选择另一架构的 DLL。
 - ARM64 安全传输 DLL 的实际 TLS/PSK 连接，并保持现有 x86/x64 回归通过。
 
-已完成共享架构识别改造和原生 ARM64 交叉构建；尚未完成 ARM64 远程注入及 ARM 设备运行验收。
+已完成共享架构识别、原生交叉构建和 ARM64 同架构注入实现；ARM 设备运行验收仍未完成。

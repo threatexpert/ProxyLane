@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "InjectDll.h"
+#include "InjectDllArm64.h"
 #include "ProcessArchitecture.h"
 #include "../remotecode/remoteCode.h"
 
@@ -38,11 +39,12 @@ FARPROC get_proc_address2(void* hDll, LPCSTR fname)
 
 #if defined(_M_ARM64) && !defined(_M_ARM64EC)
 
-// Native bootstrap is a subsequent stage. Never execute the x64 loader on ARM64.
-int InjectDll(HANDLE, HANDLE, LPCSTR, LPCSTR)
+int InjectDll(HANDLE process, HANDLE thread, LPCSTR dll, LPCSTR pipe)
 {
-	SetLastError(ERROR_NOT_SUPPORTED);
-	return -1;
+	if (!dll) { SetLastError(ERROR_INVALID_PARAMETER); return -1; }
+	WCHAR path[32768];
+	if (!MultiByteToWideChar(CP_ACP, 0, dll, -1, path, _countof(path))) return -1;
+	return InjectDllArm64W(process, thread, path, pipe);
 }
 
 #elif defined(_M_X64) && !defined(_M_ARM64EC)

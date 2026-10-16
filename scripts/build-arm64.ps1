@@ -43,6 +43,8 @@ try {
     if (-not $clang) { throw 'ring on Windows ARM64 requires Clang. Supply -ClangBinDirectory or add clang.exe to PATH.' }
     & $clang.Source --version
     if ($LASTEXITCODE) { throw 'Clang could not be started.' }
+    & python scripts/generate-arm64-bootstrap.py --clang $clang.Source --check
+    if ($LASTEXITCODE) { throw 'ARM64 bootstrap source/bytes verification failed.' }
 
     $target = if ($Rebuild) { 'Rebuild' } else { 'Build' }
     & $msbuild src/ProxyLane.sln /m "/t:$target" "/p:Configuration=$Configuration" /p:Platform=ARM64 /v:minimal "/flp:logfile=$qa\solution.log;verbosity=normal"
@@ -51,10 +53,12 @@ try {
     if ($LASTEXITCODE) { throw 'ARM64 traffic probe build failed.' }
     & $msbuild tests/arm64/DetoursBuildProbe.vcxproj /m "/t:$target" /p:Configuration=Release /p:Platform=ARM64 /v:minimal "/flp:logfile=$qa\detours.log;verbosity=normal"
     if ($LASTEXITCODE) { throw 'ARM64 Detours/architecture probe build failed.' }
+    & $msbuild tests/arm64/InjectionTests.vcxproj /m "/t:$target" "/p:Configuration=$Configuration" /p:Platform=ARM64 /v:minimal "/flp:logfile=$qa\injection.log;verbosity=normal"
+    if ($LASTEXITCODE) { throw 'ARM64 injection test build failed.' }
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'build\qa\arm64-assessment\bin\DetoursBuildProbe.exe') -Destination $output -Force
 
     $files = @('ProxyLaneARM64.exe', 'ProxyLaneHookARM64.dll', 'ProxyLaneSecureTransportARM64.dll',
-        'ProxyLaneTrafficARM64.exe', 'DetoursBuildProbe.exe')
+        'ProxyLaneTrafficARM64.exe', 'DetoursBuildProbe.exe', 'InjectionTestsARM64.exe', 'InjectionFixtureARM64.dll')
     $verified = foreach ($name in $files) {
         $path = Join-Path $output $name
         $bytes = [IO.File]::ReadAllBytes($path)
@@ -72,11 +76,11 @@ try {
         Configuration = $Configuration
         Clang = $clang.Source
         RuntimeTested = $false
-        InjectionSupported = $false
+        InjectionImplemented = 'ARM64-to-ARM64 only; runtime validation pending'
         Files = @($verified)
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $qa 'verification.json') -Encoding UTF8
     Write-Host "ARM64 cross-build verified: $output"
-    Write-Host 'Runtime tests were not executed. ARM64 injection is not implemented yet.'
+    Write-Host 'ARM64-to-ARM64 injection is implemented. Runtime tests were not executed.'
 }
 finally {
     # Do not leave the caller's shell configured for ARM64 compilation.

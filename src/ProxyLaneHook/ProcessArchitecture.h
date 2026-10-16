@@ -154,9 +154,10 @@ namespace ProcessArchitecture
     enum InjectionRoute { Unsupported, Direct, Helper };
     inline InjectionRoute Route(Architecture source, const ProcessInfo& target)
     {
-        // The existing bootstrap and system rundll32 routing are only verified
-        // on x86/x64 Windows. Enable ARM hosts/targets when their bootstrap and
-        // architecture-matched helper are implemented; never reuse x64 bytes.
+        // Only pure native ARM64 -> ARM64 is implemented on Windows on ARM.
+        // The injector additionally checks the target PE for hybrid metadata.
+        if (source == Arm64 && target.process == Arm64 && target.native == Arm64)
+            return Direct;
         if ((source != X86 && source != X64) ||
             (target.process != X86 && target.process != X64) ||
             (target.native != X86 && target.native != X64) ||

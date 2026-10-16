@@ -456,6 +456,7 @@
       <InlineFunctionExpansion Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">OnlyExplicitInline</InlineFunctionExpansion>
     </ClCompile>
     <ClCompile Include="InjectDll.cpp" />
+    <ClCompile Include="InjectDllArm64.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="MySocket.cpp" />
     <ClCompile Include="PRCPipeClient.cpp" />
     <ClCompile Include="PRCPipeServer.cpp" />

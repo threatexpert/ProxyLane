@@ -22,6 +22,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DetourHooks.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="InjectDllArm64.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="GlobalProxy.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

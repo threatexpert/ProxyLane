@@ -122,13 +122,14 @@ int ProcessArchitectureTestsMain()
     info.process = X86;
     CHECK(Route(X86, info) == Direct);
     CHECK(_tcscmp(LegacyRundllDirectory(info), _T("System32")) == 0);
-    // Stage 1 must never enable the legacy bootstrap on Windows on ARM.
+    // Enable only the native same-architecture route on Windows on ARM.
     info.native = Arm64;
     for (int source = 0; source < 3; ++source)
         for (int target = 0; target < 3; ++target)
         {
             info.process = architectures[target];
-            CHECK(Route(architectures[source], info) == Unsupported);
+            CHECK(Route(architectures[source], info) ==
+                (source == 2 && target == 2 ? Direct : Unsupported));
             CHECK(LegacyRundllDirectory(info) == NULL);
         }
     info.native = X64; info.process = Unknown;
