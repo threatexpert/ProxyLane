@@ -2,6 +2,7 @@
 #include "ElevatedLauncher.h"
 #include "ElevatedLaunchProtocol.h"
 #include "ProxyModule.h"
+#include "ProcessArchitecture.h"
 
 #include <strsafe.h>
 #include <vector>
@@ -10,7 +11,7 @@ extern HMODULE g_hDllModule;
 
 namespace
 {
-	// Pass the already-authorized handles to the matching-bitness helper.
+	// Pass the already-authorized handles to the matching-architecture helper.
 	// Reopening by PID loses access when the child belongs to another user.
 	class CInjectionHandleList
 	{
@@ -80,35 +81,6 @@ namespace
 		return result && elevation.TokenIsElevated;
 	}
 
-	BOOL IsWow64ProcessDynamic(HANDLE process)
-	{
-		typedef BOOL(WINAPI* IsWow64ProcessFunction)(HANDLE, PBOOL);
-		IsWow64ProcessFunction function = reinterpret_cast<IsWow64ProcessFunction>(
-			GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "IsWow64Process"));
-		BOOL wow64 = FALSE;
-		return function && function(process, &wow64) && wow64;
-	}
-
-	BOOL Is64BitProcess(HANDLE process)
-	{
-#ifdef _WIN64
-		return !IsWow64ProcessDynamic(process);
-#else
-		if (!IsWow64ProcessDynamic(GetCurrentProcess()))
-			return FALSE;
-		return !IsWow64ProcessDynamic(process);
-#endif
-	}
-
-	BOOL IsCurrentModule64Bit()
-	{
-#ifdef _WIN64
-		return TRUE;
-#else
-		return FALSE;
-#endif
-	}
-
 	BOOL GetModuleDirectory(WCHAR* directory, size_t directoryCount)
 	{
 		if (!directory || directoryCount == 0)
@@ -124,7 +96,7 @@ namespace
 	}
 
 	BOOL BuildCompanionPaths(
-		BOOL targetIs64Bit,
+		const ProcessArchitecture::ProcessInfo& target,
 		WCHAR* hookPath,
 		size_t hookPathCount,
 		WCHAR* rundllPath,
@@ -141,21 +113,15 @@ namespace
 		if (FAILED(StringCchPrintfW(
 			hookPath,
 			hookPathCount,
-			L"%s\\ProxyLaneHook%s.dll",
+			L"%s\\%s",
 			moduleDirectory,
-			targetIs64Bit ? L"64" : L"32")))
+			ProcessArchitecture::HookFileName(target.process))))
 		{
 			return FALSE;
 		}
 
-		const WCHAR* systemFolder = L"System32";
-#ifdef _WIN64
-		if (!targetIs64Bit)
-			systemFolder = L"SysWOW64";
-#else
-		if (IsWow64ProcessDynamic(GetCurrentProcess()) && !targetIs64Bit)
-			systemFolder = L"SysWOW64";
-#endif
+		const WCHAR* systemFolder = ProcessArchitecture::LegacyRundllDirectory(target);
+		if (!systemFolder) { SetLastError(ERROR_NOT_SUPPORTED); return FALSE; }
 		if (FAILED(StringCchPrintfW(
 			rundllPath,
 			rundllPathCount,
@@ -284,14 +250,19 @@ BOOL ProxyLaneInjectSuspendedProcess(
 	if (!targetProcess || !targetThread || !pipeName || !pipeName[0])
 		return FALSE;
 
-	const BOOL targetIs64Bit = Is64BitProcess(targetProcess);
-	if (targetIs64Bit == IsCurrentModule64Bit())
+	ProcessArchitecture::ProcessInfo target;
+	if (!ProcessArchitecture::Query(targetProcess, target)) return FALSE;
+	const ProcessArchitecture::InjectionRoute route =
+		ProcessArchitecture::Route(ProcessArchitecture::CurrentModule(), target);
+	if (route == ProcessArchitecture::Unsupported)
+	{ SetLastError(ERROR_NOT_SUPPORTED); return FALSE; }
+	if (route == ProcessArchitecture::Direct)
 		return AttachToHandles(targetProcess, targetThread, pipeName) == 0xFF01;
 
 	WCHAR hookPath[MAX_PATH] = { 0 };
 	WCHAR rundllPath[MAX_PATH] = { 0 };
 	if (!BuildCompanionPaths(
-		targetIs64Bit,
+		target,
 		hookPath,
 		_countof(hookPath),
 		rundllPath,
@@ -342,7 +313,7 @@ BOOL ProxyLaneInjectSuspendedProcess(
 	PVOID oldRedirection = NULL;
 	BOOL redirectionDisabled = FALSE;
 #ifndef _WIN64
-	if (targetIs64Bit && IsWow64ProcessDynamic(GetCurrentProcess()))
+	if (target.process == ProcessArchitecture::X64 && target.native == ProcessArchitecture::X64)
 		redirectionDisabled = SetWow64Redirection(TRUE, &oldRedirection);
 #endif
 	if (!createProcessFunction)

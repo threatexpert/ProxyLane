@@ -236,6 +236,7 @@
     </ClInclude>
     <ClInclude Include="HookDispatch.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="DetourHooks.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="ProcessArchitecture.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="InjectDll.h">
       <Filter>Header Files</Filter>
     </ClInclude>

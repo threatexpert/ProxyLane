@@ -37,6 +37,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ProxyLaneTestsMain.cpp" />
+    <ClCompile Include="ProcessArchitectureTests.cpp" />
     <ClCompile Include="DetourHooksTests.cpp" />
     <ClCompile Include="..\src\ProxyLaneHook\DetourHooks.cpp" />
     <ClCompile Include="TrafficStatisticsTests.cpp" />

@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "InjectDll.h"
+#include "ProcessArchitecture.h"
 #include "../remotecode/remoteCode.h"
 
 
@@ -50,6 +51,7 @@ unsigned char sc_ldr[112] = {
 
 int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 {
+	if (!ProcessArchitecture::RequireDirectInjection(hProc)) return -1;
 	int bOK(-1);
 	myapi param_myapi;
 	ZeroMemory(&param_myapi, sizeof(param_myapi));
@@ -190,6 +192,7 @@ static unsigned char sc_ldr[116] = {
 
 int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 {
+	if (!ProcessArchitecture::RequireDirectInjection(hProc)) return -1;
 	int bOK(-1);
 	myapi param_myapi;
 	ZeroMemory(&param_myapi, sizeof(param_myapi));

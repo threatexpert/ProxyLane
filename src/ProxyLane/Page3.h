@@ -1,6 +1,7 @@
 #pragma once
 #include "afxwin.h"
 #include "afxmt.h"
+#include "..\ProxyLaneHook\ProcessArchitecture.h"
 #include "..\ProxyLaneHook\ProxyModule.h"
 #include "ListCtrlEx.h"
 #include "ModernUI.h"
@@ -56,10 +57,8 @@ protected:
 
 // CPage3 对话框
 
-BOOL IsWow64(HANDLE hProc);
-BOOL is64Process(HANDLE hProc);
 CString ChooseProxyLaneHookModule(HANDLE hProc);
-CString ChooseRundll32(CString &strDllPath);
+CString ChooseRundll32(HANDLE hProc);
 BOOL myWow64DisableWow64FsRedirection( PVOID *OldValue);
 BOOL myWow64RevertWow64FsRedirection(  PVOID OldValue);
 

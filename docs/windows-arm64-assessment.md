@@ -1,10 +1,52 @@
 # Windows ARM64 原生支持评估
 
-评估日期：2026-10-15。基线：`main` 的 `26386d2`（已合并 x86/x64 Detours 迁移）。
-评估分支：`codex/windows-arm64-assessment`。本分支只新增评估文档和独立构建探针，
-没有宣称完整产品已经支持 ARM64，也没有改动现有产品的架构路由和注入行为。
+初始评估日期：2026-10-15；初始基线：`main` 的 `26386d2`。
+开发分支：`codex/windows-arm64-assessment`。2026-10-16 已合入 `main` 的 `a14a721`，
+保留当前显式卸载约定：无 HookCallGate，不暂停其他线程，调用者保证卸载时机。
+本分支正在分阶段适配，尚不能发布为支持 ARM64 的完整产品。
 
-## 结论与证据
+## 2026-10-16 第一阶段：架构识别与路由
+
+已将 GUI、提权/子进程辅助注入、底层注入入口统一接入
+`src/ProxyLaneHook/ProcessArchitecture.h`，区分 `Unknown/X86/X64/Arm64`。
+动态调用 `IsWow64Process2`，失败保留错误并拒绝注入；只有 API 不存在且操作系统早于
+Windows 10 1709 时，才允许用旧接口识别 x86/x64。使用 `RtlGetVersion` 读取真实系统版本，
+避免应用 manifest 影响判断。ARM 仿真环境中 `GetNativeSystemInfo` 也可能返回仿真架构，
+不能把这个 API 单独当作真实宿主架构的证据。参见
+[GetNativeSystemInfo 文档](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-getnativesysteminfo)。
+
+产物名称集中定义为既有 x86/x64 名称及 `ProxyLaneARM64.exe`、
+`ProxyLaneHookARM64.dll`、`ProxyLaneSecureTransportARM64.dll`。
+启动器根据宿主架构选择原生程序；安全传输根据当前模块架构选择 DLL。
+辅助进程不再根据 DLL 文件名是否以 `64.dll` 结尾来推断架构。
+远程子进程标记读取也先确认架构；获取 WOW64 PEB 失败时不再继续解析另一种 PEB 布局。
+
+**阶段性限制：** ARM64 宿主上的注入路由暂时全部返回不支持，包括仿真进程；
+原生 ARM64 bootstrap、对应 helper 和混合模块边界尚待实现。新增文件名只是明确映射，
+不会生成缺失的 ARM64 产品。x86/x64 Windows 的同架构直连与跨架构辅助流程保留。
+ARM64EC/ARM64X 不在本阶段支持范围；进程架构识别也不能证明混合模块 ABI 兼容。
+
+新增 `tests/ProcessArchitectureTests.cpp`，覆盖三种架构、ARM 宿主仿真进程、未知 machine、
+API 失败不回退、旧系统回退边界、路由及真实当前进程查询。
+ARM64 探针已更新为当前 `InstallDetourHooks/RemoveDetourHooks` API 并包含上述测试，
+不再引用已删除的 HookCallGate。x64 主机仅验证该探针交叉编译和 PE Machine，未运行它。
+
+验证已通过，记录见 `build/qa/arm64-foundation/`：
+
+- Release Win32/x64 完整解决方案编译、两架构单元测试。
+- `tests/run-detours-tests.ps1`：TCP/UDP 统计和重启、显式卸载、四种 x86/x64
+  父子/孙进程组合（8 次代理连接）、MSBuild 启动、IPv6/DNS 回归。
+- `tests/run-startup-smoke.ps1 -ObserveSeconds 5 -Repetitions 1`：x86 转交 x64
+  和直接 x64 启动均通过，主窗口保持响应。
+- ARM64 探针交叉编译、PE Machine `0xAA64` 验证通过；未在 ARM 设备运行。
+- 检查四个 x86/x64 EXE/DLL 的 PE 架构与导入表，没有新增对 `IsWow64Process2`
+  或 `RtlGetVersion` 的静态导入。旧系统回退经过模拟测试，尚未在 XP 实机重测。
+
+本阶段不修改 main、不发布发行包。
+下一步为 ARM64 原生 Hook DLL 的独立构建与进程内运行探针，然后实现原生注入和匹配架构的 helper。
+
+
+## 初始评估结论与证据（2026-10-15）
 
 原生 ARM64 支持可行，Detours 后端已有可用的构建基础；主要工作是将整个工程从
 “32 位 / 64 位”的二选一模型改为明确区分 x86、x64、ARM64，并适配注入与子进程流程。
@@ -77,8 +119,7 @@ dumpbin /headers build/qa/arm64-assessment/bin/DetoursBuildProbe.exe
    rustls/ring 及 C ABI。Rust 官方列出了该目标及 Windows 交叉编译路径，
    但这不代替本项目依赖的实际构建测试：[Rust MSVC 平台说明](https://doc.rust-lang.org/stable/rustc/platform-support/windows-msvc.html)。
 
-上述工作应分成可独立审查的提交；先做架构识别，能在现有 x86/x64 机器上建立回归，
-然后再引入 ARM64 特有的执行代码。当前分支尚未实施这些生产代码改造。
+上述工作分成可独立审查的提交；第一阶段架构识别已实施，后续再引入 ARM64 特有的执行代码。
 
 ## 验收边界
 
@@ -91,11 +132,10 @@ dumpbin /headers build/qa/arm64-assessment/bin/DetoursBuildProbe.exe
 最低验收集：
 
 - ARM64 单进程启停、TCP/UDP、DNS、ConnectEx/WSASendMsg 缓存回调、阻断与绕过策略。
-- ARM64 原生重定位：分支、条件分支、PC 相对寻址和字面量加载；并发启停、失败回滚。
+- ARM64 原生重定位：分支、条件分支、PC 相对寻址和字面量加载；调用者保证静默时的启停、安装后的并发调用、失败回滚。
 - ARM64→ARM64 子进程/孙进程、提权、附加、失败后的挂起线程恢复。
 - 在同一 ARM 主机上逐项测试 x86/x64/ARM64 父子进程的九种组合；未支持的组合应明确拒绝，
   不能错误选择另一架构的 DLL。
 - ARM64 安全传输 DLL 的实际 TLS/PSK 连接，并保持现有 x86/x64 回归通过。
 
-下一项具体开发任务：提取共享架构检测和产物选择模块，替换 `Page3.cpp` 与
-`ElevatedLauncher.cpp` 的重复位宽判断，并为 Unknown、失败回退及三种架构组合添加测试。
+第一阶段已完成上述共享架构识别改造；尚未完成原生 ARM64 注入、完整产品构建及 ARM 设备运行验收。

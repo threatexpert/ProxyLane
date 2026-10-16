@@ -5,6 +5,7 @@
 
 
 #include "stdafx.h"
+#include "ProcessArchitecture.h"
 #include "ProxyModule.h"
 #include "GlobalProxy.h"
 #include "HookWinsock.h"
@@ -253,6 +254,7 @@ DWORD WINAPI AttachToHandles(HANDLE hProcess, HANDLE hThread, LPCSTR szPipeName)
 
 	if (!hProcess || !hThread || !szPipeName || !szPipeName[0])
 		return dwExitCode;
+	if (!ProcessArchitecture::RequireDirectInjection(hProcess)) return dwExitCode;
 
 	if (!GetModuleFileNameA(g_hDllModule, myDllPath, MAX_PATH))
 		return dwExitCode;
@@ -290,6 +292,7 @@ DWORD WINAPI AttachToI(DWORD dwPid, DWORD dwTid, LPCSTR szPipeName)
 	hProc = OpenProcess(PROCESS_ALL_ACCESS, 0, dwPid);
 	if (!hProc)
 		goto __Cleanup;
+	if (!ProcessArchitecture::RequireDirectInjection(hProc)) goto __Cleanup;
 
 	if (dwTid != 0)
 	{

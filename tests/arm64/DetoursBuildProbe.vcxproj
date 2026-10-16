@@ -35,7 +35,7 @@
   <ItemGroup>
     <ClCompile Include="DetoursBuildProbe.cpp" />
     <ClCompile Include="..\..\src\ProxyLaneHook\DetourHooks.cpp" />
-    <ClCompile Include="..\..\src\ProxyLaneHook\HookCallGate.cpp" />
+    <ClCompile Include="..\ProcessArchitectureTests.cpp" />
   </ItemGroup>
   <Import Project="..\..\third_party\detours\Detours.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

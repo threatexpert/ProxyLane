@@ -552,9 +552,10 @@ BOOL InjectDll2(HANDLE hProc, DWORD dwPid, DWORD dwTid, LPCSTR lpszPipeName)
 	CString strProxyLaneHook, strRundll;
 
 	strProxyLaneHook = ChooseProxyLaneHookModule(hProc);
-	strRundll = ChooseRundll32(strProxyLaneHook);
+	strRundll = ChooseRundll32(hProc);
+	if (strProxyLaneHook.IsEmpty() || strRundll.IsEmpty()) return FALSE;
 
-	strInjectCmd.Format(_T("%s \"%s\",AttachTo --pid=%lu --tid=%lu --pipe=%s"),
+	strInjectCmd.Format(_T("\"%s\" \"%s\",AttachTo --pid=%lu --tid=%lu --pipe=%s"),
 		strRundll, strProxyLaneHook, dwPid, dwTid, (LPCTSTR)(CString)lpszPipeName);
 
 	myWow64DisableWow64FsRedirection(&WowRedirOldValue);
@@ -590,17 +591,18 @@ BOOL InjectDll(HANDLE hProc, DWORD dwPid, DWORD dwTid, LPCSTR lpszPipeName)
 		SetLastError(error);
 		return FALSE;
 	}
-#ifdef _WIN64
-	if (is64Process(hProc))
+	ProcessArchitecture::ProcessInfo target;
+	if (!ProcessArchitecture::Query(hProc, target)) return FALSE;
+	switch (ProcessArchitecture::Route(ProcessArchitecture::CurrentModule(), target))
+	{
+	case ProcessArchitecture::Direct:
 		return AttachToI(dwPid, dwTid, lpszPipeName) == 0xFF01;
-	else
+	case ProcessArchitecture::Helper:
 		return InjectDll2(hProc, dwPid, dwTid, lpszPipeName);
-#else
-	if (!is64Process(hProc))
-		return AttachToI(dwPid, dwTid, lpszPipeName) == 0xFF01;
-	else
-		return InjectDll2(hProc, dwPid, dwTid, lpszPipeName);
-#endif
+	default:
+		SetLastError(ERROR_NOT_SUPPORTED);
+		return FALSE;
+	}
 }
 
 BOOL HookProcess(DWORD pid, LPCSTR pipeName)
@@ -631,30 +633,17 @@ BOOL HookProcess(DWORD pid, LPCSTR pipeName)
 	return bOK;
 }
 
-CString GetProxyLaneHookModule32Path()
+static CString GetProxyLaneHookModulePath(ProcessArchitecture::Architecture arch)
 {
+	LPCTSTR fileName = ProcessArchitecture::HookFileName(arch);
+	if (!fileName) { SetLastError(ERROR_NOT_SUPPORTED); return CString(); }
 	TCHAR modulePath[MAX_PATH] = { 0 };
-	if (!GetModuleFileName(NULL, modulePath, _countof(modulePath)))
-		return CString();
-	modulePath[_countof(modulePath) - 1] = _T('\0');
+	DWORD length = GetModuleFileName(NULL, modulePath, _countof(modulePath));
+	if (!length || length >= _countof(modulePath)) return CString();
 	CString directory(modulePath);
 	const int slash = directory.ReverseFind(_T('\\'));
-	if (slash < 0)
-		return CString();
-	return directory.Left(slash) + _T("\\ProxyLaneHook32.dll");
-}
-
-CString GetProxyLaneHookModule64Path()
-{
-	TCHAR modulePath[MAX_PATH] = { 0 };
-	if (!GetModuleFileName(NULL, modulePath, _countof(modulePath)))
-		return CString();
-	modulePath[_countof(modulePath) - 1] = _T('\0');
-	CString directory(modulePath);
-	const int slash = directory.ReverseFind(_T('\\'));
-	if (slash < 0)
-		return CString();
-	return directory.Left(slash) + _T("\\ProxyLaneHook64.dll");
+	if (slash < 0) return CString();
+	return directory.Left(slash + 1) + fileName;
 }
 
 BOOL myWow64DisableWow64FsRedirection(__out PVOID *OldValue)
@@ -696,90 +685,23 @@ BOOL myWow64RevertWow64FsRedirection( _In_  PVOID OldValue )
 	return FN(OldValue);
 }
 
-BOOL IsWow64(HANDLE hProc)
-{
-	typedef BOOL(WINAPI *LPFN_ISWOW64PROCESS) (HANDLE, PBOOL);
-
-	LPFN_ISWOW64PROCESS fnIsWow64Process;
-
-	BOOL bIsWow64 = FALSE;
-
-	//IsWow64Process is not available on all supported versions of Windows.
-	//Use GetModuleHandle to get a handle to the DLL that contains the function
-	//and GetProcAddress to get a pointer to the function if available.
-
-	fnIsWow64Process = (LPFN_ISWOW64PROCESS)GetProcAddress(
-		GetModuleHandle(TEXT("kernel32")), "IsWow64Process");
-
-	if (NULL != fnIsWow64Process)
-	{
-		if (!fnIsWow64Process(hProc, &bIsWow64))
-		{
-			//handle error
-		}
-	}
-	return bIsWow64;
-
-}
-
-BOOL is64Process(HANDLE hProc)
-{
-#ifdef _WIN64
-	if (IsWow64(hProc))
-		return FALSE;
-	else
-		return TRUE;
-#else
-	if (IsWow64(GetCurrentProcess()))
-	{
-		if (IsWow64(hProc))
-			return FALSE;
-		else
-			return TRUE;
-	}
-	else
-	{
-		return FALSE;
-	}
-#endif
-}
-
 CString ChooseProxyLaneHookModule(HANDLE hProc)
 {
-	if (is64Process(hProc))
-		return GetProxyLaneHookModule64Path();
-	else
-		return GetProxyLaneHookModule32Path();
+	ProcessArchitecture::ProcessInfo target;
+	if (!ProcessArchitecture::Query(hProc, target)) return CString();
+	return GetProxyLaneHookModulePath(target.process);
 }
 
-CString ChooseRundll32(CString &strDllPath)
+CString ChooseRundll32(HANDLE hProc)
 {
-	BOOL is64 = strDllPath.Right(6).CompareNoCase(_T("64.dll")) == 0;
-	CString strPath;
-
-	GetWindowsDirectory(strPath.GetBuffer(MAX_PATH), MAX_PATH);
-	strPath.ReleaseBuffer();
-
-	//SysWOW64, System32
-
-#ifdef _WIN64
-	if (is64)
-		return strPath + _T("\\System32\\rundll32.exe");
-	else
-		return strPath + _T("\\SysWOW64\\rundll32.exe");
-#else
-	if (IsWow64(GetCurrentProcess()))
-	{
-		if (is64)
-			return strPath + _T("\\System32\\rundll32.exe");
-		else
-			return strPath + _T("\\SysWOW64\\rundll32.exe");
-	}
-	else
-	{
-		return strPath + _T("\\System32\\rundll32.exe");
-	}
-#endif
+	ProcessArchitecture::ProcessInfo target;
+	if (!ProcessArchitecture::Query(hProc, target)) return CString();
+	LPCTSTR directory = ProcessArchitecture::LegacyRundllDirectory(target);
+	if (!directory) { SetLastError(ERROR_NOT_SUPPORTED); return CString(); }
+	TCHAR windows[MAX_PATH] = { 0 };
+	UINT length = GetWindowsDirectory(windows, _countof(windows));
+	if (!length || length >= _countof(windows)) return CString();
+	return CString(windows) + _T("\\") + directory + _T("\\rundll32.exe");
 }
 
 
@@ -1016,11 +938,8 @@ static AppLaunchResult LaunchElevatedAndProxy(
 	}
 	encodedRequest.ReleaseBuffer(static_cast<int>(actualEncodedLength));
 
-#ifdef _WIN64
-	CString hookPath = GetProxyLaneHookModule64Path();
-#else
-	CString hookPath = GetProxyLaneHookModule32Path();
-#endif
+	CString hookPath = GetProxyLaneHookModulePath(ProcessArchitecture::CurrentModule());
+	if (hookPath.IsEmpty()) return APP_LAUNCH_ELEVATED_HELPER_FAILED;
 	if (hookPath.Find(_T(',')) >= 0)
 		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
 	const DWORD hookAttributes = GetFileAttributes(hookPath);
@@ -1030,7 +949,8 @@ static AppLaunchResult LaunchElevatedAndProxy(
 		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
 	}
 
-	CString rundllPath = ChooseRundll32(hookPath);
+	CString rundllPath = ChooseRundll32(GetCurrentProcess());
+	if (rundllPath.IsEmpty()) return APP_LAUNCH_ELEVATED_HELPER_FAILED;
 	CString encodedRequestWide;
 	WCHAR* encodedWideBuffer = encodedRequestWide.GetBuffer(encodedRequest.GetLength());
 	const int convertedLength = MultiByteToWideChar(
