@@ -147,8 +147,12 @@ int main(int argc, char** argv)
 			if (cycle >= 0)
 			{
 				Require(gp_HookWinsock(argv[2]), "client install/reinstall");
-				Require(!gp_HookWinsock(argv[2]) && GetLastError() == ERROR_ALREADY_EXISTS,
-					"reject duplicate installation");
+				BYTE installedConnect[16];
+				memcpy(installedConnect, connectEntry, sizeof(installedConnect));
+				Require(gp_HookWinsock(argv[2]), "rebind installed hooks to same service");
+				Require(!gp_HookWinsock(missingPipe), "reject unavailable service during rebind");
+				Require(memcmp(installedConnect, connectEntry, sizeof(installedConnect)) == 0,
+					"rebind must not rewrite installed entry bytes");
 				if (cycle > 0) CheckCachedExtensions(cachedConnectEx, cachedSendMsg);
 			}
 			SOCKET tcp = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);

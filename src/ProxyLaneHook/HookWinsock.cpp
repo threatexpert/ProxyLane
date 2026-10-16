@@ -269,7 +269,7 @@ private:
 	CRITICAL_SECTION *m_lock;
 };
 
-static void RegisterCurrentProcessIdentity(CPRCPipeClient& pipeClient)
+static BOOL RegisterCurrentProcessIdentity(CPRCPipeClient& pipeClient)
 {
 	HookProcessIdentityInfo identity = { 0 };
 	identity.dwProcessId = GetCurrentProcessId();
@@ -280,7 +280,8 @@ static void RegisterCurrentProcessIdentity(CPRCPipeClient& pipeClient)
 		_countof(identity.szAppPath));
 	identity.szAppPath[_countof(identity.szAppPath) - 1] = L'\0';
 	if (pathLength > 0 && identity.szAppPath[0])
-		pipeClient.PRCRegisterProcessIdentity(&identity);
+		return pipeClient.PRCRegisterProcessIdentity(&identity);
+	return FALSE;
 }
 
 
@@ -305,6 +306,7 @@ CHookWinsock::CHookWinsock(void)
 : m_HackedSocket(this)
 {
 	InitializeCriticalSection(&m_RequestPipeLock);
+	InitializeCriticalSection(&m_PRCPipeNameLock);
 	m_ProcessCreationTls = TlsAlloc();
 	ZeroMemory(m_HookedInfo, sizeof(m_HookedInfo));
 	ZeroMemory(&m_psi, sizeof(m_psi));
@@ -333,6 +335,7 @@ CHookWinsock::~CHookWinsock(void)
 {
 	m_RequestPipe.Disconnect();
 	DeleteCriticalSection(&m_RequestPipeLock);
+	DeleteCriticalSection(&m_PRCPipeNameLock);
 	if (m_ProcessCreationTls != TLS_OUT_OF_INDEXES)
 		TlsFree(m_ProcessCreationTls);
 	g_pHookWinsock = NULL;
@@ -342,7 +345,7 @@ BOOL CHookWinsock::EnsureRequestPipe()
 {
 	if (m_RequestPipe.IsConnected())
 		return TRUE;
-	return m_RequestPipe.Connect(m_szPRCPipeName);
+	return m_RequestPipe.Connect(GetPRCPipeName());
 }
 
 void CHookWinsock::LogBlockedIPv6(SOCKET socketHandle,
@@ -452,12 +455,39 @@ BOOL CHookWinsock::EnableHook()
 
 BOOL CHookWinsock::SetPRCPipeName(LPCSTR lpszPipeName)
 {
+	CScopedCriticalSection nameLock(&m_PRCPipeNameLock);
 	m_szPRCPipeName = lpszPipeName;
 	return TRUE;
 }
 
+BOOL CHookWinsock::RebindPRC(LPCSTR lpszPipeName)
+{
+	// gp_HookWinsock serializes lifecycle requests. Do not call EnableHook here:
+	// installed callbacks still read their original settings and hook bindings.
+	// Rebinding is also supported when the service uses the same pipe name.
+	CString nextPipe(lpszPipeName);
+	CPRCPipeClient client;
+	PRCINFO startupInfo;
+	if (!client.Connect(nextPipe) || !client.GetPRCStartupInfo(&startupInfo) ||
+		!RegisterCurrentProcessIdentity(client))
+		return FALSE; // Keep the previous endpoint and cached connection on failure.
+	{
+		// Network requests already use this lock. Finish an in-flight request
+		// before dropping its connection; never mutate a CString being read by
+		// DNS/child creation callbacks. Those callbacks take a name snapshot.
+		CScopedCriticalSection pipeLock(&m_RequestPipeLock);
+		m_RequestPipe.Disconnect();
+		CScopedCriticalSection nameLock(&m_PRCPipeNameLock);
+		m_szPRCPipeName = nextPipe;
+	}
+	// Report the surviving host to the new GUI too. A failed notification does
+	// not undo an already published binding; retrying the request is safe.
+	return client.PRCNotifyHookWSockResult(0, GetCurrentProcessCreateTimeValue());
+}
+
 CString CHookWinsock::GetPRCPipeName()
 {
+	CScopedCriticalSection nameLock(&m_PRCPipeNameLock);
 	return m_szPRCPipeName;
 }
 
@@ -529,7 +559,7 @@ BOOL CHookWinsock::IsHostNameReserved(const char *name)
 	CPRCPipeClient PRCPipeClient;
 
 	//查询是否可以代理本进程, 连接pipe server 失败则返回值为 不保留
-	if (!PRCPipeClient.Connect(m_szPRCPipeName))
+	if (!PRCPipeClient.Connect(GetPRCPipeName()))
 		return TRUE;
 
 	PRCClientInfo ci;
@@ -1452,7 +1482,7 @@ int WSAAPI CHookWinsock::inhook_closesocket(SOCKET s)
 		{
 			CPRCPipeClient PRCPipeClient;
 
-			if (!PRCPipeClient.Connect(m_szPRCPipeName))
+			if (!PRCPipeClient.Connect(GetPRCPipeName()))
 				break;
 
 			PRCPipeClient.PRCUnregisterClient(&client);
@@ -2233,6 +2263,7 @@ void CHookWinsock::FinishChildCreation(LPPROCESS_INFORMATION lpProcessInformatio
 	BOOL bSuspend, LPCWSTR lpApplicationName, LPCWSTR lpCommandLine)
 {
 	CChildResumeGuard resumeGuard(lpProcessInformation->hThread, bSuspend);
+	const CString sessionPipe = GetPRCPipeName();
 	CPRCPipeClient PRCPipeClient;
 	BOOL pipeConnected = FALSE;
 	HookNewProcessInfo hnpi = {0};
@@ -2242,7 +2273,7 @@ void CHookWinsock::FinishChildCreation(LPPROCESS_INFORMATION lpProcessInformatio
 		lpProcessInformation->hProcess);
 	do
 	{
-		if (!PRCPipeClient.Connect(m_szPRCPipeName))
+		if (!PRCPipeClient.Connect(sessionPipe))
 			break;
 		pipeConnected = TRUE;
 
@@ -2260,7 +2291,7 @@ void CHookWinsock::FinishChildCreation(LPPROCESS_INFORMATION lpProcessInformatio
 			break;
 		}
 
-		CStringA pipeName(m_szPRCPipeName);
+		CStringA pipeName(sessionPipe);
 		const BOOL injectionSucceeded = ProxyLaneInjectSuspendedProcess(
 			lpProcessInformation->hProcess,
 			lpProcessInformation->hThread,

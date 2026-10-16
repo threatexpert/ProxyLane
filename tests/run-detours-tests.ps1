@@ -34,6 +34,8 @@ cl /nologo /EHsc /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /D_WINSOCK_DEPRECATE
     }
     & $python tests/ManagedStartupE2ETests.py --bin bin --msbuild-dir (Split-Path -Parent $msbuild)
     if ($LASTEXITCODE) { throw 'Managed child process tests failed.' }
+    & $python tests/HookRebindE2ETests.py --bin bin
+    if ($LASTEXITCODE) { throw 'Persistent cmd / service process restart rebind tests failed.' }
     & $python tests/ProxyLaneIPv6BlockE2ETests.py --bin bin
     if ($LASTEXITCODE) { throw 'IPv6/DNS tests failed.' }
 }

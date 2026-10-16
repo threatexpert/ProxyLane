@@ -184,7 +184,7 @@ BOOL WINAPI gp_HookWinsock(LPCSTR lpszPRCPipeName)
 	if (!lpszPRCPipeName || !lpszPRCPipeName[0])
 	{ SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
 	if (g_pPMHookWs && g_pPMHookWs->IsHookEnabled())
-	{ SetLastError(ERROR_ALREADY_EXISTS); return FALSE; }
+		return g_pPMHookWs->RebindPRC(lpszPRCPipeName);
 
 	// Cached extension callbacks remain callable even after explicit hook removal.
 	HMODULE pinned = NULL;

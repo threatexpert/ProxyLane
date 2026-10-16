@@ -642,6 +642,8 @@ public:
 	BOOL DisableHook();
 
 	BOOL SetPRCPipeName(LPCSTR lpszPipeName);
+	// Reuse installed hooks; only switch the service endpoint after validation.
+	BOOL RebindPRC(LPCSTR lpszPipeName);
 	CString GetPRCPipeName();
 
 
@@ -780,6 +782,8 @@ private:
 
 	CString m_szLastError;
 	CString m_szPRCPipeName;
+	// Protect name snapshots separately from potentially blocking pipe I/O.
+	CRITICAL_SECTION m_PRCPipeNameLock;
 	CHAR m_LocalDnsHostName[256];
 	WCHAR m_ChildGuardName[64];
 	BOOL m_ChildGuardInstalled;
