@@ -5,6 +5,65 @@
 保留当前显式卸载约定：无 HookCallGate，不暂停其他线程，调用者保证卸载时机。
 本分支正在分阶段适配，尚不能发布为支持 ARM64 的完整产品。
 
+## 2026-10-16 第二阶段：原生交叉编译
+
+已新增产品的 `Debug|ARM64` 和 `Release|ARM64` 配置，使用 VS 2019 v142、
+Windows 10 SDK，现有 Win32/x64 的 v141_xp 配置保持不变。
+C++ GUI 与 Hook DLL 均已完整编译、链接；Rust 的 `aarch64-pc-windows-msvc`
+目标及锁定版本的 `ring/rustls` 也已实际编译通过，未修改 Cargo.lock 或上游源码。
+
+推荐从 x64 Windows 开发主机运行：
+
+```powershell
+.\scripts\build-arm64.ps1 -ClangBinDirectory 'C:\path\to\llvm\bin'
+.\scripts\build-arm64.ps1 -Configuration Debug -ClangBinDirectory 'C:\path\to\llvm\bin'
+```
+
+若 `clang.exe` 已在 PATH 中，可省略 `-ClangBinDirectory`。脚本会加载
+`vcvarsall amd64_arm64` 的头文件/库环境，并在结束时恢复调用者的环境变量。
+需要 VS 2019 的 ARM64 编译器、ATL/MFC、Windows 10 SDK、Rust 与 Clang；
+不能只把 Clang 放进 PATH 而遗漏 MSVC/SDK 头文件。`ring 0.17.14` 的 Windows ARM64
+C 代码要求 Clang。本机实际使用现有 Android NDK 27.2 附带的 Clang 18.0.3，
+以 `--target=aarch64-pc-windows-msvc` 编译并链接 Windows SDK/CRT；产物不是 Android ELF。
+Rust 的官方平台说明也支持在 Windows 上进行架构交叉编译：
+[Windows MSVC targets](https://doc.rust-lang.org/rustc/platform-support/windows-msvc.html)。
+
+产物放在 `bin/ARM64/Release/` 或 `bin/ARM64/Debug/`，与既有发行产物隔离：
+
+| 文件 | 用途 |
+|---|---|
+| `ProxyLaneARM64.exe` | 原生 GUI |
+| `ProxyLaneHookARM64.dll` | 原生 Hook/本地代理模块，保留显式卸载接口 |
+| `ProxyLaneSecureTransportARM64.dll` | 原生 Rust 安全传输模块 |
+| `ProxyLaneTrafficARM64.exe` | 复用现有 TCP/UDP、启停及显式卸载测试的原生测试程序 |
+| `DetoursBuildProbe.exe` | 架构识别与 Detours 事务探针（始终为 Release 探针） |
+
+脚本验证所有上述文件均为 PE32+、Machine `0xAA64`，写入 SHA256 清单。
+Debug 的安全传输模块与既有构建习惯一致，使用 Rust Release 版本。
+`ProxyLaneTests` 中的指令字节用例仍为 x86/x64，解决方案 ARM64 配置不构建它；
+两个原生探针由 `build-arm64.ps1` 单独构建，不能把它们当作完整 ARM64 重定位测试覆盖。
+流量探针仍需要现有 `TrafficStatisticsE2ETests.py` 和 SOCKS5 测试服务配合；此阶段未运行。
+
+`InjectDll.cpp` 按实际指令集分支，ARM64 分支明确返回不支持；`AttachToI` 在 ARM64
+也直接返回 `ERROR_NOT_SUPPORTED`，不会分配或执行 x86/x64 的远程线程机器码。
+所有 Windows ARM64 宿主的自动注入路由仍被第一阶段策略禁用；允许在受控测试进程内
+直接调用 `gp_HookWinsock/gp_UnhookWinsock`，用于后续验证原生 inline hook。
+构建成功不代表远程注入、网络代理或安全传输已经在 ARM64 上验证通过。
+
+本阶段验证：
+
+- Release、Debug 完整交叉构建和五个产物的 PE 架构检查通过。
+- 导出表：Hook DLL 的 7 个导出、Rust DLL 的 13 个 C ABI 导出存在。
+- GUI 和流量探针均依赖 `ProxyLaneHookARM64.dll`，没有错误链接 x64 Hook DLL。
+- 安全传输 DLL 依赖 `VCRUNTIME140.dll`；虚拟机运行时需具备相应 ARM64 VC 运行库。
+- Win32/x64 Release 解决方案重新编译、两架构单元测试通过；本阶段未重复上一阶段
+  已通过的完整网络 E2E，也未执行任何 ARM64 程序。
+
+构建日志、导入/导出表和 SHA256 清单位于 `build/qa/arm64-build/`，
+配置分别使用 `Release/verification.json` 与 `Debug/verification.json`。
+尚未合并 main、未修改发行打包脚本，也未打 ARM64 发行包。
+下一步是原生进程内运行测试和 ARM64 bootstrap/helper 的实现。
+
 ## 2026-10-16 第一阶段：架构识别与路由
 
 已将 GUI、提权/子进程辅助注入、底层注入入口统一接入
@@ -22,8 +81,8 @@ Windows 10 1709 时，才允许用旧接口识别 x86/x64。使用 `RtlGetVersio
 远程子进程标记读取也先确认架构；获取 WOW64 PEB 失败时不再继续解析另一种 PEB 布局。
 
 **阶段性限制：** ARM64 宿主上的注入路由暂时全部返回不支持，包括仿真进程；
-原生 ARM64 bootstrap、对应 helper 和混合模块边界尚待实现。新增文件名只是明确映射，
-不会生成缺失的 ARM64 产品。x86/x64 Windows 的同架构直连与跨架构辅助流程保留。
+原生 ARM64 bootstrap、对应 helper 和混合模块边界尚待实现。第一阶段新增文件名只是明确映射；
+第二阶段已补充原生交叉构建，尚未开放注入。x86/x64 Windows 的同架构直连与跨架构辅助流程保留。
 ARM64EC/ARM64X 不在本阶段支持范围；进程架构识别也不能证明混合模块 ABI 兼容。
 
 新增 `tests/ProcessArchitectureTests.cpp`，覆盖三种架构、ARM 宿主仿真进程、未知 machine、
@@ -43,7 +102,7 @@ ARM64 探针已更新为当前 `InstallDetourHooks/RemoveDetourHooks` API 并包
   或 `RtlGetVersion` 的静态导入。旧系统回退经过模拟测试，尚未在 XP 实机重测。
 
 本阶段不修改 main、不发布发行包。
-下一步为 ARM64 原生 Hook DLL 的独立构建与进程内运行探针，然后实现原生注入和匹配架构的 helper。
+第一阶段后续的原生交叉构建已在第二阶段完成；进程内运行验收、原生注入和匹配架构的 helper 仍待完成。
 
 
 ## 初始评估结论与证据（2026-10-15）
@@ -138,4 +197,4 @@ dumpbin /headers build/qa/arm64-assessment/bin/DetoursBuildProbe.exe
   不能错误选择另一架构的 DLL。
 - ARM64 安全传输 DLL 的实际 TLS/PSK 连接，并保持现有 x86/x64 回归通过。
 
-第一阶段已完成上述共享架构识别改造；尚未完成原生 ARM64 注入、完整产品构建及 ARM 设备运行验收。
+已完成共享架构识别改造和原生 ARM64 交叉构建；尚未完成 ARM64 远程注入及 ARM 设备运行验收。

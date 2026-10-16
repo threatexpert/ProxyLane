@@ -36,7 +36,16 @@ FARPROC get_proc_address2(void* hDll, LPCSTR fname)
 }
 
 
-#ifdef _WIN64
+#if defined(_M_ARM64) && !defined(_M_ARM64EC)
+
+// Native bootstrap is a subsequent stage. Never execute the x64 loader on ARM64.
+int InjectDll(HANDLE, HANDLE, LPCSTR, LPCSTR)
+{
+	SetLastError(ERROR_NOT_SUPPORTED);
+	return -1;
+}
+
+#elif defined(_M_X64) && !defined(_M_ARM64EC)
 
 unsigned char sc_ldr[112] = {
 	0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x48, 0x83, 0xC1, 0x34, 0xFF, 0x13, 0x48,
@@ -176,7 +185,7 @@ __CleanUp:
 }
 
 
-#else
+#elif defined(_M_IX86)
 
 static unsigned char sc_ldr[116] = {
 	0x55, 0x8B, 0xEC, 0x56, 0x8B, 0x75, 0x08, 0x8D, 0x46, 0x1C, 0x50, 0x8B, 0x06, 0xFF, 0xD0, 0x8B,
@@ -340,5 +349,7 @@ __CleanUp:
 	return bOK;
 }
 
+#else
+#error Unsupported injection architecture. ARM64EC is not supported.
 #endif
 

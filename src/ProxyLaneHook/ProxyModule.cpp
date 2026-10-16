@@ -268,6 +268,11 @@ DWORD WINAPI AttachToHandles(HANDLE hProcess, HANDLE hThread, LPCSTR szPipeName)
 
 DWORD WINAPI AttachToI(DWORD dwPid, DWORD dwTid, LPCSTR szPipeName)
 {
+#if defined(_M_ARM64)
+	// Do not allocate an x86/x64 remote thread stub in an ARM64 process.
+	SetLastError(ERROR_NOT_SUPPORTED);
+	return ERROR_NOT_SUPPORTED;
+#else
 	DWORD dwExitCode = 0xf;
 	HANDLE hProc = NULL;
 	HANDLE hThread = NULL;
@@ -348,6 +353,7 @@ __Cleanup:
 		CloseHandle(hProc);
 
 	return dwExitCode;
+#endif
 }
 
 void CALLBACK AttachTo(HWND hwnd, HINSTANCE hinst, LPSTR lpszCmdLine, int nCmdShow)
