@@ -178,50 +178,45 @@ namespace
 
 BOOL WINAPI gp_HookWinsock(LPCSTR lpszPRCPipeName)
 {
-	if (g_HookCalls.InCall()) { SetLastError(ERROR_BUSY); return FALSE; }
 	HookLifecycleScope lifecycle;
 	if (!lpszPRCPipeName || !lpszPRCPipeName[0])
 	{ SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
-	if (g_pPMHookWs && g_pPMHookWs->IsHookEnabled()) return FALSE;
-	if (!g_HookCalls.Close(5000)) return FALSE;
+	if (g_pPMHookWs && g_pPMHookWs->IsHookEnabled())
+	{ SetLastError(ERROR_ALREADY_EXISTS); return FALSE; }
 
-	// WSAIoctl clients may retain our extension callbacks after disabling hooks.
+	// Cached extension callbacks remain callable even after explicit hook removal.
 	HMODULE pinned = NULL;
 	if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN |
 		GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
 		reinterpret_cast<LPCWSTR>(&gp_HookWinsock), &pinned))
 	{
-		g_HookCalls.Open(false);
 		return FALSE;
 	}
 	g_pPMHookWs = new CHookWinsock;
 	g_pPMHookWs->SetPRCPipeName(lpszPRCPipeName);
 	const BOOL result = g_pPMHookWs->EnableHook();
-	if (!result)
+	// Only failed installation may destroy this object; installed callbacks keep using it.
+	if (!result && !g_pPMHookWs->IsHookEnabled())
 	{
 		delete g_pPMHookWs;
 		g_pPMHookWs = NULL;
 	}
-	g_HookCalls.Open(result != FALSE);
 	DeferredMitigationPolicy::RestoreCigPolicy();
 	return result;
 }
 
 BOOL WINAPI gp_UnhookWinsock()
 {
-	if (g_HookCalls.InCall()) { SetLastError(ERROR_BUSY); return FALSE; }
+	// Serializes lifecycle requests only. The caller must quiesce all affected
+	// calls (including Bypass_* and cached extensions) before entering here.
 	HookLifecycleScope lifecycle;
-	if (!g_pPMHookWs) return FALSE;
-	if (!g_HookCalls.Close(5000)) return FALSE;
-	const BOOL result = g_pPMHookWs->DisableHook();
-	if (result)
-	{
-		delete g_pPMHookWs;
-		g_pPMHookWs = NULL;
-	}
-	// A failed detach keeps the object, configuration and trampoline pointers alive.
-	g_HookCalls.Open(!result);
-	return result;
+	if (!g_pPMHookWs)
+	{ SetLastError(ERROR_NOT_FOUND); return FALSE; }
+	if (!g_pPMHookWs->DisableHook())
+		return FALSE;
+	delete g_pPMHookWs;
+	g_pPMHookWs = NULL;
+	return TRUE;
 }
 
 static UINT get_arg(LPSTR lpszIn, LPCSTR lpszOpt, LPSTR lpszBuf, int size)

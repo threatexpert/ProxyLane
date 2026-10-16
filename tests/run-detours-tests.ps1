@@ -30,7 +30,7 @@ cl /nologo /EHsc /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /D_WINSOCK_DEPRECATE
         & $env:ComSpec /d /c $batch
         if ($LASTEXITCODE) { throw "$platform traffic probe build failed." }
         & $python tests/TrafficStatisticsE2ETests.py --probe "bin/traffic$bits.exe" --socks-server "$qa\socks5_udp_server.exe"
-        if ($LASTEXITCODE) { throw "$platform traffic/lifecycle tests failed." }
+        if ($LASTEXITCODE) { throw "$platform traffic/explicit-detach tests failed." }
     }
     & $python tests/ManagedStartupE2ETests.py --bin bin --msbuild-dir (Split-Path -Parent $msbuild)
     if ($LASTEXITCODE) { throw 'Managed child process tests failed.' }

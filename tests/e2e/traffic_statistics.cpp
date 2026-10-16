@@ -132,9 +132,25 @@ int main(int argc, char** argv)
 		Require(WSAStartup(MAKEWORD(2, 2), &wsa) == 0, "client WSAStartup");
 		__CONNECTEX cachedConnectEx = NULL;
 		__WSASENDMSG cachedSendMsg = NULL;
+		Require(!gp_UnhookWinsock() && GetLastError() == ERROR_NOT_FOUND,
+			"unhook reports no installed object");
+		// A missing service must leave the object unpublished to callbacks and allow retry.
+		char missingPipe[128];
+		sprintf_s(missingPipe, "\\\\.\\pipe\\ProxyLane-missing-test-%lu", GetCurrentProcessId());
+		Require(!gp_HookWinsock(missingPipe), "failed installation before retry");
+		BYTE originalConnect[16] = { 0 };
+		PVOID connectEntry = reinterpret_cast<PVOID>(GetProcAddress(GetModuleHandleW(L"ws2_32.dll"), "connect"));
+		Require(connectEntry != NULL, "connect entry");
+		memcpy(originalConnect, connectEntry, sizeof(originalConnect));
 		for (int cycle = -1; cycle < 3; ++cycle)
 		{
-			if (cycle >= 0) Require(gp_HookWinsock(argv[2]), "client hook/re-hook");
+			if (cycle >= 0)
+			{
+				Require(gp_HookWinsock(argv[2]), "client install/reinstall");
+				Require(!gp_HookWinsock(argv[2]) && GetLastError() == ERROR_ALREADY_EXISTS,
+					"reject duplicate installation");
+				if (cycle > 0) CheckCachedExtensions(cachedConnectEx, cachedSendMsg);
+			}
 			SOCKET tcp = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 			SOCKET udp = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 			GUID connectGuid = WSAID_CONNECTEX;
@@ -150,7 +166,14 @@ int main(int argc, char** argv)
 			CheckCachedExtensions(cachedConnectEx, cachedSendMsg);
 			if (cycle < 0) continue; // Capture the native provider's validation errors.
 			if (cycle == 0) Transfer(atoi(argv[4]), atoi(argv[3]), atoi(argv[5]));
-			Require(gp_UnhookWinsock(), "client unhook");
+			// Single calling thread, completed I/O and closed sockets: caller owns quiescence.
+			Require(gp_UnhookWinsock(), "explicit client unhook");
+			Require(memcmp(originalConnect, connectEntry, sizeof(originalConnect)) == 0,
+				"unhook restores original entry bytes");
+			CheckCachedExtensions(cachedConnectEx, cachedSendMsg);
+			Require(!gp_UnhookWinsock() && GetLastError() == ERROR_NOT_FOUND,
+				"repeat unhook reports no installed object");
+			Require(!gp_HookWinsock(missingPipe), "failed reinstallation leaves callbacks valid");
 			CheckCachedExtensions(cachedConnectEx, cachedSendMsg);
 		}
 		WSACleanup();
@@ -180,6 +203,9 @@ int main(int argc, char** argv)
 	Require(proxy->DisableProxy(), "disable");
 	Require(proxy->EnableProxy(), "restart");
 	VerifyTotals(proxy->GetPRCInstance(), 0);
+	Require(proxy->GetPRCInstance()->GetPRCPipeName(pipe, sizeof(pipe)), "restarted pipe name");
+	RunClient(pipe, atoi(argv[2]), SOCK_DGRAM, 113);
+	VerifyTotals(proxy->GetPRCInstance(), 113);
 	Require(proxy->DisableProxy(), "disable after restart");
 	settings.Detach();
 	ReleaseGlobalProxyInstance();

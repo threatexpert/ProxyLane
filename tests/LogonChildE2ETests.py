@@ -222,12 +222,13 @@ def main():
     parser.add_argument("--modes", nargs="+", default=["null", "unicode", "ansi", "suspended", "invalid-flags", "missing-file"])
     parser.add_argument("--interactive-runas", action="store_true")
     args = parser.parse_args()
-    # Unhook only this disposable runner if the developer shell is already
-    # proxied by another installation, so children use the test binaries.
+    # Detach only in this disposable runner, before starting threads or I/O,
+    # so its children use the test binaries. The runner owns quiescence.
     kernel = ctypes.WinDLL("kernel32")
     kernel.GetModuleHandleW.restype = wintypes.HMODULE
     if kernel.GetModuleHandleW("ProxyLaneHook64.dll"):
-        ctypes.WinDLL("ProxyLaneHook64.dll").gp_UnhookWinsock()
+        if not ctypes.WinDLL("ProxyLaneHook64.dll").gp_UnhookWinsock():
+            raise RuntimeError("Inherited Hook cannot be detached; run tests from an unproxied process")
     password = os.environ.get("PROXYLANE_TEST_PASSWORD") or getpass.getpass()
     directory = Path("build/qa/logon-" + uuid.uuid4().hex[:8]).resolve()
     directory.mkdir()

@@ -1,5 +1,4 @@
 #pragma once
-#include "HookCallGate.h"
 
 // Keep the existing handler declarations/call sites while storing typed
 // original-function pointers owned by Detours, rather than writable functions.

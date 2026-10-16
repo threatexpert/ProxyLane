@@ -21,7 +21,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="HookCallGate.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="DetourHooks.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="GlobalProxy.cpp">
       <Filter>Source Files</Filter>
@@ -236,7 +235,6 @@
       <Filter>Header Files\asynsocket</Filter>
     </ClInclude>
     <ClInclude Include="HookDispatch.h"><Filter>Header Files</Filter></ClInclude>
-    <ClInclude Include="HookCallGate.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="DetourHooks.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="InjectDll.h">
       <Filter>Header Files</Filter>

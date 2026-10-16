@@ -303,6 +303,10 @@ BOOL GetProxyLaneChildGuardInfo(
 
 
 BOOL WINAPI gp_HookWinsock(LPCSTR lpszPRCPipeName);
+// Explicit removal only: caller must prevent new affected calls and ensure no
+// hook/trampoline/Bypass_* or cached extension callback is in flight. No draining
+// or thread suspension is performed. Failure retains installed state; success
+// restores entry points and releases hook state, but the DLL stays pinned.
 BOOL WINAPI gp_UnhookWinsock();
 DWORD WINAPI AttachToHandles(HANDLE hProcess, HANDLE hThread, LPCSTR szPipeName);
 DWORD WINAPI AttachToI(DWORD dwPid, DWORD dwTid, LPCSTR szPipeName);

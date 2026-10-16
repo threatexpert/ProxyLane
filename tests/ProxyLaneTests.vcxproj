@@ -39,7 +39,6 @@
     <ClCompile Include="ProxyLaneTestsMain.cpp" />
     <ClCompile Include="DetourHooksTests.cpp" />
     <ClCompile Include="..\src\ProxyLaneHook\DetourHooks.cpp" />
-    <ClCompile Include="..\src\ProxyLaneHook\HookCallGate.cpp" />
     <ClCompile Include="TrafficStatisticsTests.cpp" />
     <ClCompile Include="ProcessActionsTests.cpp" />
     <ClCompile Include="ScopedProcessSuspensionTests.cpp" />

@@ -648,7 +648,6 @@ public:
 
 
 	BOOL HookWinsock();
-	BOOL UnhookWinsock();
 
 	BOOL ApplyHooks(bool attach);
 	BOOL HookAPI(eHOOKMODUDLE ehm, eHOOKFUN ehf, char *exportfunc, LPVOID myfuncaddr, PVOID* original);

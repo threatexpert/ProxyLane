@@ -396,6 +396,6 @@ int main(int argc, char **argv)
 		DispatchMessage(&msg);
 	}
 
-	ret = gp_UnhookWinsock();
+	// Installed hooks and callback state remain valid until this process exits.
 	return 0;
 }

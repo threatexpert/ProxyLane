@@ -37,13 +37,15 @@ def main():
     parser.add_argument("--msbuild-dir", type=Path,
                         help="Optional VS 2019 MSBuild/Current/Bin containing MSBuild.exe and amd64/MSBuild.exe")
     args = parser.parse_args()
-    # Only disable the inherited Hook in this disposable runner.
+    # Detach only in this disposable runner, before starting threads or I/O.
+    # The runner owns quiescence; do not alter the user's proxy process.
     kernel = ctypes.WinDLL("kernel32")
     kernel.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
     kernel.GetModuleHandleW.restype = ctypes.c_void_p
     hook = "ProxyLaneHook%d.dll" % (ctypes.sizeof(ctypes.c_void_p) * 8)
     if kernel.GetModuleHandleW(hook):
-        ctypes.WinDLL(hook).gp_UnhookWinsock()
+        if not ctypes.WinDLL(hook).gp_UnhookWinsock():
+            raise RuntimeError("Inherited Hook cannot be detached; run tests from an unproxied process")
     if ctypes.sizeof(ctypes.c_void_p) != 8:
         raise RuntimeError("Run this matrix with 64-bit Python")
 

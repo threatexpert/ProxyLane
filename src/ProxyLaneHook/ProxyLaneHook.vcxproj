@@ -304,7 +304,6 @@
   <ItemGroup>
 	<ClCompile Include="ElevatedLauncher.cpp" />
     <ClCompile Include="GlobalProxy.cpp" />
-    <ClCompile Include="HookCallGate.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="DetourHooks.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="AppContainerPipeAccess.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -358,7 +357,6 @@
     <ClInclude Include="HookWinsock.h" />
     <ClInclude Include="InjectDll.h" />
     <ClInclude Include="HookDispatch.h" />
-    <ClInclude Include="HookCallGate.h" />
     <ClInclude Include="DetourHooks.h" />
     <ClInclude Include="MySocket.h" />
     <ClInclude Include="PRCPipeClient.h" />

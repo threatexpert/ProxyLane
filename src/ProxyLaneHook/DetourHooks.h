@@ -8,7 +8,14 @@ struct DetourHookBinding
     PVOID replacement;
 };
 
-// All bindings commit together. On failure their pointers and installed state
-// remain unchanged. Callers must keep the bindings/pointer slots alive and
-// quiesce their callbacks before detaching or destroying callback state.
-LONG ApplyDetourHooks(const DetourHookBinding* bindings, size_t count, bool attach);
+// Prepare all bindings in one transaction, aborting on preparation failure.
+// No host thread is suspended: entry patches/pointer updates are not atomic
+// to concurrent callers. Initialize callback state before installation and
+// retain targets, pointer slots, callbacks and their state while installed.
+LONG InstallDetourHooks(const DetourHookBinding* bindings, size_t count);
+
+// Caller must stop new calls and ensure no thread uses the affected entry
+// patches, trampolines or callback state until this transaction has completed.
+// This function neither drains callbacks nor suspends threads. Preparation
+// failure aborts the batch, retaining installed hooks and pointer slots.
+LONG RemoveDetourHooks(const DetourHookBinding* bindings, size_t count);
