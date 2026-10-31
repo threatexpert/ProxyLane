@@ -27,14 +27,14 @@ public:
 // 对话框数据
 	enum { IDD = IDD_Page1 };
 
-	CComboBox m_cfgls;
-	CComboBox m_cbProxyType;
-	CEdit     m_edit_HostName;
-	CEdit     m_edit_Port;
-	CEdit     m_edit_User;
-	CEdit     m_edit_Pass;
-	CComboBox m_cbTransport;
-	CEdit     m_editTransportPsk;
+	CSoftCombo m_cfgls;
+	CSoftCombo m_cbProxyType;
+	CSoftEdit     m_edit_HostName;
+	CSoftEdit     m_edit_Port;
+	CSoftEdit     m_edit_User;
+	CSoftEdit     m_edit_Pass;
+	CSoftCombo m_cbTransport;
+	CSoftEdit     m_editTransportPsk;
 	CModernButton m_OK;
 	CModernButton m_Cancel;
 	CModernButton m_btnSaveProfile;
@@ -85,29 +85,14 @@ private:
 	BOOL m_bHookLanIP;
 	CProxyController m_proxyController;
 	CProxyProfileStore m_profileStore;
-	int m_filterEditBaseHeight;
-	CButton m_workflowGroup;
-	CStatusLabel m_workflowStatus;
-	CStatic m_workflowText;
-	CModernButton m_workflowNext;
-	CStatic m_recentTitle;
-	CStatic m_recentEmpty;
-	CListCtrl m_recentList;
-	CImageList m_recentIcons;
-	CToolTipCtrl m_recentTooltip;
-	CString m_recentHoverText;
-	std::vector<RecentApplications::Entry> m_recentEntries;
-	RecentApplications::Load* m_recentLoad;
-	BOOL m_recentConsumed;
-	BOOL m_recentReadFailed;
-	CString m_recentProfileId;
-	BOOL m_recentLaunching;
-	DWORD m_recentLaunchTick;
-	void ReloadRecentApplications(BOOL force);
-
-	void LayoutFilterEditor(UINT groupId, CEdit& editor, UINT hintId);
-	void CreateWorkflowCard();
-	void LayoutWorkflowCard();
+	int m_activeTab;
+	int m_scrollY;
+	BOOL m_inLayout;
+	CCardFrame m_cardProxy;
+	CCardFrame m_cardOptions;
+	CCardFrame m_cardChildFilter;
+	CCardFrame m_cardTargetFilter;
+	void LayoutSettingsPage();
 	void UpdateWorkflowCard();
 	void SetProfileDirty(BOOL dirty);
 	void SetRuntimeDirty(BOOL dirty);
@@ -148,15 +133,15 @@ public:
 protected:
 	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV 支持
 	virtual BOOL OnInitDialog();
-	virtual BOOL PreTranslateMessage(MSG* message);
-	virtual BOOL OnNotify(WPARAM wParam, LPARAM lParam, LRESULT* result);
+	virtual BOOL UsesSecondaryText(UINT controlId) const;
 	afx_msg LRESULT OnRecentApplicationsChanged(WPARAM, LPARAM);
-	afx_msg void OnRecentApplicationClick(NMHDR* header, LRESULT* result);
 	afx_msg void OnTimer(UINT_PTR timer);
 
 	DECLARE_MESSAGE_MAP()
 public:
 	afx_msg void OnSize(UINT nType, int cx, int cy);
+	afx_msg void OnVScroll(UINT code, UINT position, CScrollBar* scrollBar);
+	afx_msg BOOL OnMouseWheel(UINT flags, short delta, CPoint point);
 	afx_msg void OnBnClickedOk();
 	afx_msg void OnBnClickedCancel();
 	afx_msg void OnDestroy();
@@ -169,12 +154,12 @@ public:
 	CButton m_btnDNSLocal;
 	CButton m_btnDNSRemote;
 	CButton m_btnRedirectPrivateDNS;
-	CEdit   m_editRedirectDNS;
+	CSoftEdit   m_editRedirectDNS;
 	CButton m_btnHookChildProcess;
-	CEdit   m_editChildFilter;
+	CSoftEdit   m_editChildFilter;
 	CButton m_radioChildFilterExclude;
 	CButton m_radioChildFilterInclude;
-	CEdit   m_editTargetFilter;
+	CSoftEdit   m_editTargetFilter;
 	CButton m_radioTargetFilterBypass;
 	CButton m_radioTargetFilterProxy;
 	CButton m_radioTabBasic;
@@ -207,7 +192,6 @@ public:
 	afx_msg void OnBnClickedTabBasic();
 	afx_msg void OnBnClickedTabChild();
 	afx_msg void OnBnClickedTabTarget();
-	afx_msg void OnBnClickedWorkflowNext();
 	void ShowTab(int nTab);
 	void UpdateProxyTestStatus();
 	void UpdateProxyStateUi();

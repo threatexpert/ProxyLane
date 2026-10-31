@@ -213,14 +213,14 @@ HICON RecentApplications::LoadIcon(const Entry& entry)
 		LPITEMIDLIST item = NULL;
 		if (SUCCEEDED(SHParseDisplayName(L"shell:AppsFolder\\" + entry.app.aumid, NULL, &item, 0, NULL)))
 		{
-			SHGetFileInfo(reinterpret_cast<LPCTSTR>(item), 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_ICON | SHGFI_SMALLICON);
+			SHGetFileInfo(reinterpret_cast<LPCTSTR>(item), 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_ICON | SHGFI_LARGEICON);
 			CoTaskMemFree(item);
 		}
 	}
 	else if (entry.available && !PathIsUNC(entry.app.path))
-		SHGetFileInfo(entry.app.path, 0, &info, sizeof(info), SHGFI_ICON | SHGFI_SMALLICON);
+		SHGetFileInfo(entry.app.path, 0, &info, sizeof(info), SHGFI_ICON | SHGFI_LARGEICON);
 	if (!info.hIcon) SHGetFileInfo(L"app.exe", FILE_ATTRIBUTE_NORMAL, &info, sizeof(info),
-		SHGFI_USEFILEATTRIBUTES | SHGFI_ICON | SHGFI_SMALLICON);
+		SHGFI_USEFILEATTRIBUTES | SHGFI_ICON | SHGFI_LARGEICON);
 	return info.hIcon;
 }
 

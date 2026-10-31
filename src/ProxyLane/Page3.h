@@ -6,6 +6,7 @@
 #include "ModernUI.h"
 #include "RecentApplications.h"
 #include "BrowserLaunchWatch.h"
+#include "LaunchPanel.h"
 #include <map>
 #include <set>
 #include <vector>
@@ -104,6 +105,7 @@ class CPage3 : public CModernDialog
 #define TIMER_LAUNCHED_PROCESS 0x101
 #define TIMER_PROCESS_REGISTRY 0x102
 #define TIMER_BROWSER_LAUNCH 0x103
+#define TIMER_LAUNCH_PANEL 0x104
 
 public:
 	CPage3(CWnd* pParent = NULL);   // 标准构造函数
@@ -189,6 +191,22 @@ private:
 	void CancelLaunchSelection();
 	void LayoutProcessPage();
 
+	// Launch area: one-click recent apps and the main launch action.
+	CLaunchPanel m_launchPanel;
+	CModernButton m_processToggle;
+	CModernButton m_btnStopProxy;
+	BOOL m_processesExpanded;
+	std::vector<RecentApplications::Entry> m_recentEntries;
+	RecentApplications::Load* m_recentLoad;
+	BOOL m_recentConsumed;
+	BOOL m_recentReadFailed;
+	BOOL m_recentLaunching;
+	CString m_recentProfileId;
+	void ReloadRecentApplications(BOOL force);
+	void RefreshLaunchPanel();
+	BOOL HasConfiguredProxy() const;
+	void SetProcessesExpanded(BOOL expanded);
+
 public:
 
 	void OnPageActivated();
@@ -255,6 +273,10 @@ public:
 	afx_msg void OnBnClickedTerminateProcess();
 	afx_msg void OnProcessSelectionChanged(NMHDR* header, LRESULT* result);
 	afx_msg void OnTimer(UINT_PTR nIDEvent);
+	afx_msg LRESULT OnLaunchPanelTile(WPARAM index, LPARAM);
+	afx_msg void OnBnClickedProcessToggle();
+	afx_msg void OnBnClickedStopProxy();
+	afx_msg LRESULT OnRecentApplicationsChanged(WPARAM, LPARAM);
 	afx_msg void OnLvnColumnClickProcessList(NMHDR* notifyHeader, LRESULT* result);
 	afx_msg void OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result);
 	afx_msg LRESULT OnWindowFinderBegin(WPARAM, LPARAM);

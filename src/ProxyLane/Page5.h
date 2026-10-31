@@ -14,11 +14,16 @@ public:
 
 protected:
 	CToolTipCtrl m_projectTooltip;
-	CComboBox m_languageCombo;
+	CSoftCombo m_languageCombo;
+	CCardFrame m_openSourceCard;
+	HICON m_aboutIcon;
+	void LayoutAboutPage();
 
 	virtual void DoDataExchange(CDataExchange* dataExchange);
 	virtual BOOL OnInitDialog();
+	virtual BOOL UsesSecondaryText(UINT controlId) const;
 	virtual BOOL PreTranslateMessage(MSG* message);
+	afx_msg void OnSize(UINT type, int cx, int cy);
 	afx_msg void OnProjectLink(NMHDR* notifyHeader, LRESULT* result);
 	afx_msg void OnLanguageChanged();
 

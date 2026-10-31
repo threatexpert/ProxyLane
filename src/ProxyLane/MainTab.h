@@ -20,8 +20,8 @@ class CMainTab : public CWnd
 public:
 	enum PageIndex
 	{
-		PAGE_PROXY = 0,
-		PAGE_APPLICATIONS,
+		PAGE_APPLICATIONS = 0,
+		PAGE_PROXY,
 		PAGE_LOG,
 		PAGE_MONITOR,
 		PAGE_ABOUT,
@@ -74,6 +74,7 @@ protected:
 	CDialog* m_pages[PAGE_COUNT];
 	CFont m_navigationFont;
 	CFont m_brandFont;
+	HICON m_brandIcon;
 	CStatusLabel m_sidebarStatus;
 	CStatusLabel m_transientStatus;
 	CToolTipCtrl m_sidebarTooltip;

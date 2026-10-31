@@ -264,6 +264,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     <ClCompile Include="ProtocolViewModel.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="LaunchPanel.cpp" />
     <ClCompile Include="Page5.cpp" />
 	<ClCompile Include="ProfileCommandBroker.cpp" />
     <ClCompile Include="ProxyLane.cpp" />
@@ -309,6 +310,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     <ClInclude Include="ProtocolViewModel.h" />
       <ClInclude Include="ProcessIconCache.h" />
     <ClInclude Include="MonitorLogFormat.h" />
+    <ClInclude Include="GlyphData.h" />
+    <ClInclude Include="LaunchPanel.h" />
     <ClInclude Include="Page5.h" />
 	<ClInclude Include="ProfileCommandBroker.h" />
 	<ClInclude Include="ExitProcessesDialog.h" />

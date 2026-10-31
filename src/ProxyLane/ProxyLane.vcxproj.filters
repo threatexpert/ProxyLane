@@ -76,6 +76,9 @@
     <ClCompile Include="Page4.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="LaunchPanel.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="Page5.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -157,6 +160,12 @@
     <ClInclude Include="ByteHexView.h" />
     <ClInclude Include="ProtocolRawView.h" />
     <ClInclude Include="Page4.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="GlyphData.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="LaunchPanel.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="Page5.h">
