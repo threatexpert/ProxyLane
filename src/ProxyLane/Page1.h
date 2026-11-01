@@ -121,6 +121,7 @@ public:
 	BOOL ConfirmDiscardUnsavedChanges();
 	BOOL HasUnsavedProfileChanges() const { return m_profileDirty; }
 	CString GetSelectedProfileName() { return GetCurrentProfileName(); }
+	CString GetSelectedProfileSummary();
 	CString GetSelectedRecentProfileId();
 	void GetSavedProfileNames(std::vector<CString>& names);
 

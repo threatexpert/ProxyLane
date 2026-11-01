@@ -81,6 +81,90 @@ namespace
 
 IMPLEMENT_DYNAMIC(CLaunchPanel, CWnd)
 
+BEGIN_MESSAGE_MAP(CLaunchProfileLink, CButton)
+	ON_WM_MOUSEMOVE()
+	ON_MESSAGE(WM_MOUSELEAVE, OnMouseLeave)
+	ON_WM_SETCURSOR()
+	ON_CONTROL_REFLECT(BN_CLICKED, OnClicked)
+END_MESSAGE_MAP()
+
+void CLaunchProfileLink::SetTip(const CString& text)
+{
+	if (!m_tooltip.GetSafeHwnd())
+	{
+		if (!m_tooltip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX)) return;
+		m_tooltip.SetMaxTipWidth(UiTheme::ScaleForWindow(m_hWnd, 480));
+		m_tooltip.SetDelayTime(TTDT_AUTOPOP, 30000);
+	}
+	m_tooltip.Pop();
+	m_tooltip.DelTool(this);
+	if (!text.IsEmpty()) m_tooltip.AddTool(this, text);
+	m_tooltip.Activate(!text.IsEmpty());
+}
+
+void CLaunchProfileLink::OnClicked()
+{
+	m_tooltip.Pop();
+	GetParent()->SendMessage(WM_LAUNCH_PANEL_PROFILE);
+}
+
+void CLaunchProfileLink::DrawItem(LPDRAWITEMSTRUCT item)
+{
+	CDC dc; dc.Attach(item->hDC);
+	CRect rect(item->rcItem);
+	dc.FillSolidRect(rect, UiTheme::Surface());
+	dc.SetBkMode(TRANSPARENT);
+	const BOOL focused = (item->itemState & ODS_FOCUS) && !(item->itemState & ODS_NOFOCUSRECT);
+	dc.SetTextColor(m_hot || focused ? UiTheme::Accent() : UiTheme::TextSecondary());
+	CFont* oldFont = GetFont() ? dc.SelectObject(GetFont()) : NULL;
+	CString text; GetWindowText(text);
+	dc.DrawText(text, rect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+	if (m_hot || focused)
+	{
+		TEXTMETRIC metrics = { 0 }; dc.GetTextMetrics(&metrics);
+		const int y = rect.CenterPoint().y + metrics.tmHeight / 2;
+		dc.FillSolidRect(rect.left, min(y, rect.bottom - 1), rect.Width(), 1, UiTheme::Accent());
+	}
+	if (oldFont) dc.SelectObject(oldFont);
+	dc.Detach();
+}
+
+BOOL CLaunchProfileLink::PreTranslateMessage(MSG* message)
+{
+	if (m_tooltip.GetSafeHwnd()) m_tooltip.RelayEvent(message);
+	if (message->message == WM_KEYDOWN && message->wParam == VK_RETURN)
+	{
+		if (!(message->lParam & (1L << 30))) SendMessage(BM_CLICK);
+		return TRUE;
+	}
+	return CButton::PreTranslateMessage(message);
+}
+
+void CLaunchProfileLink::OnMouseMove(UINT flags, CPoint point)
+{
+	if (!m_hot)
+	{
+		TRACKMOUSEEVENT track = { sizeof(track), TME_LEAVE, m_hWnd, 0 };
+		_TrackMouseEvent(&track);
+		m_hot = TRUE;
+		Invalidate(FALSE);
+	}
+	CButton::OnMouseMove(flags, point);
+}
+
+LRESULT CLaunchProfileLink::OnMouseLeave(WPARAM, LPARAM)
+{
+	m_hot = FALSE;
+	Invalidate(FALSE);
+	return 0;
+}
+
+BOOL CLaunchProfileLink::OnSetCursor(CWnd*, UINT, UINT)
+{
+	::SetCursor(::LoadCursor(NULL, IDC_HAND));
+	return TRUE;
+}
+
 BEGIN_MESSAGE_MAP(CLaunchPanel, CWnd)
 	ON_WM_PAINT()
 	ON_WM_ERASEBKGND()
@@ -140,6 +224,11 @@ BOOL CLaunchPanel::Create(CWnd* parent, UINT id)
 		CRect(0, 0, 0, 0), parent, id))
 		return FALSE;
 	EnsureFonts();
+	// Like the primary action, this is a sibling on the page. Keeping native
+	// dialog controls out of the painted panel preserves normal focus traversal.
+	if (!m_profileLink.Create(L"", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
+		CRect(0, 0, 0, 0), parent, IDC_LAUNCH_PROFILE)) return FALSE;
+	m_profileLink.SetFont(&m_bodyFont);
 	ConfigurePan configure = reinterpret_cast<ConfigurePan>(::GetProcAddress(::GetModuleHandle(L"user32.dll"), "SetGestureConfig"));
 	if (configure)
 	{
@@ -176,7 +265,34 @@ void CLaunchPanel::EnsureFonts()
 	UiTheme::CreateUiFont(m_titleFont, m_hWnd, 11, FW_SEMIBOLD);
 	UiTheme::CreateUiFont(m_bodyFont, m_hWnd, 9, FW_NORMAL);
 	UiTheme::CreateUiFont(m_labelFont, m_hWnd, 9, FW_SEMIBOLD);
+	if (m_profileLink.GetSafeHwnd()) m_profileLink.SetFont(&m_bodyFont);
+	MeasureHeaderText();
 	MeasureRecentTitle();
+}
+
+void CLaunchPanel::MeasureHeaderText()
+{
+	if (!GetSafeHwnd() || !m_titleFont.GetSafeHandle()) return;
+	CClientDC dc(this);
+	CFont* old = dc.SelectObject(&m_titleFont);
+	m_titleWidth = dc.GetTextExtent(m_title).cx;
+	dc.SelectObject(&m_bodyFont);
+	m_profileWidth = dc.GetTextExtent(m_profileSummary).cx;
+	dc.SelectObject(old);
+	UpdateProfileLayout();
+}
+
+void CLaunchPanel::SetProfileSummary(const CString& summary)
+{
+	const CString tip = summary.IsEmpty() ? CString() : summary + L"\r\n" + Localization::Get(L"launch.edit_profile");
+	if (summary == m_profileSummary && tip == m_profileTip) return;
+	m_profileSummary = summary;
+	m_profileTip = tip;
+	m_profileLink.SetWindowText(summary);
+	m_profileLink.SetTip(m_profileTip);
+	MeasureHeaderText();
+	UpdateTileLayout();
+	Invalidate(FALSE);
 }
 
 void CLaunchPanel::MeasureRecentTitle()
@@ -198,6 +314,7 @@ void CLaunchPanel::SetText(const CString& title, const CString& body,
 	m_body = body;
 	m_recentTitle = recentTitle;
 	m_emptyText = emptyText;
+	MeasureHeaderText();
 	MeasureRecentTitle();
 	if (GetSafeHwnd()) Invalidate(FALSE);
 }
@@ -206,6 +323,8 @@ void CLaunchPanel::SetActionWidth(int width)
 {
 	if (m_actionWidth == width) return;
 	m_actionWidth = width;
+	UpdateProfileLayout();
+	RebuildTooltips();
 	if (GetSafeHwnd()) Invalidate(FALSE);
 }
 
@@ -243,19 +362,68 @@ void CLaunchPanel::SetBusyTile(int index)
 	if (GetSafeHwnd()) { Invalidate(FALSE); UpdateWindow(); }
 }
 
-int CLaunchPanel::PreferredHeight() const
+int CLaunchPanel::PreferredHeight(int width) const
 {
-	return Scale(TileTop() + TileHeight() + kPadding);
+	return Scale(TileTop(width) + TileHeight() + kPadding);
 }
 
 int CLaunchPanel::TileWidth() const { return m_compact ? kCompactTileSize : kTileWidth; }
-int CLaunchPanel::TileHeight() const { return m_compact ? kCompactTileSize : kTileHeight; }
-int CLaunchPanel::TileTop() const { return m_compact ? kCompactTileTop : kTileTop; }
+int CLaunchPanel::TileHeight() const { return m_tiles.empty() ? 24 : (m_compact ? kCompactTileSize : kTileHeight); }
+int CLaunchPanel::TileTop(int width) const { return (m_compact ? kCompactTileTop : (m_tiles.empty() ? kHeaderHeight + 12 : kTileTop)) + HeaderExtraHeight(width); }
+
+int CLaunchPanel::HeaderExtraHeight(int width) const
+{
+	if (m_profileSummary.IsEmpty()) return 0;
+	CRect client; GetClientRect(&client);
+	if (width < 0) width = client.Width();
+	const int available = width - Scale(kPadding * 2 + (m_compact ? 40 : kIconBox + 14) + 20) - m_actionWidth;
+	return available - m_titleWidth - Scale(12) < min(m_profileWidth, Scale(180)) ? 24 : 0;
+}
+
+void CLaunchPanel::HeaderRects(CRect& title, CRect& summary, CRect& body) const
+{
+	const CRect text = HeaderTextRect();
+	const BOOL wrapped = HeaderExtraHeight() != 0;
+	title = CRect(text.left, m_compact && wrapped ? Scale(10) : text.top, text.right,
+		m_compact ? (wrapped ? Scale(34) : text.bottom) : text.top + Scale(24));
+	summary.SetRectEmpty();
+	if (!m_profileSummary.IsEmpty())
+	{
+		if (wrapped)
+			summary = CRect(text.left, title.bottom + Scale(2), text.right, title.bottom + Scale(26));
+		else
+		{
+			title.right = min(text.right, title.left + m_titleWidth);
+			summary = CRect(min(text.right, title.right + Scale(12)), title.top, text.right, title.bottom);
+		}
+		summary.right = min(summary.right, summary.left + m_profileWidth);
+	}
+	body = CRect(text.left, title.bottom + Scale(2 + HeaderExtraHeight()), text.right, text.bottom);
+}
+
+void CLaunchPanel::UpdateProfileLayout()
+{
+	if (!m_profileLink.GetSafeHwnd()) return;
+	CRect title, summary, body;
+	HeaderRects(title, summary, body);
+	if (summary.IsRectEmpty())
+	{
+		if (::GetFocus() == m_profileLink.m_hWnd) SetFocus();
+		m_profileLink.ShowWindow(SW_HIDE);
+	}
+	else
+	{
+		MapWindowPoints(GetParent(), &summary);
+		m_profileLink.SetWindowPos(&wndTop, summary.left, summary.top, summary.Width(), summary.Height(),
+			SWP_NOACTIVATE | SWP_SHOWWINDOW);
+	}
+}
 
 void CLaunchPanel::SetCompact(BOOL compact)
 {
 	if (m_compact == compact) return;
 	m_compact = compact;
+	UpdateProfileLayout();
 	UpdateTileLayout();
 	if (GetSafeHwnd()) Invalidate(FALSE);
 }
@@ -264,7 +432,7 @@ CRect CLaunchPanel::ActionSlot(int buttonWidth, int buttonHeight) const
 {
 	CRect client;
 	GetClientRect(&client);
-	const int top = (Scale(m_compact ? kCompactHeaderHeight : kActionsHeight) - buttonHeight) / 2;
+	const int top = (Scale((m_compact ? kCompactHeaderHeight : kActionsHeight) + HeaderExtraHeight()) - buttonHeight) / 2;
 	return CRect(client.right - Scale(kPadding) - buttonWidth, top,
 		client.right - Scale(kPadding), top + buttonHeight);
 }
@@ -276,7 +444,7 @@ CRect CLaunchPanel::HeaderTextRect() const
 	const int left = Scale(kPadding + (m_compact ? 28 + 12 : kIconBox + 14));
 	return CRect(left, m_compact ? 0 : Scale(20),
 		max(left, client.right - Scale(kPadding) - m_actionWidth - Scale(20)),
-		Scale(m_compact ? kCompactHeaderHeight : kActionsHeight - 8));
+		Scale((m_compact ? kCompactHeaderHeight : kActionsHeight - 8) + HeaderExtraHeight()));
 }
 
 int CLaunchPanel::TileCapacity() const
@@ -305,7 +473,7 @@ CRect CLaunchPanel::TileViewport() const
 {
 	CRect client; GetClientRect(&client);
 	int left = Scale(kPadding), right = max(left, client.right - Scale(kPadding));
-	if (m_compact)
+	if (m_compact || m_tiles.empty())
 	{
 		// Reserve title and paging space outside the icon viewport so neither
 		// gets covered while swiping. Compute capacity here without recursion.
@@ -358,6 +526,7 @@ BOOL CLaunchPanel::OnEraseBkgnd(CDC*)
 void CLaunchPanel::OnSize(UINT type, int cx, int cy)
 {
 	CWnd::OnSize(type, cx, cy);
+	UpdateProfileLayout();
 	UpdateTileLayout();
 	Invalidate(FALSE);
 }
@@ -555,7 +724,7 @@ BOOL CLaunchPanel::OnMouseWheel(UINT flags, short delta, CPoint point)
 {
 	CPoint local = point;
 	ScreenToClient(&local);
-	if (local.y < Scale(m_compact ? TileTop() : kRecentLabelTop) || static_cast<int>(m_tiles.size()) <= TileCapacity())
+	if (local.y < Scale(m_compact ? TileTop() : kRecentLabelTop + HeaderExtraHeight()) || static_cast<int>(m_tiles.size()) <= TileCapacity())
 		return CWnd::OnMouseWheel(flags, delta, point);
 	m_wheelDelta += delta;
 	while (m_wheelDelta >= WHEEL_DELTA) { ChangePage(-1); m_wheelDelta -= WHEEL_DELTA; }
@@ -598,31 +767,32 @@ void CLaunchPanel::OnPaint()
 
 	// Header title and body.
 	{
-		CRect text = HeaderTextRect();
+		CRect titleRect, summaryRect, bodyRect;
+		HeaderRects(titleRect, summaryRect, bodyRect);
 		CFont* oldFont = dc.SelectObject(&m_titleFont);
 		dc.SetTextColor(primary);
-		CRect titleRect(text.left, text.top, text.right, m_compact ? text.bottom : text.top + Scale(24));
 		dc.DrawText(m_title, titleRect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
 		if (!m_compact)
 		{
 			dc.SelectObject(&m_bodyFont);
 			dc.SetTextColor(UiTheme::TextSecondary());
-			CRect bodyRect(text.left, titleRect.bottom + Scale(2), text.right, text.bottom);
 			dc.DrawText(m_body, bodyRect, DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
 		}
 		dc.SelectObject(oldFont);
 	}
 
 	// Divider between the header and the recent apps.
-	dc.FillSolidRect(Scale(kPadding), Scale(m_compact ? kCompactHeaderHeight : kHeaderHeight), client.Width() - Scale(kPadding) * 2, 1, UiTheme::BorderSoft());
+	dc.FillSolidRect(Scale(kPadding), Scale((m_compact ? kCompactHeaderHeight : kHeaderHeight) + HeaderExtraHeight()), client.Width() - Scale(kPadding) * 2, 1, UiTheme::BorderSoft());
 
 	// Recent apps.
 	{
 		CFont* oldFont = dc.SelectObject(&m_labelFont);
 		dc.SetTextColor(UiTheme::TextSecondary());
-		const int labelTop = m_compact ? TileTop() : kRecentLabelTop;
-		CRect label(Scale(kPadding), Scale(labelTop), client.right - Scale(kPadding), Scale(labelTop + (m_compact ? TileHeight() : 20)));
-		if (m_compact) label.right = max(label.left, TileViewport().left - Scale(12));
+		// An empty history needs only one quiet line, not a vacant tile row.
+		const BOOL inlineRecent = m_compact || m_tiles.empty();
+		const int labelTop = inlineRecent ? TileTop() : kRecentLabelTop + HeaderExtraHeight();
+		CRect label(Scale(kPadding), Scale(labelTop), client.right - Scale(kPadding), Scale(labelTop + (inlineRecent ? TileHeight() : 20)));
+		if (inlineRecent) label.right = max(label.left, TileViewport().left - Scale(12));
 		if (PageCount() > 1)
 		{
 			const int dots = min(m_compact ? 5 : 7, PageCount());

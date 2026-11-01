@@ -6,6 +6,24 @@
 #include "ModernUI.h"
 
 #define WM_LAUNCH_PANEL_TILE (WM_APP + 321)
+#define WM_LAUNCH_PANEL_PROFILE (WM_APP + 322)
+
+// A native, keyboard-accessible button painted as a quiet text link.
+class CLaunchProfileLink : public CButton
+{
+public:
+	void SetTip(const CString& text);
+protected:
+	virtual void DrawItem(LPDRAWITEMSTRUCT item);
+	virtual BOOL PreTranslateMessage(MSG* message);
+	afx_msg void OnMouseMove(UINT flags, CPoint point);
+	afx_msg LRESULT OnMouseLeave(WPARAM, LPARAM);
+	afx_msg BOOL OnSetCursor(CWnd* window, UINT hitTest, UINT message);
+	afx_msg void OnClicked();
+	BOOL m_hot = FALSE;
+	CToolTipCtrl m_tooltip;
+	DECLARE_MESSAGE_MAP()
+};
 
 // Launch area at the top of the applications page: a short explanation of
 // what dropping/choosing an app does, followed by one-click recent apps.
@@ -38,8 +56,9 @@ public:
 	void SetTiles(const std::vector<Tile>& tiles);
 	void SetBusyTile(int index);
 	void SetCompact(BOOL compact);
+	void SetProfileSummary(const CString& summary);
 
-	int PreferredHeight() const;
+	int PreferredHeight(int width = -1) const;
 	// Rectangle, in this window's client coordinates, reserved for the action button.
 	CRect ActionSlot(int buttonWidth, int buttonHeight) const;
 
@@ -67,7 +86,11 @@ private:
 	int Scale(int value) const;
 	int TileWidth() const;
 	int TileHeight() const;
-	int TileTop() const;
+	int TileTop(int width = -1) const;
+	int HeaderExtraHeight(int width = -1) const;
+	void HeaderRects(CRect& title, CRect& summary, CRect& body) const;
+	void UpdateProfileLayout();
+	void MeasureHeaderText();
 	void EnsureFonts();
 	void MeasureRecentTitle();
 	int VisibleTileCount() const;
@@ -96,6 +119,11 @@ private:
 	CString m_body;
 	CString m_recentTitle;
 	CString m_emptyText;
+	CString m_profileSummary;
+	CString m_profileTip;
+	CLaunchProfileLink m_profileLink;
+	int m_titleWidth = 0;
+	int m_profileWidth = 0;
 	BOOL m_enabled;
 	BOOL m_compact;
 	int m_hot;

@@ -1241,6 +1241,7 @@ BEGIN_MESSAGE_MAP(CPage3, CModernDialog)
 	ON_NOTIFY(LVN_COLUMNCLICK, IDC_PSLIST, &CPage3::OnLvnColumnClickProcessList)
 	ON_NOTIFY(NM_CUSTOMDRAW, IDC_PSLIST, &CPage3::OnNMCustomdrawProcessList)
 	ON_MESSAGE(WM_LAUNCH_PANEL_TILE, &CPage3::OnLaunchPanelTile)
+	ON_MESSAGE(WM_LAUNCH_PANEL_PROFILE, &CPage3::OnLaunchPanelProfile)
 	ON_BN_CLICKED(IDC_PROCESS_TOGGLE, &CPage3::OnBnClickedProcessToggle)
 	ON_BN_CLICKED(IDC_STOP_PROXY_APP, &CPage3::OnBnClickedStopProxy)
 	ON_MESSAGE(WM_RECENT_APPLICATIONS_CHANGED, &CPage3::OnRecentApplicationsChanged)
@@ -1292,21 +1293,21 @@ void CPage3::LayoutProcessPage()
 	if (m_launchPanel.GetSafeHwnd())
 	{
 		m_launchPanel.SetCompact(m_processesExpanded);
-		const int panelHeight = m_launchPanel.PreferredHeight();
+		const int actionWidth = textWidth(m_btnSelectApp, 150);
+		const BOOL running = g_MainTab && g_MainTab->IsProxyRunning();
+		const int stopWidth = running ? textWidth(m_btnStopProxy, 96) : 0;
+		m_launchPanel.SetActionWidth(actionWidth + (running ? stopWidth + UiTheme::ScaleForWindow(m_hWnd, 10) : 0));
+		const int panelHeight = m_launchPanel.PreferredHeight(rcClient.Width() - margin * 2);
 		CRect panel(margin, top, rcClient.right - margin, top + panelHeight);
 		m_launchPanel.MoveWindow(&panel);
-		const int actionWidth = textWidth(m_btnSelectApp, 150);
-		m_launchPanel.SetActionWidth(actionWidth);
 		const int actionHeight = UiTheme::ScaleForWindow(m_hWnd, 34);
 		CRect slot = m_launchPanel.ActionSlot(actionWidth, actionHeight);
 		if (m_btnSelectApp.GetSafeHwnd())
 			m_btnSelectApp.MoveWindow(panel.left + slot.left, panel.top + slot.top, actionWidth, actionHeight);
 		if (m_btnStopProxy.GetSafeHwnd() && g_MainTab && g_MainTab->IsProxyRunning())
 		{
-			const int stopWidth = textWidth(m_btnStopProxy, 96);
 			m_btnStopProxy.MoveWindow(panel.left + slot.left - stopWidth - UiTheme::ScaleForWindow(m_hWnd, 10),
 				panel.top + slot.top, stopWidth, actionHeight);
-			m_launchPanel.SetActionWidth(actionWidth + stopWidth + UiTheme::ScaleForWindow(m_hWnd, 10));
 		}
 		top = panel.bottom + UiTheme::ScaleForWindow(m_hWnd, 16);
 	}
@@ -1497,7 +1498,10 @@ void CPage3::ReloadRecentApplications(BOOL force)
 		tile.elevated = m_recentEntries[i].elevated;
 		tiles.push_back(tile);
 	}
+	const int oldPanelHeight = m_launchPanel.PreferredHeight();
 	m_launchPanel.SetTiles(tiles);
+	if (oldPanelHeight != m_launchPanel.PreferredHeight())
+		LayoutProcessPage();
 }
 
 BOOL CPage3::HasConfiguredProxy() const
@@ -1508,6 +1512,7 @@ BOOL CPage3::HasConfiguredProxy() const
 void CPage3::RefreshLaunchPanel()
 {
 	if (!m_launchPanel.GetSafeHwnd()) return;
+	const int oldPanelHeight = m_launchPanel.PreferredHeight();
 	const BOOL running = g_MainTab && g_MainTab->IsProxyRunning();
 	const BOOL configured = HasConfiguredProxy();
 	ReloadRecentApplications(FALSE);
@@ -1518,6 +1523,8 @@ void CPage3::RefreshLaunchPanel()
 	m_launchPanel.SetText(Localization::Get(titleKey), Localization::Get(bodyKey),
 		Localization::Get(_T("recent.title")), empty);
 	m_launchPanel.SetEnabledState(running);
+	m_launchPanel.SetProfileSummary(!running && configured ?
+		g_MainTab->GetPage1()->GetSelectedProfileSummary() : CString());
 	if (m_btnStopProxy.GetSafeHwnd())
 		m_btnStopProxy.ShowWindow(running ? SW_SHOW : SW_HIDE);
 
@@ -1531,6 +1538,8 @@ void CPage3::RefreshLaunchPanel()
 		m_btnSelectApp.SetWindowText(actionText);
 		LayoutProcessPage();
 	}
+	else if (oldPanelHeight != m_launchPanel.PreferredHeight())
+		LayoutProcessPage();
 }
 
 void CPage3::OnBnClickedStopProxy()
@@ -1571,6 +1580,16 @@ void CPage3::SetProcessesExpanded(BOOL expanded)
 	// Request the initial snapshot only after restoring the page's visibility.
 	if (expanded) UpdatePslist(TRUE);
 	PublishProcessAccessibility(false);
+}
+
+LRESULT CPage3::OnLaunchPanelProfile(WPARAM, LPARAM)
+{
+	if (g_MainTab && !g_MainTab->IsProxyRunning() && !m_recentLaunching)
+	{
+		g_MainTab->SelectPage(CMainTab::PAGE_PROXY);
+		g_MainTab->GetPage1()->m_cfgls.SetFocus();
+	}
+	return 0;
 }
 
 LRESULT CPage3::OnLaunchPanelTile(WPARAM index, LPARAM)

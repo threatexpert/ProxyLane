@@ -308,6 +308,7 @@ public:
 	afx_msg void OnProcessSelectionChanged(NMHDR* header, LRESULT* result);
 	afx_msg void OnTimer(UINT_PTR nIDEvent);
 	afx_msg LRESULT OnLaunchPanelTile(WPARAM index, LPARAM);
+	afx_msg LRESULT OnLaunchPanelProfile(WPARAM, LPARAM);
 	afx_msg void OnBnClickedProcessToggle();
 	afx_msg void OnBnClickedStopProxy();
 	afx_msg LRESULT OnRecentApplicationsChanged(WPARAM, LPARAM);

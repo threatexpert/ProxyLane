@@ -400,6 +400,24 @@ void CPage1::LayoutSettingsPage()
 	const int serverTop = y;
 	{
 		int row = serverTop + S(34);
+		if (CWnd* hint = GetDlgItem(IDC_STATIC_UPSTREAM_HINT))
+		{
+			CString text;
+			hint->GetWindowText(text);
+			hint->ShowWindow(text.IsEmpty() ? SW_HIDE : SW_SHOWNA);
+			if (!text.IsEmpty())
+			{
+				CClientDC dc(hint);
+				CFont* font = hint->GetFont();
+				CFont* oldFont = font ? dc.SelectObject(font) : NULL;
+				CRect bounds(0, 0, max(1, innerW), 0);
+				dc.DrawText(text, bounds, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
+				if (oldFont) dc.SelectObject(oldFont);
+				const int hintHeight = max(labelH, bounds.Height());
+				place(IDC_STATIC_UPSTREAM_HINT, innerX, row, innerW, hintHeight);
+				row += hintHeight + S(12);
+			}
+		}
 		const int typeW = S(140), portW = S(90);
 		const int hostW = innerW - typeW - portW - gapX * 2;
 		place(IDC_STATIC_TYPE_LABEL, innerX, row, typeW, labelH);
@@ -588,6 +606,7 @@ BOOL CPage1::UsesSecondaryText(UINT controlId) const
 	case IDC_STATIC_DNS_LABEL:
 	case IDC_STATIC_CHILDFILTER_HINT:
 	case IDC_STATIC_TARGETFILTER_HINT:
+	case IDC_STATIC_UPSTREAM_HINT:
 		return TRUE;
 	}
 	return CModernDialog::UsesSecondaryText(controlId);
@@ -881,6 +900,13 @@ void CPage1::UpdateTransportEnable()
 	selectedProxy.strProxyType = proxyType;
 	const int selectedProxyType = selectedProxy.GetProxyType();
 	const BOOL direct = proxyType.CompareNoCase(_T("NOPROXY")) == 0;
+	const CString group = Localization::Get(direct ? L"page1.direct_group" : L"page1.proxy_group");
+	const CString hint = direct ? Localization::Get(L"page1.direct_hint") : CString();
+	CString previousHint, previousGroup;
+	GetDlgItemText(IDC_STATIC_UPSTREAM_HINT, previousHint);
+	GetDlgItemText(IDC_STATIC_PROXY_GROUP, previousGroup);
+	if (previousGroup != group) SetDlgItemText(IDC_STATIC_PROXY_GROUP, group);
+	if (previousHint != hint) SetDlgItemText(IDC_STATIC_UPSTREAM_HINT, hint);
 	m_edit_HostName.EnableWindow(!direct);
 	m_edit_Port.EnableWindow(!direct);
 	m_edit_User.EnableWindow(!direct);
@@ -908,6 +934,7 @@ void CPage1::UpdateTransportEnable()
 			m_btnHookUDP.SetCheck(BST_UNCHECKED);
 		m_btnHookUDP.EnableWindow(supportsUdp);
 	}
+	if (previousHint != hint) LayoutSettingsPage();
 }
 
 void CPage1::OnDnsSettingsChanged()
@@ -1115,6 +1142,24 @@ CString CPage1::GetCurrentProfileName()
 		m_cfgls.GetWindowText(profileName);
 	profileName.Trim();
 	return profileName;
+}
+
+CString CPage1::GetSelectedProfileSummary()
+{
+	// Read the same draft that StartProxy uses, without validating or saving it.
+	const CString name = GetCurrentProfileName();
+	if (name.IsEmpty()) return CString();
+	CString type, host, port;
+	m_cbProxyType.GetWindowText(type);
+	if (type.CompareNoCase(L"NOPROXY") == 0)
+		return name + L" \x00b7 " + Localization::Get(L"launch.profile_direct");
+	m_edit_HostName.GetWindowText(host);
+	m_edit_Port.GetWindowText(port);
+	host.Trim(); port.Trim();
+	if (host.Find(L':') >= 0 && host.Left(1) != L"[") host = L"[" + host + L"]";
+	if (host.IsEmpty()) host = L"\x2014";
+	if (port.IsEmpty()) port = L"\x2014";
+	return name + L" \x00b7 " + type + L" " + host + L":" + port;
 }
 
 CString CPage1::GetSelectedRecentProfileId()
@@ -1350,8 +1395,10 @@ BOOL CPage1::StartProxyTestPhase(const PRCClient& client, int phase,
 	return TRUE;
 }
 
-static CString ProxyTestErrorDescription(int error)
+static CString ProxyTestErrorDescription(int error, BOOL direct)
 {
+	if (direct && (error == PROXYERROR_NOCONN || error == PROXYERROR_REQUESTFAILED))
+		return Localization::Get(L"test.direct_connection_failed");
 	// Proxy negotiation errors share numeric values with Win32 errors; do not
 	// pass these application codes to the Windows system message table.
 	LPCTSTR key = NULL;
@@ -1564,7 +1611,8 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 				szText += detail;
 				if (m_testIpv6Error)
 				{
-					const CString description = ProxyTestErrorDescription(m_testIpv6Error);
+					const CString description = ProxyTestErrorDescription(m_testIpv6Error,
+						m_testProxyInfo.GetProxyType() == PROXYTYPE_NOPROXY);
 					detail.Format(Localization::Get(_T("test.ipv6_error")),
 						static_cast<LPCTSTR>(description));
 					szText += detail;
@@ -1622,11 +1670,13 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 			switch (nCode)
 			{
 			case PROXYERROR_NOCONN:
-				szText = Localization::Get(_T("test.no_connection"));
+				szText = Localization::Get(m_testProxyInfo.GetProxyType() == PROXYTYPE_NOPROXY ?
+					L"test.direct_connection_failed" : L"test.no_connection");
 				break;
 				/* fall through */
 			case PROXYERROR_REQUESTFAILED:
-				szText = Localization::Get(_T("test.target_failed"));
+				szText = Localization::Get(m_testProxyInfo.GetProxyType() == PROXYTYPE_NOPROXY ?
+					L"test.direct_connection_failed" : L"test.target_failed");
 				break;
 			case PROXYERROR_AUTHREQUIRED:
 				szText = Localization::Get(_T("test.auth_required"));
