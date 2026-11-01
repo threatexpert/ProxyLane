@@ -1117,6 +1117,13 @@ CString CPage1::GetCurrentProfileName()
 	return profileName;
 }
 
+CString CPage1::GetSelectedRecentProfileId()
+{
+	const CString name = GetCurrentProfileName();
+	// Preview existing history without creating an identity for an unsaved draft.
+	return name.IsEmpty() ? CString() : g_ini.GetString(_T("proxy_") + name, _T("RecentAppsId"));
+}
+
 BOOL CPage1::ApplyRuntimeSettings()
 {
 	if (!m_proxyController.IsRunning())
@@ -2049,6 +2056,7 @@ void CPage1::UpdateProxyTestStatus()
 
 void CPage1::UpdateProxyStateUi()
 {
+	if (g_MainTab) g_MainTab->RefreshSidebarStatus();
 	BOOL running = m_proxyController.IsRunning();
 	m_OK.SetWindowText(Localization::Get(_T("action.start_proxy")));
 	m_OK.EnableWindow(!running);

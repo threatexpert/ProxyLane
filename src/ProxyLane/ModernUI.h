@@ -20,6 +20,9 @@ namespace UiTheme
 	// Anti-aliased drawing (GDI+, available on Windows XP and later).
 	// fill/border may be CLR_NONE to skip that part. `radius` is in pixels.
 	void FillRoundRect(HDC dc, const CRect& rect, int radius, COLORREF fill, COLORREF border);
+	void DrawElevationBadge(HDC dc, const CRect& rect);
+	// Transparent image-list overlay; caller owns the returned icon.
+	HICON CreateElevationOverlay(int iconSize);
 
 	enum Glyph
 	{
@@ -119,7 +122,8 @@ public:
 
 	CStatusLabel();
 	void SetStatus(LPCTSTR text, Tone tone);
-	void SetTwoLineStatus(LPCTSTR primaryText, LPCTSTR secondaryText, Tone tone);
+	void SetTwoLineStatus(LPCTSTR primaryText, LPCTSTR secondaryText, Tone tone, BOOL compact = FALSE);
+	void SetDetailText(const CString& text);
 	void SetTrafficRates(LPCTSTR uploadText, LPCTSTR downloadText);
 	void SetBackdropColor(COLORREF color);
 
@@ -134,6 +138,9 @@ protected:
 	Tone m_tone;
 	COLORREF m_backdrop;
 	BOOL m_twoLine;
+	BOOL m_compact;
+	CString m_detailText;
+	CFont m_detailFont;
 	CString m_primaryText;
 	CString m_secondaryText;
 	CString m_uploadText;

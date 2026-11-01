@@ -12,6 +12,7 @@ import uuid
 
 from ExitWarningE2ETests import USER, CALLBACK, windows, settings_page, text, wait_for, dismiss
 from HookRebindE2ETests import owned_pipe
+from ProcessListE2ETests import Item, open_process, allocate, release, write, read, close, send
 
 KERNEL = ctypes.WinDLL('kernel32', use_last_error=True)
 KERNEL.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
@@ -92,14 +93,65 @@ LastUsed=100
                              ('Aumid', ''), ('Arguments', '--preload-fixture-' + profile),
                              ('WorkingDirectory', ''), ('Shortcut', '')]:
             result += field + 'Utf8Base64=' + base64.b64encode(value.encode()).decode() + '\n'
+    # Same target/name, differing only in the saved elevation mode.
+    for elevated in (0, 1):
+        identity = 'a' * 32
+        result += f'[recent_app_{identity}_{"c" * 31}{elevated}]\nVersion=1\nProfileId={identity}\nPinned=0\nElevated={elevated}\nLastUsed={200 + elevated}\n'
+        for field, value in [('Name', 'Twin A'), ('Path', sys.executable),
+                             ('Aumid', ''), ('Arguments', '--preload-twin-A'),
+                             ('WorkingDirectory', ''), ('Shortcut', '')]:
+            result += field + 'Utf8Base64=' + base64.b64encode(value.encode()).decode() + '\n'
     return result
+
+
+def check_elevation_selection(owner, picker):
+    assert search(picker, 'Twin A') == 2
+    view = USER.GetDlgItem(picker, 1074)
+    handle = open_process(0x38, False, owner.pid)
+    assert handle
+    memory = None
+    try:
+        memory = allocate(handle, None, 4096, 0x3000, 4)
+        assert memory
+
+        def source(row):
+            item = Item(column=1, text=memory + 256, capacity=1024)
+            assert write(handle, memory, ctypes.byref(item), ctypes.sizeof(item), None)
+            send(view, 0x1073, row, memory)
+            buffer = ctypes.create_unicode_buffer(1024)
+            assert read(handle, memory + 256, buffer, ctypes.sizeof(buffer), None)
+            return buffer.value
+
+        labels = [source(row) for row in range(2)]
+        admin = next(row for row, label in enumerate(labels) if 'Administrator' in label)
+        assert sum('Administrator' in label for label in labels) == 1, labels
+        assert send(view, 0x102c, admin, 0xf00) == 0x100, 'admin shield overlay'
+        assert send(view, 0x102c, 1 - admin, 0xf00) == 0, 'normal entry has no shield'
+        # Test both entries, including the later row which a target-only key
+        # incorrectly collapses onto the other entry after filtering.
+        for row in range(2):
+            expected = labels[row]
+            item = Item(state=3, stateMask=3)
+            assert write(handle, memory, ctypes.byref(item), ctypes.sizeof(item), None)
+            send(view, 0x102b, row, memory)
+            assert search(picker, '--preload-twin-A') == 2
+            selected = send(view, 0x100c, -1, 2)
+            assert selected >= 0 and source(selected) == expected, (selected, expected)
+            assert search(picker, 'Twin A') == 2
+        assert search(picker, 'Administrator') == 1
+        assert 'Administrator' in source(0)
+    finally:
+        if memory:
+            release(handle, memory, 0, 0x8000)
+        close(handle)
 
 
 def main():
     directory = Path('build/qa/application-preload-' + uuid.uuid4().hex[:8]).resolve()
     directory.mkdir(parents=True)
     for name in ('ProxyLane64.exe', 'ProxyLaneHook64.dll', 'ProxyLaneHook32.dll'):
-        shutil.copy2(Path('bin') / name, directory / name)
+        source = Path(sys.argv[1]) if name == 'ProxyLane64.exe' and len(sys.argv) > 1 else Path('bin') / name
+        shutil.copy2(source, directory / name)
     ini = directory / 'ProxyLane.ini'
     ini.write_text(fixture_ini(), encoding='utf-8')
     owner = subprocess.Popen([str(directory / 'ProxyLane64.exe')], cwd=directory,
@@ -109,6 +161,9 @@ def main():
         main_window = wait_for(lambda: next((w for w in windows(owner.pid) if not USER.GetParent(w)), None), 'main')
         page = wait_for(lambda: settings_page(main_window), 'settings')
         process_page = wait_for(lambda: page_with(main_window, 1072), 'process page')
+        # The launch button now opens the picker only after the proxy starts.
+        USER.PostMessageW(page, 0x111, 1, 0)
+        wait_for(lambda: owned_pipe(owner.pid), 'service A')
         first = open_picker(owner, process_page)
         cold_status = text(USER.GetDlgItem(first, 1075))
         dismiss(first, 2)
@@ -119,12 +174,11 @@ def main():
         warm_open = time.monotonic() - started
         assert count(picker) > 0 and idle(picker), (count(picker), text(USER.GetDlgItem(picker, 1075)))
         dismiss(picker, 2)
-        USER.PostMessageW(page, 0x111, 1, 0)
-        wait_for(lambda: owned_pipe(owner.pid), 'service A')
         picker = open_picker(owner, process_page)
         wait_for(lambda: idle(picker), 'A ready')
         assert search(picker, 'Warm A') == 1
         assert search(picker, 'Warm B') == 0
+        check_elevation_selection(owner, picker)
         search(picker, '')
         before = count(picker)
         # Hold validation pending, then close/reopen a refresh with old data.
@@ -162,6 +216,7 @@ def main():
         owner.wait(timeout=10)
         print('PASS', {'cold_status': cold_status, 'warm_open_seconds': round(warm_open, 3),
                        'catalog_rows': before, 'close_during_refresh': True, 'profile_isolation': True,
+                       'elevation_labels_and_selection': True,
                        'fixture': str(directory)}, flush=True)
     finally:
         if gate:

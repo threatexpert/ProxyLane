@@ -48,6 +48,56 @@ namespace UiTheme
 		{
 			return Gdiplus::Color(255, GetRValue(color), GetGValue(color), GetBValue(color));
 		}
+
+		void PaintElevationBadge(Gdiplus::Graphics& graphics, const CRect& rect)
+		{
+			graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+			const float x = static_cast<float>(rect.left), y = static_cast<float>(rect.top);
+			const float w = static_cast<float>(rect.Width()), h = static_cast<float>(rect.Height());
+			Gdiplus::PointF points[] = {
+				{ x + w * .50f, y + h * .08f }, { x + w * .88f, y + h * .20f },
+				{ x + w * .84f, y + h * .59f }, { x + w * .70f, y + h * .80f },
+				{ x + w * .50f, y + h * .94f }, { x + w * .30f, y + h * .80f },
+				{ x + w * .16f, y + h * .59f }, { x + w * .12f, y + h * .20f }
+			};
+			Gdiplus::GraphicsPath shield;
+			shield.AddPolygon(points, _countof(points));
+			Gdiplus::SolidBrush blue(Gdiplus::Color(255, 37, 99, 190));
+			Gdiplus::SolidBrush gold(Gdiplus::Color(255, 250, 202, 64));
+			graphics.FillPath(&blue, &shield);
+			const Gdiplus::GraphicsState state = graphics.Save();
+			graphics.SetClip(&shield, Gdiplus::CombineModeIntersect);
+			graphics.FillRectangle(&gold, x, y, w * .5f, h * .5f);
+			graphics.FillRectangle(&gold, x + w * .5f, y + h * .5f, w * .5f, h * .5f);
+			graphics.Restore(state);
+			Gdiplus::Pen outline(Gdiplus::Color(255, 255, 255, 255), max(1.0f, w / 12.0f));
+			outline.SetLineJoin(Gdiplus::LineJoinRound);
+			graphics.DrawPath(&outline, &shield);
+		}
+	}
+
+	void DrawElevationBadge(HDC dc, const CRect& rect)
+	{
+		if (!dc || rect.Width() < 4 || rect.Height() < 4) return;
+		EnsureGdiplus();
+		Gdiplus::Graphics graphics(dc);
+		PaintElevationBadge(graphics, rect);
+	}
+
+	HICON CreateElevationOverlay(int iconSize)
+	{
+		if (iconSize < 4) return NULL;
+		EnsureGdiplus();
+		Gdiplus::Bitmap bitmap(iconSize, iconSize, PixelFormat32bppARGB);
+		{
+			Gdiplus::Graphics graphics(&bitmap);
+			graphics.Clear(Gdiplus::Color(0, 0, 0, 0));
+			const int side = max(4, iconSize * 3 / 4);
+			PaintElevationBadge(graphics, CRect(iconSize - side, iconSize - side, iconSize, iconSize));
+		}
+		HICON icon = NULL;
+		bitmap.GetHICON(&icon);
+		return icon;
 	}
 
 	void FillRoundRect(HDC dc, const CRect& rect, int radius, COLORREF fill, COLORREF border)
@@ -473,7 +523,7 @@ IMPLEMENT_DYNAMIC(CStatusLabel, CStatic)
 CStatusLabel::CStatusLabel()
 	: m_tone(TONE_NEUTRAL),
 	m_backdrop(UiTheme::PageBackground()),
-	m_twoLine(FALSE)
+	m_twoLine(FALSE), m_compact(FALSE)
 {
 }
 
@@ -500,8 +550,10 @@ void CStatusLabel::SetStatus(LPCTSTR text, Tone tone)
 	}
 }
 
-void CStatusLabel::SetTwoLineStatus(LPCTSTR primaryText, LPCTSTR secondaryText, Tone tone)
+void CStatusLabel::SetTwoLineStatus(LPCTSTR primaryText, LPCTSTR secondaryText, Tone tone, BOOL compact)
 {
+	if (m_twoLine && m_primaryText == primaryText && m_secondaryText == secondaryText && m_tone == tone && m_compact == compact) return;
+	m_compact = compact;
 	m_tone = tone;
 	m_twoLine = TRUE;
 	m_primaryText = primaryText ? primaryText : _T("");
@@ -514,6 +566,13 @@ void CStatusLabel::SetTwoLineStatus(LPCTSTR primaryText, LPCTSTR secondaryText, 
 		Invalidate(FALSE);
 		UpdateOverflowTooltip();
 	}
+}
+
+void CStatusLabel::SetDetailText(const CString& text)
+{
+	if (m_detailText == text) return;
+	m_detailText = text;
+	UpdateOverflowTooltip();
 }
 
 void CStatusLabel::SetTrafficRates(LPCTSTR uploadText, LPCTSTR downloadText)
@@ -630,6 +689,12 @@ void CStatusLabel::UpdateOverflowTooltip()
 	if (oldFont)
 		dc.SelectObject(oldFont);
 
+	if (!m_detailText.IsEmpty())
+	{
+		fullText = m_detailText;
+		if (!m_uploadText.IsEmpty()) fullText += L"\r\n" + m_uploadText + L"\r\n" + m_downloadText;
+		truncated = TRUE;
+	}
 	if (!truncated || fullText.IsEmpty())
 	{
 		m_tooltip.Pop();
@@ -707,7 +772,7 @@ void CStatusLabel::DrawItem(LPDRAWITEMSTRUCT info)
 	{
 		const int horizontalPadding = UiTheme::ScaleForWindow(m_hWnd, 9);
 		const int verticalPadding = UiTheme::ScaleForWindow(m_hWnd, 5);
-		const int primaryHeight = UiTheme::ScaleForWindow(m_hWnd, 22);
+		const int primaryHeight = UiTheme::ScaleForWindow(m_hWnd, m_compact ? 18 : 22);
 		const int dotSize = UiTheme::ScaleForWindow(m_hWnd, 6);
 		const int dotGap = UiTheme::ScaleForWindow(m_hWnd, 6);
 		CRect inner(rect);
@@ -734,9 +799,12 @@ void CStatusLabel::DrawItem(LPDRAWITEMSTRUCT info)
 		CRect secondaryRect(inner.left, primaryRect.bottom, inner.right, inner.bottom);
 		if (!m_uploadText.IsEmpty())
 			secondaryRect.bottom = min(inner.bottom, secondaryRect.top + primaryHeight);
-		dc.SetTextColor(UiTheme::TextPrimary());
+		if (!m_detailFont.GetSafeHandle()) UiTheme::CreateUiFont(m_detailFont, m_hWnd, 9, FW_NORMAL);
+		CFont* primaryFont = dc.SelectObject(&m_detailFont);
+		dc.SetTextColor(UiTheme::TextSecondary());
 		dc.DrawText(m_secondaryText, secondaryRect,
 			DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+		dc.SelectObject(primaryFont);
 		if (!m_uploadText.IsEmpty())
 		{
 			CRect rateRect(inner.left, secondaryRect.bottom + UiTheme::ScaleForWindow(m_hWnd, 4),

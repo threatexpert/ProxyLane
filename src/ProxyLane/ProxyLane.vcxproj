@@ -252,6 +252,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     <ClCompile Include="IniFile.cpp" />
     <ClCompile Include="Localization.cpp" />
     <ClCompile Include="ListCtrlEx.cpp" />
+    <ClCompile Include="ProcessListAccessibility.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="MainTab.cpp" />
     <ClCompile Include="ModernUI.cpp" />
     <ClCompile Include="Page1.cpp" />
@@ -294,6 +295,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     <ClInclude Include="IniFile.h" />
     <ClInclude Include="Localization.h" />
     <ClInclude Include="ListCtrlEx.h" />
+    <ClInclude Include="ProcessListAccessibility.h" />
     <ClInclude Include="MainTab.h" />
     <ClInclude Include="ModernUI.h" />
     <ClInclude Include="Page1.h" />
@@ -312,6 +314,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     <ClInclude Include="MonitorLogFormat.h" />
     <ClInclude Include="GlyphData.h" />
     <ClInclude Include="LaunchPanel.h" />
+    <ClInclude Include="AsyncSnapshot.h" />
+    <ClInclude Include="LaunchPanelPaging.h" />
     <ClInclude Include="Page5.h" />
 	<ClInclude Include="ProfileCommandBroker.h" />
 	<ClInclude Include="ExitProcessesDialog.h" />

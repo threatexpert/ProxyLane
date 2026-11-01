@@ -112,13 +112,7 @@ BOOL CMainTab::CreateTabCtrl(CWnd* parent)
 	}
 	m_sidebarStatus.SetFont(&m_navigationFont, FALSE);
 	m_sidebarStatus.SetBackdropColor(UiTheme::SidebarBackground());
-	m_sidebarStatus.SetStatus(stoppedText, CStatusLabel::TONE_NEUTRAL);
-	if (m_sidebarTooltip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX))
-	{
-		m_sidebarTooltip.AddTool(&m_sidebarStatus, stoppedText);
-		m_sidebarTooltip.SetMaxTipWidth(UiTheme::ScaleForWindow(m_hWnd, 360));
-		m_sidebarTooltip.Activate(TRUE);
-	}
+	RefreshSidebarStatus();
 
 	CWnd* statusParent = GetTopLevelParent();
 	if (!statusParent || !m_transientStatus.Create(_T(""), WS_CHILD | SS_OWNERDRAW,
@@ -312,7 +306,7 @@ void CMainTab::PositionWnd()
 	{
 		const int sidebarMargin = UiTheme::ScaleForWindow(m_hWnd, 10);
 		const int sidebarStatusHeight = UiTheme::ScaleForWindow(m_hWnd,
-			m_proxyRunning ? 104 : 34);
+			m_proxyRunning ? 104 : 48);
 		m_sidebarStatus.MoveWindow(
 			sidebarMargin,
 			content.bottom - sidebarStatusHeight,
@@ -428,6 +422,21 @@ void CMainTab::HideTransientStatus()
 	if (m_transientStatus.GetSafeHwnd()) m_transientStatus.ShowWindow(SW_HIDE);
 }
 
+void CMainTab::RefreshSidebarStatus()
+{
+	if (!m_sidebarStatus.GetSafeHwnd() || !m_page1.GetSafeHwnd()) return;
+	const CString profile = m_proxyRunning ? m_runningProfileName : m_page1.GetSelectedProfileName();
+	const CString status = Localization::Get(m_proxyRunning ? L"status.proxy_running" : L"status.proxy_stopped");
+	const CString display = profile.IsEmpty() ? Localization::Get(L"launch.profile_none") : profile;
+	m_sidebarStatus.SetTwoLineStatus(status, display,
+		m_proxyRunning ? CStatusLabel::TONE_SUCCESS : CStatusLabel::TONE_NEUTRAL, !m_proxyRunning);
+	CString detail = status + L"\r\n" + (profile.IsEmpty() ? display :
+		Localization::Format(m_proxyRunning ? L"launch.profile_running" : L"launch.profile_selected", static_cast<LPCTSTR>(profile)));
+	if (!m_proxyRunning && m_page1.HasUnsavedProfileChanges())
+		detail += L"\r\n" + Localization::Get(L"launch.confirm_draft");
+	m_sidebarStatus.SetDetailText(detail);
+}
+
 void CMainTab::SetRunningProfile(LPCTSTR profileName, BOOL running)
 {
 	CString name(profileName ? profileName : _T(""));
@@ -448,11 +457,7 @@ void CMainTab::SetRunningProfile(LPCTSTR profileName, BOOL running)
 	if (m_page1.GetSafeHwnd()) m_page1.SendMessage(WM_RECENT_APPLICATIONS_CHANGED);
 	if (m_sidebarStatus.GetSafeHwnd())
 	{
-		if (running)
-			m_sidebarStatus.SetTwoLineStatus(Localization::Get(_T("status.proxy_running")), name,
-				CStatusLabel::TONE_SUCCESS);
-		else
-			m_sidebarStatus.SetStatus(Localization::Get(_T("status.proxy_stopped")), CStatusLabel::TONE_NEUTRAL);
+		RefreshSidebarStatus();
 
 		if (running)
 		{
@@ -465,13 +470,6 @@ void CMainTab::SetRunningProfile(LPCTSTR profileName, BOOL running)
 			m_trafficSampler.Reset(0, 0, 0);
 		}
 
-		if (m_sidebarTooltip.GetSafeHwnd())
-		{
-			CString tooltipText = running
-				? Localization::Format(_T("nav.running_profile"), static_cast<LPCTSTR>(name))
-				: Localization::Get(_T("status.proxy_stopped"));
-			m_sidebarTooltip.UpdateTipText(tooltipText, &m_sidebarStatus);
-		}
 		PositionWnd();
 	}
 	Invalidate(FALSE);

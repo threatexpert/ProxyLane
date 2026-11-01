@@ -399,7 +399,7 @@ static BOOL SetProcessStartTime(ULONGLONG startTimeValue, _myPROCESSINFO& proces
 	return TRUE;
 }
 
-int GetProcessList(list<_myPROCESSINFO> &ls)
+int GetProcessList(list<_myPROCESSINFO> &ls, LPCTSTR unknownProcess = NULL)
 {
 	ProxyProcessIdentity::Snapshot snapshot;
 	if (!ProxyProcessIdentity::QuerySnapshot(snapshot)) return -1;
@@ -418,7 +418,7 @@ int GetProcessList(list<_myPROCESSINFO> &ls)
 		info.defaultOrder = -count;
 		info.treeOrder = -1;
 		const CString name = !process.name.empty() ? CString(process.name.c_str()) :
-			(process.pid == 0 ? CString(_T("[System Process]")) : Localization::Get(_T("page3.unknown_process")));
+			(process.pid == 0 ? CString(_T("[System Process]")) : (unknownProcess ? CString(unknownProcess) : Localization::Get(_T("page3.unknown_process"))));
 		_tcsncpy_s(info.proname, _countof(info.proname), name, _TRUNCATE);
 		if (process.creationTime) SetProcessStartTime(process.creationTime, info);
 
@@ -775,7 +775,6 @@ IMPLEMENT_DYNAMIC(CPage3, CModernDialog)
 
 CPage3::CPage3(CWnd* pParent /*=NULL*/)
 	: CModernDialog(CPage3::IDD, pParent)
-	, m_evlock()
 	, m_sortColumn(-1)
 	, m_sortState(PROCESS_SORT_NONE)
 	, m_processNameSearchTick(0)
@@ -793,7 +792,6 @@ CPage3::CPage3(CWnd* pParent /*=NULL*/)
 {
 	//m_pEdit = NULL;
 	//m_pEdit = new CMyEdit;
-	m_evlock.SetEvent();
 
 }
 
@@ -868,6 +866,7 @@ BOOL CPage3::OnInitDialog()
 	}
 	// 资源模板为兼容旧版本仍可能带有单选样式，初始化时统一启用多选。
 	m_ListCtrl.ModifyStyle(LVS_SINGLESEL, 0);
+	m_ListCtrl.EnableSnapshotAccessibility();
 
 	m_ListCtrl.InsertColumn(0, _T("PID"), 0, 50);
 	m_ListCtrl.InsertColumn(1, Localization::Get(_T("page3.column_process")), 0, 180);
@@ -875,7 +874,7 @@ BOOL CPage3::OnInitDialog()
 	m_ListCtrl.InsertColumn(3, Localization::Get(_T("page3.column_path")), 0, 200);
 
 	DWORD dwStyle = m_ListCtrl.GetExtendedStyle();
-	dwStyle |= LVS_EX_FULLROWSELECT;
+	dwStyle |= LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER;
 	m_ListCtrl.SetExtendedStyle(dwStyle);
 
 	DebugPrivilege(SE_DEBUG_NAME, TRUE);
@@ -1228,6 +1227,11 @@ BOOL CPage3::SelectFirstProcessByNamePrefix(const CString& prefix)
 }
 
 BEGIN_MESSAGE_MAP(CPage3, CModernDialog)
+	ON_WM_SHOWWINDOW()
+	ON_WM_DESTROY()
+	ON_MESSAGE(WM_PROCESS_LIST_REQUEST, &CPage3::OnProcessListRequest)
+	ON_MESSAGE(ProcessListAccessibility::ChangedMessage, &CPage3::OnProcessAccessibilityChanged)
+	ON_MESSAGE(ProcessListAccessibility::RequestMessage, &CPage3::OnProcessAccessibilityRequest)
 	ON_WM_SIZE()
 	ON_BN_CLICKED(IDC_REFRESH, &CPage3::OnBnClickedRefresh)
 	ON_BN_CLICKED(IDC_INJECTDLL, &CPage3::OnBnClickedInjectdll)
@@ -1268,7 +1272,6 @@ void CPage3::LayoutProcessPage()
 	const int margin = UiTheme::ScaleForWindow(m_hWnd, 8);
 	const int gap = UiTheme::ScaleForWindow(m_hWnd, 6);
 	const int buttonHeight = UiTheme::ScaleForWindow(m_hWnd, 30);
-	const int padding = UiTheme::ScaleForWindow(m_hWnd, 16);
 
 	auto textWidth = [this](CModernButton& button, int minimum)
 	{
@@ -1288,6 +1291,7 @@ void CPage3::LayoutProcessPage()
 	int top = UiTheme::ScaleForWindow(m_hWnd, 66);
 	if (m_launchPanel.GetSafeHwnd())
 	{
+		m_launchPanel.SetCompact(m_processesExpanded);
 		const int panelHeight = m_launchPanel.PreferredHeight();
 		CRect panel(margin, top, rcClient.right - margin, top + panelHeight);
 		m_launchPanel.MoveWindow(&panel);
@@ -1297,7 +1301,7 @@ void CPage3::LayoutProcessPage()
 		CRect slot = m_launchPanel.ActionSlot(actionWidth, actionHeight);
 		if (m_btnSelectApp.GetSafeHwnd())
 			m_btnSelectApp.MoveWindow(panel.left + slot.left, panel.top + slot.top, actionWidth, actionHeight);
-		if (m_btnStopProxy.GetSafeHwnd())
+		if (m_btnStopProxy.GetSafeHwnd() && g_MainTab && g_MainTab->IsProxyRunning())
 		{
 			const int stopWidth = textWidth(m_btnStopProxy, 96);
 			m_btnStopProxy.MoveWindow(panel.left + slot.left - stopWidth - UiTheme::ScaleForWindow(m_hWnd, 10),
@@ -1345,11 +1349,11 @@ void CPage3::LayoutProcessPage()
 		int pathWidth = rc.Width() - UiTheme::ScaleForWindow(m_hWnd, 445);
 		if (pathWidth > UiTheme::ScaleForWindow(m_hWnd, 140)) m_ListCtrl.SetColumnWidth(3, pathWidth);
 	}
-	(void)padding;
 }
 
 void CPage3::OnProcessSelectionChanged(NMHDR*, LRESULT* result)
 {
+	if (m_applyingProcesses) { *result = 0; return; }
 	if (m_ListCtrl.GetSelectedCount() > 0 && !m_btnWindowFinder.IsTracking()) RestoreProcessPageSubtitle();
 	if (m_btnTerminate.GetSafeHwnd())
 		m_btnTerminate.EnableWindow(!m_terminating && m_ListCtrl.GetSelectedCount() > 0);
@@ -1358,7 +1362,7 @@ void CPage3::OnProcessSelectionChanged(NMHDR*, LRESULT* result)
 
 void CPage3::OnBnClickedTerminateProcess()
 {
-	if (m_terminating) return;
+	if (m_terminating || m_applyingProcesses) return;
 	CancelLaunchSelection();
 	struct Target { DWORD pid; CString name; HANDLE handle; DWORD error; };
 	std::vector<Target> targets;
@@ -1425,10 +1429,15 @@ void CPage3::OnBnClickedTerminateProcess()
 
 void CPage3::ReloadRecentApplications(BOOL force)
 {
+	if (m_recentLaunching) return;
 	// Mirrors the shared cache protocol used by the proxy page: the cache owns
 	// background loading; this page only clones what is ready to show.
-	const CString profile = g_MainTab && g_MainTab->IsProxyRunning() ? g_MainTab->GetRunningProfileName() : CString();
-	const CString identity = g_MainTab ? g_MainTab->GetRunningRecentProfileId() : CString();
+	const BOOL running = g_MainTab && g_MainTab->IsProxyRunning();
+	CPage1* settings = g_MainTab ? g_MainTab->GetPage1() : NULL;
+	const CString profile = running ? g_MainTab->GetRunningProfileName() :
+		(settings ? settings->GetSelectedProfileName() : CString());
+	const CString identity = running ? g_MainTab->GetRunningRecentProfileId() :
+		(settings ? settings->GetSelectedRecentProfileId() : CString());
 	BOOL changed = force || identity != m_recentProfileId;
 	if (identity != m_recentProfileId)
 	{
@@ -1449,7 +1458,7 @@ void CPage3::ReloadRecentApplications(BOOL force)
 			{
 				RecentApplications::ReleaseIcons(m_recentEntries);
 				m_recentEntries.clear();
-				RecentApplications::Clone(ready->entries, m_recentEntries, 7);
+				RecentApplications::Clone(ready->entries, m_recentEntries);
 				ready->Release();
 			}
 			if (m_recentLoad) m_recentLoad->Release();
@@ -1468,7 +1477,7 @@ void CPage3::ReloadRecentApplications(BOOL force)
 			{
 				RecentApplications::ReleaseIcons(m_recentEntries);
 				m_recentEntries.clear();
-				RecentApplications::Clone(m_recentLoad->entries, m_recentEntries, 7);
+				RecentApplications::Clone(m_recentLoad->entries, m_recentEntries);
 			}
 			m_recentConsumed = TRUE;
 			changed = TRUE;
@@ -1476,13 +1485,16 @@ void CPage3::ReloadRecentApplications(BOOL force)
 	}
 	if (!changed) return;
 
+	// The picker and Home receive the same user-defined order from the cache.
 	std::vector<CLaunchPanel::Tile> tiles;
 	for (size_t i = 0; i < m_recentEntries.size(); ++i)
 	{
 		CLaunchPanel::Tile tile;
+		tile.id = m_recentEntries[i].id;
 		tile.icon = m_recentEntries[i].app.icon;
 		tile.name = m_recentEntries[i].app.name;
-		tile.tip = RecentApplications::Description(m_recentEntries[i], profile);
+		tile.tip = RecentApplications::Description(m_recentEntries[i]);
+		tile.elevated = m_recentEntries[i].elevated;
 		tiles.push_back(tile);
 	}
 	m_launchPanel.SetTiles(tiles);
@@ -1535,28 +1547,71 @@ void CPage3::OnBnClickedProcessToggle()
 void CPage3::SetProcessesExpanded(BOOL expanded)
 {
 	m_processesExpanded = expanded;
+	// Prepare geometry and rows while hidden. Showing the template rectangle
+	// first briefly covers the recent-app tiles on the first expansion.
+	const BOOL freezeRedraw = IsWindowVisible();
+	if (freezeRedraw) SetRedraw(FALSE);
+	if (!expanded) { CancelLaunchSelection(); CancelProcessRefresh(); }
 	RestoreProcessPageSubtitle();
 	if (m_processToggle.GetSafeHwnd())
 		m_processToggle.SetWindowText(Localization::Get(expanded ? _T("launch.processes_hide") : _T("launch.processes_show")));
-	const int show = expanded ? SW_SHOW : SW_HIDE;
+	LayoutProcessPage();
+	const int show = expanded ? SW_SHOWNA : SW_HIDE;
 	m_ListCtrl.ShowWindow(show);
 	m_btnWindowFinder.ShowWindow(show);
 	m_btnRefresh.ShowWindow(show);
 	m_btnInject.ShowWindow(show);
 	m_btnTerminate.ShowWindow(show);
-	LayoutProcessPage();
-	if (expanded)
-		UpdatePslist(TRUE);
+	if (freezeRedraw)
+	{
+		SetRedraw(TRUE);
+		RedrawWindow(NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+	}
+	// WM_SETREDRAW(FALSE) temporarily removes WS_VISIBLE from this page.
+	// Request the initial snapshot only after restoring the page's visibility.
+	if (expanded) UpdatePslist(TRUE);
+	PublishProcessAccessibility(false);
 }
 
 LRESULT CPage3::OnLaunchPanelTile(WPARAM index, LPARAM)
 {
-	if (m_recentLaunching || !g_MainTab || !g_MainTab->IsProxyRunning()) return 0;
-	if (index >= m_recentEntries.size()) return 0;
+	if (m_recentLaunching || !g_MainTab || index >= m_recentEntries.size()) return 0;
 	const RecentApplications::Entry entry = m_recentEntries[index];
 	m_recentLaunching = TRUE;
-	struct Reset { BOOL& flag; ~Reset() { flag = FALSE; } } reset = { m_recentLaunching };
-	LaunchRecentApplication(entry);
+	struct Reset {
+		BOOL& flag; CLaunchPanel& panel;
+		~Reset() { flag = FALSE; panel.SetBusyTile(-1); }
+	} reset = { m_recentLaunching, m_launchPanel };
+	if (!g_MainTab->IsProxyRunning())
+	{
+		CPage1* settings = g_MainTab->GetPage1();
+		const CString profile = settings ? settings->GetSelectedProfileName() : CString();
+		if (profile.IsEmpty() || entry.profileId != settings->GetSelectedRecentProfileId())
+		{
+			g_MainTab->ShowTransientStatus(Localization::Get(L"launch.profile_changed"), CStatusLabel::TONE_NEUTRAL);
+			return 0;
+		}
+		CString prompt = Localization::Format(L"launch.confirm_start_app",
+			static_cast<LPCTSTR>(profile), static_cast<LPCTSTR>(entry.app.name));
+		if (settings->HasUnsavedProfileChanges()) prompt += L"\r\n\r\n" + Localization::Get(L"launch.confirm_draft");
+		if (MessageBox(prompt, Localization::Get(L"launch.confirm_title"), MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) return 0;
+		// A modal confirmation can pump messages: never silently use a different profile.
+		if (profile != settings->GetSelectedProfileName() || entry.profileId != settings->GetSelectedRecentProfileId())
+		{
+			g_MainTab->ShowTransientStatus(Localization::Get(L"launch.profile_changed"), CStatusLabel::TONE_NEUTRAL);
+			return 0;
+		}
+		m_launchPanel.SetBusyTile(static_cast<int>(index));
+		InstalledApplications::Application target;
+		if (!RecentApplications::Resolve(entry, target))
+		{
+			MessageBox(Localization::Get(L"recent.unavailable"), Localization::Get(L"recent.title"), MB_OK | MB_ICONWARNING);
+			return 0;
+		}
+		if (!g_MainTab->IsProxyRunning() && !settings->StartProxy(TRUE)) return 0;
+	}
+	m_launchPanel.SetBusyTile(static_cast<int>(index));
+	LaunchRecentApplication(entry); // Revalidates the running identity and application target.
 	return 0;
 }
 
@@ -2233,6 +2288,7 @@ void CPage3::RestoreProcessPageSubtitle()
 
 LRESULT CPage3::OnWindowFinderBegin(WPARAM, LPARAM)
 {
+	CancelProcessRefresh();
 	KillTimer(TIMER_PSLIST);
 	ClearWindowFinderHighlight();
 	if (m_windowFinderToolTip.GetSafeHwnd())
@@ -2256,6 +2312,26 @@ LRESULT CPage3::OnWindowFinderComplete(WPARAM, LPARAM parameter)
 	RestoreProcessPageSubtitle();
 	SetTimer(TIMER_PSLIST, 2000, NULL);
 
+	DWORD pid = 0; HWND highlight = NULL;
+	if (!ResolveWindowFinderTarget(targetWindow, pid, highlight)) return 0;
+	HANDLE process = OpenProcess(IsVistaOrLater() ? 0x1000 : PROCESS_QUERY_INFORMATION, FALSE, pid);
+	const ULONGLONG time = process ? ProcessActions::CreationTime(process) : 0;
+	if (process) CloseHandle(process);
+	// Bind the delayed action to the process lifetime observed at the drop.
+	if (!time)
+	{
+		MessageBox(Localization::Get(L"page3.target_exited"), Localization::Get(L"page3.target_unavailable"), MB_ICONWARNING);
+		return 0;
+	}
+	m_pendingFinderTarget = targetWindow;
+	m_pendingFinderPid = pid;
+	m_pendingFinderTime = time;
+	UpdatePslist(TRUE);
+	return 0;
+}
+
+LRESULT CPage3::FinishWindowFinder(HWND targetWindow, DWORD expectedPid, ULONGLONG expectedTime)
+{
 	DWORD processId = 0;
 	HWND highlightWindow = NULL;
 	if (!ResolveWindowFinderTarget(targetWindow, processId, highlightWindow))
@@ -2267,8 +2343,9 @@ LRESULT CPage3::OnWindowFinderComplete(WPARAM, LPARAM parameter)
 		return 0;
 	}
 
-	UpdatePslist(TRUE);
-	if (!SelectProcessByPid(processId))
+	const auto identity = m_processSortData.find(processId);
+	if (processId != expectedPid || identity == m_processSortData.end() ||
+		identity->second.startTimeValue != expectedTime || !SelectProcessByPid(processId))
 	{
 		MessageBox(
 			Localization::Get(_T("page3.target_exited")),
@@ -2353,6 +2430,7 @@ LRESULT CPage3::OnWindowFinderComplete(WPARAM, LPARAM parameter)
 
 LRESULT CPage3::OnWindowFinderCancel(WPARAM, LPARAM)
 {
+	m_pendingFinderTarget = NULL;
 	ClearWindowFinderHighlight();
 	RestoreProcessPageSubtitle();
 	SetTimer(TIMER_PSLIST, 2000, NULL);
@@ -2361,129 +2439,217 @@ LRESULT CPage3::OnWindowFinderCancel(WPARAM, LPARAM)
 
 int CPage3::UpdatePslist(BOOL bRefresh)
 {
-	CSingleLock lc(&m_evlock, TRUE);
-
-	list<_myPROCESSINFO> psls;
-
-	//查询当前所有进程
-	int nPsCount = GetProcessList(psls);
-	if (nPsCount < 0) return 0; // Keep the previous list when the snapshot fails.
-	if (bRefresh)
+	if (!m_processesExpanded || !IsWindowVisible() || m_applyingProcesses ||
+		m_btnWindowFinder.IsTracking() || m_terminating) return 0;
+	const CString unknown = Localization::Get(L"page3.unknown_process");
+	if (m_processQuery.Request([unknown](std::list<_myPROCESSINFO>& rows) {
+		try { return GetProcessList(rows, unknown) >= 0; }
+		catch (CException* error) { error->Delete(); return false; }
+	}))
 	{
-		m_ListCtrl.DeleteAllItems();
-		m_displayedStartTimes.clear();
-	}
-
-	// 保存本次快照，排序比较时直接使用原始数据，避免按显示文本错误排序。
-	m_processSortData.clear();
-	for (list<_myPROCESSINFO>::const_iterator it = psls.begin(); it != psls.end(); ++it)
-		m_processSortData[it->pid] = *it;
-	BuildProcessTree();
-
-	int nItemCount = m_ListCtrl.GetItemCount();
-	TCHAR szPath[MAX_PATH];
-
-	//listctrl中逐个item的查看是否在psls中， 如果在则将psls中的节点移除， 不在则将item移除
-	for(int nItem=0; nItem<nItemCount; nItem++)
-	{
-		LVITEM lvitem;
-		lvitem.mask = LVIF_PARAM | LVIF_TEXT;
-		lvitem.iItem = nItem;
-		lvitem.pszText = szPath;
-		lvitem.cchTextMax = MAX_PATH;
-		lvitem.iSubItem = 3;
-
-		//
-		szPath[0] = 0;
-
-		if(m_ListCtrl.GetItem(&lvitem))
+		m_processQueryTick = GetTickCount();
+		m_processSlowShown = FALSE;
+		if (bRefresh || m_displayedProcesses.empty())
 		{
-			DWORD dwPid = (DWORD)lvitem.lParam;
-
-			BOOL bLive = FALSE;
-			for(list<_myPROCESSINFO>::iterator it = psls.begin(); it!=psls.end();)
-			{
-				if(it->pid == dwPid)
-				{
-					BOOL sameProcess = TRUE;
-					std::map<DWORD, ULONGLONG>::const_iterator displayedTime =
-						m_displayedStartTimes.find(dwPid);
-					if (displayedTime != m_displayedStartTimes.end()
-						&& displayedTime->second != 0
-						&& it->hasStartTime
-						&& displayedTime->second != it->startTimeValue)
-					{
-						// PID 已被新进程复用，先删除旧行，再按新进程重新插入。
-						sameProcess = FALSE;
-					}
-
-					if (!sameProcess)
-						break;
-
-					m_ListCtrl.SetItemText(nItem, 1, it->proname);
-					m_ListCtrl.SetItemText(nItem, 2, it->startTimeText);
-					if (szPath[0] == 0)
-					{
-						if (it->propath[0] != _T('\0'))
-						{
-							m_ListCtrl.SetItemText(nItem, 3, it->propath);
-						}
-					}
-
-					m_displayedStartTimes[dwPid] = it->hasStartTime ? it->startTimeValue : 0;
-					psls.erase(it++);
-					bLive = TRUE;
-					break;
-				}else
-				{
-					it++;
-				}
-			}
-
-			if(bLive == FALSE)
-			{
-				m_displayedStartTimes.erase(dwPid);
-				m_ListCtrl.DeleteItem(nItem--);
-				nItemCount--;
-			}
+			SetDlgItemText(IDC_STATIC_PAGE_SUBTITLE, Localization::Get(L"page3.loading_processes"));
+			m_processStatusShown = TRUE;
+			m_btnRefresh.EnableWindow(FALSE);
 		}
 	}
-
-	//list有剩的则是新的进程
-	for(list<_myPROCESSINFO>::iterator it = psls.begin(); it!=psls.end(); it++)
-	{
-		CString szPid;
-		szPid.Format(_T("%d"), it->pid);
-
-		LVITEM lvitem;
-
-		lvitem.mask = LVIF_PARAM|LVIF_TEXT;
-
-		lvitem.pszText = szPid.GetBuffer();
-		lvitem.lParam = it->pid;
-
-		lvitem.iSubItem = 0;
-		lvitem.iItem = 0;
-
-		m_ListCtrl.InsertItem(&lvitem);
-		m_ListCtrl.SetItemText(0, 1, it->proname);
-		m_ListCtrl.SetItemText(0, 2, it->startTimeText);
-		m_ListCtrl.SetItemText(0, 3, it->propath);
-		m_displayedStartTimes[it->pid] = it->hasStartTime ? it->startTimeValue : 0;
-
-		//if(!bRefresh && m_btnAuto.GetCheck() == BST_CHECKED)
-		//{
-		//	ProxyProcess(it->pid);
-		//}
-
-	}
-
-	// 自动刷新后继续保持用户选择的排序状态。
-	ApplyProcessSort();
-
-	m_evlock.SetEvent();
-	lc.Unlock();
+	// Also poll a previous in-flight query after collapse/reopen. Never create a second worker.
+	if (!m_pollingProcesses) m_pollingProcesses = SetTimer(TIMER_PROCESS_RESULT, 100, NULL) != 0;
 	return 0;
+}
+
+void CPage3::OnShowWindow(BOOL show, UINT status)
+{
+	CModernDialog::OnShowWindow(show, status);
+	if (!show) CancelProcessRefresh();
+	else PostMessage(WM_PROCESS_LIST_REQUEST);
+}
+
+void CPage3::OnDestroy()
+{
+	CancelProcessRefresh();
+	CModernDialog::OnDestroy();
+}
+
+LRESULT CPage3::OnProcessListRequest(WPARAM, LPARAM)
+{
+	UpdatePslist(TRUE);
+	return 0;
+}
+
+void CPage3::CancelProcessRefresh()
+{
+	KillTimer(TIMER_PROCESS_RESULT);
+	m_pollingProcesses = FALSE;
+	m_processQuery.Cancel();
+	m_pendingFinderTarget = NULL;
+	m_pendingProcessRows.clear();
+	if (m_applyingProcesses)
+	{
+		// A partially installed snapshot must not become actionable after reopening.
+		m_ListCtrl.DeleteAllItems();
+		m_processSortData.clear();
+		m_displayedProcesses.clear();
+		m_processTreePrefixes.clear();
+	}
+	m_applyingProcesses = FALSE;
+	if (m_btnRefresh.GetSafeHwnd()) m_btnRefresh.EnableWindow(TRUE);
+	if (m_btnInject.GetSafeHwnd()) m_btnInject.EnableWindow(TRUE);
+	if (m_btnWindowFinder.GetSafeHwnd()) m_btnWindowFinder.EnableWindow(TRUE);
+	if (m_btnTerminate.GetSafeHwnd()) m_btnTerminate.EnableWindow(!m_terminating && m_ListCtrl.GetSelectedCount() > 0);
+}
+
+CString CPage3::ProcessDisplayName(const _myPROCESSINFO& info) const
+{
+	CString name;
+	if (m_sortState == PROCESS_SORT_NONE)
+	{
+		const auto prefix = m_processTreePrefixes.find(info.pid);
+		if (prefix != m_processTreePrefixes.end()) name = prefix->second;
+	}
+	return name + info.proname;
+}
+
+void CPage3::PollProcessList()
+{
+	if (!IsWindowVisible() || !m_processesExpanded) { CancelProcessRefresh(); return; }
+	if (m_terminating || m_btnWindowFinder.IsTracking()) return;
+	if (m_applyingProcesses) { ApplyProcessBatch(); return; }
+	auto result = m_processQuery.Take();
+	if (!result)
+	{
+		if (m_processQuery.Busy())
+		{
+			if (!m_processSlowShown && GetTickCount() - m_processQueryTick >= 1500)
+			{
+				m_processSlowShown = TRUE;
+				m_processStatusShown = TRUE;
+				SetDlgItemText(IDC_STATIC_PAGE_SUBTITLE, Localization::Get(L"page3.slow_processes"));
+			}
+			return;
+		}
+		KillTimer(TIMER_PROCESS_RESULT);
+		m_pollingProcesses = FALSE;
+		m_btnRefresh.EnableWindow(TRUE);
+		// This can be an invalidated result after reopening. Schedule a fresh scan.
+		UpdatePslist(FALSE);
+		return;
+	}
+	if (!result->succeeded)
+	{
+		KillTimer(TIMER_PROCESS_RESULT);
+		m_pollingProcesses = FALSE;
+		m_pendingFinderTarget = NULL;
+		m_btnRefresh.EnableWindow(TRUE);
+		SetDlgItemText(IDC_STATIC_PAGE_SUBTITLE, Localization::Get(L"page3.process_read_failed"));
+		m_processStatusShown = TRUE;
+		return;
+	}
+	m_applyingProcesses = TRUE;
+	m_processApplyIndex = 0;
+	m_processSortData.clear();
+	for (const auto& row : result->value) m_processSortData[row.pid] = row;
+	BuildProcessTree();
+	m_pendingProcessRows = m_processSortData;
+	SetTimer(TIMER_PROCESS_RESULT, 16, NULL);
+	ApplyProcessBatch();
+}
+
+void CPage3::ApplyProcessBatch()
+{
+	// Limit notifications and redraw work per message-loop turn. Accessibility
+	// observers must not multiply an entire full-list rewrite every two seconds.
+	const DWORD start = GetTickCount();
+	int processed = 0;
+	BOOL batchChanged = FALSE;
+	while (processed < 64 && GetTickCount() - start < 8)
+	{
+		if (m_processApplyIndex < static_cast<int>(m_displayedProcesses.size()))
+		{
+			const int row = m_processApplyIndex;
+			auto& displayed = m_displayedProcesses[row];
+			const DWORD pid = displayed.pid;
+			const auto next = m_pendingProcessRows.find(pid);
+			if (next == m_pendingProcessRows.end() ||
+				displayed.startTime != next->second.startTimeValue)
+			{
+				m_ListCtrl.DeleteItem(row);
+				m_displayedProcesses.erase(m_displayedProcesses.begin() + row);
+				batchChanged = TRUE;
+				++processed;
+				continue;
+			}
+			const auto& info = next->second;
+			const CString values[] = { ProcessDisplayName(info), CString(info.startTimeText), CString(info.propath) };
+			for (int column = 1; column <= 3; ++column)
+				if (displayed.columns[column - 1] != values[column - 1])
+				{
+					m_ListCtrl.SetItemText(row, column, values[column - 1]);
+					displayed.columns[column - 1] = values[column - 1];
+					batchChanged = TRUE;
+					++processed;
+				}
+			m_pendingProcessRows.erase(next);
+			++m_processApplyIndex;
+		}
+		else if (!m_pendingProcessRows.empty())
+		{
+			const auto next = m_pendingProcessRows.begin();
+			const auto& info = next->second;
+			CString pid; pid.Format(L"%lu", info.pid);
+			const int row = m_ListCtrl.InsertItem(static_cast<int>(m_displayedProcesses.size()), pid);
+			if (row >= 0)
+			{
+				DisplayedProcess displayed = { info.pid, info.startTimeValue,
+					{ ProcessDisplayName(info), CString(info.startTimeText), CString(info.propath) } };
+				m_ListCtrl.SetItemData(row, info.pid);
+				for (int column = 1; column <= 3; ++column)
+					m_ListCtrl.SetItemText(row, column, displayed.columns[column - 1]);
+				m_displayedProcesses.insert(m_displayedProcesses.begin() + row, displayed);
+			}
+			m_pendingProcessRows.erase(next);
+			m_processApplyIndex = static_cast<int>(m_displayedProcesses.size());
+			batchChanged = TRUE;
+			processed += 5; // Insert, item data and three columns.
+		}
+		else break;
+	}
+	if (batchChanged) m_ListCtrl.Invalidate(FALSE);
+	if (m_processApplyIndex < static_cast<int>(m_displayedProcesses.size()) || !m_pendingProcessRows.empty())
+	{
+		// Actions already check m_applyingProcesses. Disable their buttons only
+		// when installation actually spans another message-loop turn.
+		m_btnInject.EnableWindow(FALSE);
+		m_btnTerminate.EnableWindow(FALSE);
+		m_btnWindowFinder.EnableWindow(FALSE);
+		return;
+	}
+	SortDisplayedProcesses();
+	m_ListCtrl.Invalidate(FALSE); // Refresh age shading once per completed snapshot.
+	m_applyingProcesses = FALSE;
+	KillTimer(TIMER_PROCESS_RESULT);
+	m_pollingProcesses = FALSE;
+	if (!m_btnRefresh.IsWindowEnabled()) m_btnRefresh.EnableWindow(TRUE);
+	if (!m_btnInject.IsWindowEnabled()) m_btnInject.EnableWindow(TRUE);
+	if (!m_btnWindowFinder.IsWindowEnabled()) m_btnWindowFinder.EnableWindow(TRUE);
+	m_btnTerminate.EnableWindow(!m_terminating && m_ListCtrl.GetSelectedCount() > 0);
+	if (m_processStatusShown)
+	{
+		RestoreProcessPageSubtitle();
+		m_processStatusShown = FALSE;
+	}
+	if (m_launchedProcessId) TrySelectLaunchedProcess();
+	if (m_pendingFinderTarget)
+	{
+		const HWND target = m_pendingFinderTarget;
+		m_pendingFinderTarget = NULL;
+		FinishWindowFinder(target, m_pendingFinderPid, m_pendingFinderTime);
+	}
+	PublishProcessAccessibility(true);
+	if (m_ListCtrl.AccessibilityBridge()) PostMessage(ProcessListAccessibility::RequestMessage);
 }
 
 int CALLBACK CPage3::CompareProcessItems(LPARAM leftParam, LPARAM rightParam, LPARAM sortParam)
@@ -2700,12 +2866,129 @@ void CPage3::AppendProcessTree(
 
 void CPage3::ApplyProcessSort()
 {
-	if (m_ListCtrl.GetSafeHwnd() && m_ListCtrl.GetItemCount() > 1)
-		m_ListCtrl.SortItems(CompareProcessItems, reinterpret_cast<LPARAM>(this));
+	SortDisplayedProcesses();
 	UpdateProcessNameDisplay();
 	// 新进程的背景色会随时间衰减，定时刷新时强制重绘可及时切换颜色阶段。
 	if (m_ListCtrl.GetSafeHwnd())
 		m_ListCtrl.Invalidate(FALSE);
+	PublishProcessAccessibility(true);
+}
+
+LRESULT CPage3::OnProcessAccessibilityChanged(WPARAM force, LPARAM)
+{
+	m_ListCtrl.AcknowledgeAccessibilityUpdate();
+	if (!m_applyingProcesses || force) PublishProcessAccessibility(false);
+	return 0;
+}
+
+void CPage3::PublishProcessAccessibility(bool structureChanged)
+{
+	auto bridge = m_ListCtrl.AccessibilityBridge();
+	if (!bridge || !bridge->Available()) return;
+	try {
+		auto snapshot = std::make_shared<ProcessListAccessibility::Snapshot>();
+		snapshot->name = Localization::Get(L"page3.accessible_process_list").GetString();
+		snapshot->visible = m_ListCtrl.IsWindowVisible() != FALSE;
+		snapshot->enabled = m_ListCtrl.IsWindowEnabled() != FALSE;
+		snapshot->hasFocus = ::GetFocus() == m_ListCtrl.m_hWnd;
+		m_ListCtrl.GetClientRect(&snapshot->client);
+		CHeaderCtrl* header = m_ListCtrl.GetHeaderCtrl();
+		if (header) {
+			snapshot->header = header->m_hWnd;
+			header->GetWindowRect(&snapshot->headerRect);
+			m_ListCtrl.ScreenToClient(&snapshot->headerRect);
+			for (int i = 0; i < 4; ++i) {
+				header->GetItemRect(i, &snapshot->columns[i]);
+				header->ClientToScreen(&snapshot->columns[i]);
+				m_ListCtrl.ScreenToClient(&snapshot->columns[i]);
+			}
+		}
+		snapshot->headings[0] = L"PID";
+		snapshot->headings[1] = Localization::Get(L"page3.column_process").GetString();
+		snapshot->headings[2] = Localization::Get(L"page3.column_started").GetString();
+		snapshot->headings[3] = Localization::Get(L"page3.column_path").GetString();
+		snapshot->top = m_ListCtrl.GetTopIndex();
+		CRect rowRect;
+		if (!m_displayedProcesses.empty() && m_ListCtrl.GetItemRect(snapshot->top, &rowRect, LVIR_BOUNDS)) {
+			snapshot->rowTop = rowRect.top;
+			snapshot->rowHeight = max(1, rowRect.Height());
+		}
+		SCROLLINFO scroll = { sizeof(scroll), SIF_ALL };
+		if (m_ListCtrl.GetScrollInfo(SB_HORZ, &scroll)) {
+			snapshot->horizontalPosition = scroll.nPos;
+			snapshot->horizontalMaximum = max(0, scroll.nMax - static_cast<int>(scroll.nPage) + 1);
+		}
+		snapshot->focused = m_ListCtrl.GetNextItem(-1, LVNI_FOCUSED);
+		std::set<int> selected;
+		for (int row = m_ListCtrl.GetNextItem(-1, LVNI_SELECTED); row >= 0; row = m_ListCtrl.GetNextItem(row, LVNI_SELECTED))
+			selected.insert(row);
+		snapshot->rows.reserve(m_displayedProcesses.size());
+		for (size_t i = 0; i < m_displayedProcesses.size(); ++i) {
+			const auto& displayed = m_displayedProcesses[i];
+			ProcessListAccessibility::Row row;
+			row.pid = displayed.pid; row.created = displayed.startTime;
+			row.text[0] = std::to_wstring(row.pid);
+			for (int c = 0; c < 3; ++c) row.text[c + 1] = displayed.columns[c].GetString();
+			row.selected = selected.count(static_cast<int>(i)) != 0;
+			snapshot->rows.push_back(std::move(row));
+		}
+		bridge->Publish(snapshot, structureChanged);
+	} catch (...) {} // Keep the last complete accessibility snapshot on allocation failure.
+}
+
+LRESULT CPage3::OnProcessAccessibilityRequest(WPARAM, LPARAM)
+{
+	auto bridge = m_ListCtrl.AccessibilityBridge();
+	if (!bridge || m_applyingProcesses) return 0;
+	const auto requests = bridge->TakeRequests();
+	if (!m_ListCtrl.IsWindowVisible()) return 0;
+	for (const auto& request : requests) {
+		using namespace ProcessListAccessibility;
+		if (request.action == Sort) {
+			if (request.column < 0 || request.column >= 4) continue;
+			NM_LISTVIEW notification = {}; notification.iSubItem = request.column;
+			LRESULT result = 0; OnLvnColumnClickProcessList(&notification.hdr, &result);
+			continue;
+		}
+		if (request.action == ScrollBy || request.action == ScrollTo) {
+			CRect client, rowRect; m_ListCtrl.GetClientRect(&client);
+			const int top = m_ListCtrl.GetTopIndex();
+			if (!m_ListCtrl.GetItemRect(top, &rowRect, LVIR_BOUNDS)) continue;
+			const int height = max(1, rowRect.Height());
+			int x = static_cast<int>(request.x), y = static_cast<int>(request.y) * height;
+			if (request.action == ScrollTo) {
+				SCROLLINFO info = { sizeof(info), SIF_ALL }; m_ListCtrl.GetScrollInfo(SB_HORZ, &info);
+				x = request.x < 0 ? 0 : static_cast<int>(request.x * max(0, info.nMax - static_cast<int>(info.nPage) + 1) / 100) - info.nPos;
+				const int maximum = max(0, static_cast<int>(m_displayedProcesses.size()) - m_ListCtrl.GetCountPerPage());
+				y = request.y < 0 ? 0 : (static_cast<int>(request.y * maximum / 100) - top) * height;
+			}
+			m_ListCtrl.Scroll(CSize(x, y)); continue;
+		}
+		int index = -1;
+		for (size_t i = 0; request.hasRow && i < m_displayedProcesses.size(); ++i)
+			if (m_displayedProcesses[i].pid == request.pid && m_displayedProcesses[i].startTime == request.created) { index = static_cast<int>(i); break; }
+		if (request.action == Focus) m_ListCtrl.SetFocus();
+		if (index < 0) continue; // A stale automation object must never select a reused PID.
+		if (request.action == Select) m_ListCtrl.SetItemState(-1, 0, LVIS_SELECTED);
+		if (request.action == Select || request.action == AddSelection || request.action == RemoveSelection)
+			m_ListCtrl.SetItemState(index, request.action == RemoveSelection ? 0 : LVIS_SELECTED, LVIS_SELECTED);
+		if (request.action == Focus) m_ListCtrl.SetItemState(index, LVIS_FOCUSED, LVIS_FOCUSED);
+		if (request.action == Focus || request.action == Reveal) m_ListCtrl.EnsureVisible(index, FALSE);
+	}
+	PublishProcessAccessibility(false);
+	return 0;
+}
+
+void CPage3::SortDisplayedProcesses()
+{
+	const auto less = [this](const DisplayedProcess& left, const DisplayedProcess& right) {
+		return CompareProcessItems(left.pid, right.pid, reinterpret_cast<LPARAM>(this)) < 0;
+	};
+	if (!std::is_sorted(m_displayedProcesses.begin(), m_displayedProcesses.end(), less))
+	{
+		if (m_ListCtrl.SortItems(CompareProcessItems, reinterpret_cast<LPARAM>(this)))
+			std::sort(m_displayedProcesses.begin(), m_displayedProcesses.end(), less);
+	}
 }
 
 void CPage3::UpdateProcessNameDisplay()
@@ -2713,9 +2996,10 @@ void CPage3::UpdateProcessNameDisplay()
 	if (!m_ListCtrl.GetSafeHwnd())
 		return;
 
-	for (int item = 0; item < m_ListCtrl.GetItemCount(); ++item)
+	for (int item = 0; item < static_cast<int>(m_displayedProcesses.size()); ++item)
 	{
-		DWORD pid = static_cast<DWORD>(m_ListCtrl.GetItemData(item));
+		auto& displayed = m_displayedProcesses[item];
+		DWORD pid = displayed.pid;
 		std::map<DWORD, _myPROCESSINFO>::const_iterator process = m_processSortData.find(pid);
 		if (process == m_processSortData.end())
 			continue;
@@ -2728,7 +3012,11 @@ void CPage3::UpdateProcessNameDisplay()
 				displayName = prefix->second;
 		}
 		displayName += process->second.proname;
-		m_ListCtrl.SetItemText(item, 1, displayName);
+		if (displayed.columns[0] != displayName)
+		{
+			m_ListCtrl.SetItemText(item, 1, displayName);
+			displayed.columns[0] = displayName;
+		}
 	}
 }
 
@@ -2760,6 +3048,7 @@ void CPage3::UpdateSortIndicator()
 
 void CPage3::OnLvnColumnClickProcessList(NMHDR* notifyHeader, LRESULT* result)
 {
+	if (m_applyingProcesses) { if (result) *result = 0; return; }
 	NM_LISTVIEW* listView = reinterpret_cast<NM_LISTVIEW*>(notifyHeader);
 	if (!listView || listView->iSubItem < 0 || listView->iSubItem > 3)
 	{
@@ -2816,15 +3105,14 @@ void CPage3::OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result)
 
 	int item = static_cast<int>(customDraw->nmcd.dwItemSpec);
 	if (item < 0
-		|| item >= m_ListCtrl.GetItemCount()
-		|| (m_ListCtrl.GetItemState(item, LVIS_SELECTED) & LVIS_SELECTED) != 0)
+		|| (customDraw->nmcd.uItemState & CDIS_SELECTED) != 0)
 	{
 		// 被选中的行继续使用系统高亮色，避免自定义背景掩盖选择状态。
 		*result = CDRF_DODEFAULT;
 		return;
 	}
 
-	DWORD pid = static_cast<DWORD>(m_ListCtrl.GetItemData(item));
+	DWORD pid = static_cast<DWORD>(customDraw->nmcd.lItemlParam);
 	std::map<DWORD, _myPROCESSINFO>::const_iterator process = m_processSortData.find(pid);
 	if (process == m_processSortData.end() || !process->second.hasStartTime)
 	{
@@ -2890,6 +3178,7 @@ void CPage3::OnBnClickedRefresh()
 
 void CPage3::OnBnClickedInjectdll()
 {
+	if (m_applyingProcesses) return;
 	if(!m_ListCtrl.GetSelectedCount())
 	{
 		MessageBox(Localization::Get(_T("page3.select_first")),
@@ -3023,6 +3312,7 @@ void CPage3::OnBnClickedInjectdll()
 
 void CPage3::OnTimer(UINT_PTR nIDEvent)
 {
+	if (nIDEvent == TIMER_PROCESS_RESULT) { PollProcessList(); return; }
 	if (nIDEvent == TIMER_BROWSER_LAUNCH) { CheckBrowserLaunches(); return; }
 	if (nIDEvent == TIMER_LAUNCH_PANEL)
 	{
@@ -3061,7 +3351,8 @@ void CPage3::OnTimer(UINT_PTR nIDEvent)
 
 void CPage3::OnPageActivated()
 {
-	if (!m_btnWindowFinder.IsTracking())
+	RefreshLaunchPanel();
+	if (m_processesExpanded && !m_btnWindowFinder.IsTracking())
 		UpdatePslist(TRUE);
 }
 

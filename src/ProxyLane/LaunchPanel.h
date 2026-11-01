@@ -3,6 +3,7 @@
 #include <afxwin.h>
 #include <afxcmn.h>
 #include <vector>
+#include "ModernUI.h"
 
 #define WM_LAUNCH_PANEL_TILE (WM_APP + 321)
 
@@ -17,11 +18,13 @@ class CLaunchPanel : public CWnd
 public:
 	struct Tile
 	{
+		CString id;
 		HICON icon;
 		CString name;
 		CString tip;
 		BOOL lightIcon; // white-on-transparent icon (Store apps); drawn on a dark plate
-		Tile() : icon(NULL), lightIcon(FALSE) {}
+		BOOL elevated;
+		Tile() : icon(NULL), lightIcon(FALSE), elevated(FALSE) {}
 	};
 
 	CLaunchPanel();
@@ -33,6 +36,8 @@ public:
 	void SetActionWidth(int width);
 	void SetEnabledState(BOOL enabled);
 	void SetTiles(const std::vector<Tile>& tiles);
+	void SetBusyTile(int index);
+	void SetCompact(BOOL compact);
 
 	int PreferredHeight() const;
 	// Rectangle, in this window's client coordinates, reserved for the action button.
@@ -40,7 +45,6 @@ public:
 
 protected:
 	virtual BOOL PreTranslateMessage(MSG* message);
-	virtual BOOL OnNotify(WPARAM wParam, LPARAM lParam, LRESULT* result);
 	afx_msg void OnPaint();
 	afx_msg BOOL OnEraseBkgnd(CDC* dc);
 	afx_msg void OnSize(UINT type, int cx, int cy);
@@ -49,6 +53,11 @@ protected:
 	afx_msg void OnLButtonDown(UINT flags, CPoint point);
 	afx_msg void OnLButtonUp(UINT flags, CPoint point);
 	afx_msg void OnKeyDown(UINT character, UINT repeatCount, UINT flags);
+	afx_msg BOOL OnMouseWheel(UINT flags, short delta, CPoint point);
+	afx_msg void OnTimer(UINT_PTR eventId);
+	afx_msg void OnCaptureChanged(CWnd* window);
+	afx_msg LRESULT OnHorizontalWheel(WPARAM wParam, LPARAM lParam);
+	afx_msg LRESULT OnGesture(WPARAM wParam, LPARAM lParam);
 	afx_msg void OnSetFocus(CWnd* oldWindow);
 	afx_msg void OnKillFocus(CWnd* newWindow);
 	afx_msg UINT OnGetDlgCode();
@@ -56,8 +65,26 @@ protected:
 
 private:
 	int Scale(int value) const;
+	int TileWidth() const;
+	int TileHeight() const;
+	int TileTop() const;
 	void EnsureFonts();
+	void MeasureRecentTitle();
 	int VisibleTileCount() const;
+	int TileCapacity() const;
+	void UpdateTileLayout();
+	void RebuildTooltips();
+	void ClearTooltips();
+	void ChangePage(int direction);
+	void EnsureFocusVisible();
+	int PageWidth() const;
+	int PageCount() const;
+	CRect TileViewport() const;
+	void AnimateToPage(int page);
+	void StopMotion();
+	void BeginDrag(CPoint point);
+	void MoveDrag(CPoint point);
+	void EndDrag(CPoint point, BOOL allowClick);
 	CRect TileRect(int index) const;
 	CRect HeaderTextRect() const;
 	int HitTestTile(CPoint point) const;
@@ -70,17 +97,32 @@ private:
 	CString m_recentTitle;
 	CString m_emptyText;
 	BOOL m_enabled;
+	BOOL m_compact;
 	int m_hot;
 	int m_pressed;
 	int m_focusTile;
+	int m_firstTile;
+	int m_wheelDelta;
 	BOOL m_tracking;
 	CFont m_titleFont;
 	CFont m_bodyFont;
 	CFont m_labelFont;
 	int m_fontDpi;
+	int m_recentTitleWidth;
 	int m_actionWidth;
 	CToolTipCtrl m_tooltip;
-	CString m_tipText;
+	int m_tipCount;
+	int m_busyTile;
+	BOOL m_pointerDown;
+	BOOL m_dragging;
+	BOOL m_touchPanning;
+	BOOL m_animating;
+	CPoint m_dragOrigin;
+	int m_dragPage;
+	double m_scrollOffset;
+	double m_animationFrom;
+	double m_animationTo;
+	DWORD m_animationStart;
 
 	DECLARE_MESSAGE_MAP()
 };

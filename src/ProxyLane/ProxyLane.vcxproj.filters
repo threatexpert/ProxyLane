@@ -48,6 +48,7 @@
     <ClCompile Include="ListCtrlEx.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ProcessListAccessibility.cpp"><Filter>源文件</Filter></ClCompile>
     <ClCompile Include="MainTab.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -129,6 +130,7 @@
     <ClInclude Include="ListCtrlEx.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ProcessListAccessibility.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="MainTab.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -163,6 +165,10 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="GlyphData.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="AsyncSnapshot.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="LaunchPanelPaging.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="LaunchPanel.h">

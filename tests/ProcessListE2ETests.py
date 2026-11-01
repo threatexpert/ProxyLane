@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import uuid
+import time
 
 import psutil
 from ExitWarningE2ETests import USER, CALLBACK, wait_for, windows
@@ -37,6 +38,16 @@ release = api('VirtualFreeEx', W.BOOL, W.HANDLE, C.c_void_p, C.c_size_t, W.DWORD
 write = api('WriteProcessMemory', W.BOOL, W.HANDLE, C.c_void_p, C.c_void_p, C.c_size_t, C.c_void_p)
 read = api('ReadProcessMemory', W.BOOL, W.HANDLE, C.c_void_p, C.c_void_p, C.c_size_t, C.c_void_p)
 close = api('CloseHandle', W.BOOL, W.HANDLE)
+
+
+USER.SendMessageTimeoutW.argtypes = [W.HWND, W.UINT, W.WPARAM, W.LPARAM, W.UINT, W.UINT, C.POINTER(C.c_size_t)]
+USER.SendMessageTimeoutW.restype = C.c_ssize_t
+
+
+def send(window, message, wparam=0, lparam=0):
+    result = C.c_size_t()
+    assert USER.SendMessageTimeoutW(window, message, wparam, lparam, 2, 1000, C.byref(result)), (message, C.get_last_error())
+    return C.c_ssize_t(result.value).value
 
 
 def deny_child_queries(process):
@@ -67,8 +78,9 @@ def run():
     directory = Path('build/qa/process-list-' + uuid.uuid4().hex[:8]).resolve()
     directory.mkdir(parents=True)
     for name in ('ProxyLane64.exe', 'ProxyLaneHook64.dll', 'ProxyLaneHook32.dll'):
-        shutil.copy2(Path('bin') / name, directory / name)
-    (directory / 'ProxyLane.ini').write_text('[options]\nlanguage=zh-CN\n', encoding='utf-8')
+        source = Path(sys.argv[1]) if name == 'ProxyLane64.exe' and len(sys.argv) > 1 else Path('bin') / name
+        shutil.copy2(source, directory / name)
+    (directory / 'ProxyLane.ini').write_text('[options]\nlanguage=zh-CN\nlastselected=ProcessTest\n[proxy_ProcessTest]\nType=SOCKS5\nHost=127.0.0.1\nPort=9\nTransport=PLAIN\n', encoding='utf-8')
     owner = child = None
     handle = memory = None
     try:
@@ -95,6 +107,10 @@ def run():
 
         page = wait_for(get_page, 'process page')
         view = USER.GetDlgItem(page, 1007)
+        wait_for(lambda: USER.IsWindowVisible(page), 'fixture applications page becomes visible')
+        refresh = USER.GetDlgItem(page, 1009)
+        send(page, 0x111, 1141, 0)  # Expand the owned process list.
+        wait_for(lambda: USER.IsWindowVisible(view), 'expanded process list')
         handle = open_process(0x38, False, owner.pid)  # Test GUI memory only.
         assert handle, C.get_last_error()
         memory = allocate(handle, None, 4096, 0x3000, 4)
@@ -103,26 +119,81 @@ def run():
         def cell(row, column):
             item = Item(column=column, text=memory + 256, capacity=1024)
             assert write(handle, memory, C.byref(item), C.sizeof(item), None)
-            USER.SendMessageW(view, 0x1073, row, memory)  # LVM_GETITEMTEXTW
+            send(view, 0x1073, row, memory)  # LVM_GETITEMTEXTW
             text = C.create_unicode_buffer(1024)
             assert read(handle, memory + 256, text, C.sizeof(text), None)
             return text.value
 
+        class FindItem(C.Structure):
+            _fields_ = [('flags', W.UINT), ('text', C.c_void_p), ('data', C.c_ssize_t),
+                        ('point', W.POINT), ('direction', W.UINT)]
+
         def find_child():
-            USER.SendMessageW(page, 0x111, 1009, 0)  # Refresh this owned page.
-            count = USER.SendMessageW(view, 0x1004, 0, 0)
-            for row in range(count):
-                if cell(row, 0) == str(child.pid):
-                    return [cell(row, column) for column in range(4)]
+            if not USER.IsWindowEnabled(refresh):
+                return None
+            item = FindItem(flags=1, data=child.pid)  # LVFI_PARAM: exact PID lookup.
+            assert write(handle, memory, C.byref(item), C.sizeof(item), None)
+            row = send(view, 0x1053, -1, memory)  # LVM_FINDITEMW
+            if row >= 0:
+                return [cell(row, column) for column in range(4)]
             return None
 
         row = wait_for(find_child, 'owned child in process list')
         assert Path(sys.executable).name.lower() in row[1].lower(), row
         assert row[2] == expected_time, (row, expected_time)
         assert Path(row[3]).resolve() == Path(sys.executable).resolve(), row
+
+        # Native sorting and the cached row order must agree after every mode
+        # change; otherwise the next snapshot writes a different process's data
+        # into a row. Exercise each column, both directions and the tree reset.
+        for column in range(4):
+            for mode in range(3):
+                # WM_NOTIFY cannot cross process boundaries. Exercise the
+                # test-owned header handler so it emits its native notification.
+                header = send(view, 0x101f)  # LVM_GETHEADER
+                assert send(header, 0x1207, column, memory)  # HDM_GETITEMRECT
+                rect = W.RECT()
+                assert read(handle, memory, C.byref(rect), C.sizeof(rect), None)
+                point = ((rect.top + rect.bottom) // 2 << 16) | ((rect.left + rect.right) // 2)
+                send(header, 0x201, 1, point)  # Test fixture WM_LBUTTONDOWN/UP.
+                send(header, 0x202, 0, point)
+                send(page, 0x111, 1009, 0)
+                wait_for(lambda: USER.IsWindowEnabled(refresh), 'sorted snapshot applied')
+                sorted_row = wait_for(find_child, 'child identity after sort/refresh')
+                assert sorted_row[0] == str(child.pid), sorted_row
+                assert Path(sys.executable).name.lower() in sorted_row[1].lower(), sorted_row
+                assert sorted_row[2] == expected_time, sorted_row
+                assert Path(sorted_row[3]).resolve() == Path(sys.executable).resolve(), sorted_row
+                if column == 0 and mode < 2:
+                    pids = [int(cell(i, 0)) for i in range(send(view, 0x1004))]
+                    assert pids == sorted(pids, reverse=mode == 1), (mode, pids)
+        print('PASS: cached/native row identity across 12 sort-and-refresh combinations', flush=True)
+
+        # Refresh requests must return to the message loop, not wait for enumeration.
+        timings = []
+        for _ in range(25):
+            started = time.perf_counter()
+            send(page, 0x111, 1009, 0)
+            timings.append((time.perf_counter() - started) * 1000)
+        assert max(timings) < 500, timings
+        wait_for(lambda: USER.IsWindowEnabled(refresh), 'asynchronous refresh completed')
+        # Capture another refresh then immediately collapse. Late results cannot
+        # mutate the hidden list; repeated hidden refresh requests are ignored.
+        send(page, 0x111, 1009, 0)
+        send(page, 0x111, 1141, 0)
+        assert not USER.IsWindowVisible(view)
+        hidden_count = send(view, 0x1004, 0, 0)
+        for _ in range(5):
+            send(page, 0x111, 1009, 0)
+            time.sleep(.1)
+            assert send(view, 0x1004, 0, 0) == hidden_count
+        send(page, 0x111, 1141, 0)
+        wait_for(find_child, 'reopened list receives a fresh snapshot')
+        print(f'PASS: coalesced refresh max dispatch {max(timings):.1f} ms; collapse/reopen discards late results', flush=True)
         child.terminate()
         child.wait(timeout=10)
-        wait_for(lambda: find_child() is None, 'exited child removed on refresh')
+        send(page, 0x111, 1009, 0)
+        wait_for(lambda: USER.IsWindowEnabled(refresh) and find_child() is None, 'exited child removed on refresh')
         print('PASS: inaccessible child name, PID, creation time, full path and exited-row removal', flush=True)
         USER.PostMessageW(main, 0x10, 0, 0)
         owner.wait(timeout=10)

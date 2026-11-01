@@ -2,18 +2,34 @@
 #include "ProxyLane.h"
 #include "LaunchPanel.h"
 #include "ModernUI.h"
+#include "Localization.h"
+#include "LaunchPanelPaging.h"
 
 namespace
 {
 	const int kPadding = 16;
 	const int kHeaderHeight = 88;
+	const int kActionsHeight = 88;
+	const UINT_PTR kSnapTimer = 1;
+	// Win7 gestures are resolved dynamically to preserve the XP build target.
+	struct PanInfo {
+		UINT cbSize; DWORD flags; DWORD id; HWND target; POINTS point;
+		DWORD instance; DWORD sequence; ULONGLONG arguments; UINT extraBytes;
+	};
+	struct PanConfig { DWORD id; DWORD want; DWORD block; };
+	typedef BOOL (WINAPI* ReadPan)(HANDLE, PanInfo*);
+	typedef BOOL (WINAPI* ClosePan)(HANDLE);
+	typedef BOOL (WINAPI* ConfigurePan)(HWND, DWORD, UINT, PanConfig*, UINT);
 	const int kIconBox = 44;
-	const int kTileWidth = 156;
-	const int kTileHeight = 46;
+	const int kTileWidth = 96;
+	const int kTileHeight = 74;
 	const int kTileGap = 8;
 	const int kTileIcon = 24;
 	const int kRecentLabelTop = 98;
-	const int kTileTop = 120;
+	const int kTileTop = 124;
+	const int kCompactHeaderHeight = 52;
+	const int kCompactTileTop = 60;
+	const int kCompactTileSize = 36;
 }
 
 namespace
@@ -74,6 +90,11 @@ BEGIN_MESSAGE_MAP(CLaunchPanel, CWnd)
 	ON_WM_LBUTTONDOWN()
 	ON_WM_LBUTTONUP()
 	ON_WM_KEYDOWN()
+	ON_WM_MOUSEWHEEL()
+	ON_WM_TIMER()
+	ON_WM_CAPTURECHANGED()
+	ON_MESSAGE(0x020E, OnHorizontalWheel) // WM_MOUSEHWHEEL
+	ON_MESSAGE(0x0119, OnGesture) // WM_GESTURE
 	ON_WM_SETFOCUS()
 	ON_WM_KILLFOCUS()
 	ON_WM_GETDLGCODE()
@@ -82,12 +103,27 @@ END_MESSAGE_MAP()
 
 CLaunchPanel::CLaunchPanel()
 	: m_enabled(FALSE)
+	, m_compact(FALSE)
 	, m_hot(-1)
 	, m_pressed(-1)
 	, m_focusTile(0)
+	, m_firstTile(0)
+	, m_wheelDelta(0)
 	, m_tracking(FALSE)
 	, m_fontDpi(0)
+	, m_recentTitleWidth(0)
 	, m_actionWidth(0)
+	, m_tipCount(0)
+	, m_busyTile(-1)
+	, m_pointerDown(FALSE)
+	, m_dragging(FALSE)
+	, m_touchPanning(FALSE)
+	, m_animating(FALSE)
+	, m_dragPage(0)
+	, m_scrollOffset(0)
+	, m_animationFrom(0)
+	, m_animationTo(0)
+	, m_animationStart(0)
 {
 }
 
@@ -100,20 +136,28 @@ BOOL CLaunchPanel::Create(CWnd* parent, UINT id)
 	CString className = AfxRegisterWndClass(CS_HREDRAW | CS_VREDRAW,
 		::LoadCursor(NULL, IDC_ARROW), NULL, NULL);
 	if (!CWnd::Create(className, _T(""),
-		WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS,
+		WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
 		CRect(0, 0, 0, 0), parent, id))
 		return FALSE;
+	EnsureFonts();
+	ConfigurePan configure = reinterpret_cast<ConfigurePan>(::GetProcAddress(::GetModuleHandle(L"user32.dll"), "SetGestureConfig"));
+	if (configure)
+	{
+		PanConfig pan = { 4, 0x1 | 0x4 | 0x8, 0x2 | 0x10 }; // horizontal pan, gutter, own snap animation
+		configure(m_hWnd, 0, 1, &pan, sizeof(pan));
+	}
 	if (m_tooltip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX))
 	{
-		m_tooltip.AddTool(this, LPSTR_TEXTCALLBACK);
 		m_tooltip.SetMaxTipWidth(Scale(480));
 		m_tooltip.SetDelayTime(TTDT_AUTOPOP, 30000);
+		m_tooltip.Activate(TRUE);
 	}
 	return TRUE;
 }
 
 void CLaunchPanel::OnDestroy()
 {
+	StopMotion();
 	CWnd::OnDestroy();
 }
 
@@ -132,6 +176,17 @@ void CLaunchPanel::EnsureFonts()
 	UiTheme::CreateUiFont(m_titleFont, m_hWnd, 11, FW_SEMIBOLD);
 	UiTheme::CreateUiFont(m_bodyFont, m_hWnd, 9, FW_NORMAL);
 	UiTheme::CreateUiFont(m_labelFont, m_hWnd, 9, FW_SEMIBOLD);
+	MeasureRecentTitle();
+}
+
+void CLaunchPanel::MeasureRecentTitle()
+{
+	if (!GetSafeHwnd() || !m_labelFont.GetSafeHandle()) return;
+	CClientDC dc(this);
+	CFont* oldFont = dc.SelectObject(&m_labelFont);
+	m_recentTitleWidth = dc.GetTextExtent(m_recentTitle).cx;
+	dc.SelectObject(oldFont);
+	UpdateTileLayout();
 }
 
 void CLaunchPanel::SetText(const CString& title, const CString& body,
@@ -143,6 +198,7 @@ void CLaunchPanel::SetText(const CString& title, const CString& body,
 	m_body = body;
 	m_recentTitle = recentTitle;
 	m_emptyText = emptyText;
+	MeasureRecentTitle();
 	if (GetSafeHwnd()) Invalidate(FALSE);
 }
 
@@ -163,27 +219,52 @@ void CLaunchPanel::SetEnabledState(BOOL enabled)
 
 void CLaunchPanel::SetTiles(const std::vector<Tile>& tiles)
 {
+	CString anchor, focus;
+	if (m_firstTile < static_cast<int>(m_tiles.size())) anchor = m_tiles[m_firstTile].id;
+	if (m_focusTile < static_cast<int>(m_tiles.size())) focus = m_tiles[m_focusTile].id;
+	StopMotion();
+	ClearTooltips();
 	m_tiles = tiles;
+	m_firstTile = m_focusTile = 0;
 	for (size_t i = 0; i < m_tiles.size(); ++i)
+	{
 		m_tiles[i].lightIcon = IsLightIcon(m_tiles[i].icon);
-	if (m_focusTile >= static_cast<int>(m_tiles.size())) m_focusTile = 0;
-	m_hot = -1;
-	m_pressed = -1;
-	m_tipText.Empty();
-	if (m_tooltip.GetSafeHwnd()) m_tooltip.Pop();
+		if (m_tiles[i].id == anchor) m_firstTile = static_cast<int>(i);
+		if (m_tiles[i].id == focus) m_focusTile = static_cast<int>(i);
+	}
+	UpdateTileLayout();
 	if (GetSafeHwnd()) Invalidate(FALSE);
+}
+
+void CLaunchPanel::SetBusyTile(int index)
+{
+	m_busyTile = index;
+	if (index >= 0) ClearTooltips(); else RebuildTooltips();
+	if (GetSafeHwnd()) { Invalidate(FALSE); UpdateWindow(); }
 }
 
 int CLaunchPanel::PreferredHeight() const
 {
-	return Scale(kTileTop + kTileHeight + kPadding);
+	return Scale(TileTop() + TileHeight() + kPadding);
+}
+
+int CLaunchPanel::TileWidth() const { return m_compact ? kCompactTileSize : kTileWidth; }
+int CLaunchPanel::TileHeight() const { return m_compact ? kCompactTileSize : kTileHeight; }
+int CLaunchPanel::TileTop() const { return m_compact ? kCompactTileTop : kTileTop; }
+
+void CLaunchPanel::SetCompact(BOOL compact)
+{
+	if (m_compact == compact) return;
+	m_compact = compact;
+	UpdateTileLayout();
+	if (GetSafeHwnd()) Invalidate(FALSE);
 }
 
 CRect CLaunchPanel::ActionSlot(int buttonWidth, int buttonHeight) const
 {
 	CRect client;
 	GetClientRect(&client);
-	const int top = (Scale(kHeaderHeight) - buttonHeight) / 2;
+	const int top = (Scale(m_compact ? kCompactHeaderHeight : kActionsHeight) - buttonHeight) / 2;
 	return CRect(client.right - Scale(kPadding) - buttonWidth, top,
 		client.right - Scale(kPadding), top + buttonHeight);
 }
@@ -192,31 +273,65 @@ CRect CLaunchPanel::HeaderTextRect() const
 {
 	CRect client;
 	GetClientRect(&client);
-	const int left = Scale(kPadding + kIconBox + 14);
-	return CRect(left, Scale(20),
+	const int left = Scale(kPadding + (m_compact ? 28 + 12 : kIconBox + 14));
+	return CRect(left, m_compact ? 0 : Scale(20),
 		max(left, client.right - Scale(kPadding) - m_actionWidth - Scale(20)),
-		Scale(kHeaderHeight - 8));
+		Scale(m_compact ? kCompactHeaderHeight : kActionsHeight - 8));
+}
+
+int CLaunchPanel::TileCapacity() const
+{
+	const int slot = Scale(TileWidth() + kTileGap);
+	const int fit = max(1, (TileViewport().Width() + Scale(kTileGap)) / max(1, slot));
+	return fit;
 }
 
 int CLaunchPanel::VisibleTileCount() const
 {
-	CRect client;
-	GetClientRect(&client);
-	const int slot = Scale(kTileWidth + kTileGap);
-	const int fit = max(1, (client.Width() - Scale(kPadding) * 2 + Scale(kTileGap)) / max(1, slot));
-	return min(static_cast<int>(m_tiles.size()), fit);
+	return min(TileCapacity(), max(0, static_cast<int>(m_tiles.size()) - m_firstTile));
+}
+
+int CLaunchPanel::PageWidth() const
+{
+	return max(1, TileViewport().Width());
+}
+
+int CLaunchPanel::PageCount() const
+{
+	return LaunchPanelPaging::PageCount(static_cast<int>(m_tiles.size()), TileCapacity());
+}
+
+CRect CLaunchPanel::TileViewport() const
+{
+	CRect client; GetClientRect(&client);
+	int left = Scale(kPadding), right = max(left, client.right - Scale(kPadding));
+	if (m_compact)
+	{
+		// Reserve title and paging space outside the icon viewport so neither
+		// gets covered while swiping. Compute capacity here without recursion.
+		const int dotsWidth = Scale(5 * 12 + 8);
+		const int titleWidth = min(m_recentTitleWidth, max(0, right - left - Scale(12 + kCompactTileSize) - dotsWidth));
+		left = min(right, left + titleWidth + Scale(12));
+		const int capacityWithoutDots = max(1, (right - left + Scale(kTileGap)) / max(1, Scale(TileWidth() + kTileGap)));
+		if (static_cast<int>(m_tiles.size()) > capacityWithoutDots)
+			right = max(left, right - dotsWidth);
+	}
+	return CRect(left, Scale(TileTop()), right, Scale(TileTop() + TileHeight()));
 }
 
 CRect CLaunchPanel::TileRect(int index) const
 {
-	const int left = Scale(kPadding) + index * Scale(kTileWidth + kTileGap);
-	return CRect(left, Scale(kTileTop), left + Scale(kTileWidth), Scale(kTileTop + kTileHeight));
+	const int capacity = TileCapacity();
+	const int left = TileViewport().left + index / capacity * PageWidth() +
+		index % capacity * Scale(TileWidth() + kTileGap) - static_cast<int>(m_scrollOffset);
+	return CRect(left, Scale(TileTop()), left + min(Scale(TileWidth()), PageWidth()), Scale(TileTop() + TileHeight()));
 }
 
 int CLaunchPanel::HitTestTile(CPoint point) const
 {
+	if (m_animating || m_dragging || !TileViewport().PtInRect(point)) return -1;
 	const int count = VisibleTileCount();
-	for (int i = 0; i < count; ++i)
+	for (int i = m_firstTile; i < m_firstTile + count; ++i)
 		if (TileRect(i).PtInRect(point)) return i;
 	return -1;
 }
@@ -230,7 +345,7 @@ void CLaunchPanel::SetHotTile(int index)
 
 void CLaunchPanel::ActivateTile(int index)
 {
-	if (!m_enabled || index < 0 || index >= VisibleTileCount()) return;
+	if (m_busyTile >= 0 || m_animating || m_dragging || index < m_firstTile || index >= m_firstTile + VisibleTileCount()) return;
 	if (CWnd* parent = GetParent())
 		parent->SendMessage(WM_LAUNCH_PANEL_TILE, static_cast<WPARAM>(index), 0);
 }
@@ -243,7 +358,209 @@ BOOL CLaunchPanel::OnEraseBkgnd(CDC*)
 void CLaunchPanel::OnSize(UINT type, int cx, int cy)
 {
 	CWnd::OnSize(type, cx, cy);
+	UpdateTileLayout();
 	Invalidate(FALSE);
+}
+
+void CLaunchPanel::ClearTooltips()
+{
+	if (!m_tooltip.GetSafeHwnd()) return;
+	m_tooltip.Pop();
+	for (int i = 0; i < m_tipCount; ++i) m_tooltip.DelTool(this, i + 1);
+	m_tipCount = 0;
+}
+
+void CLaunchPanel::RebuildTooltips()
+{
+	ClearTooltips();
+	if (!m_tooltip.GetSafeHwnd() || m_animating || m_dragging || m_busyTile >= 0) return;
+	// Each visible tile is a distinct tool, with its own text and current bounds.
+	// No mouse-move activation race or zero-size creation rectangle is involved.
+	m_tipCount = VisibleTileCount();
+	for (int i = 0; i < m_tipCount; ++i)
+	{
+		const int index = m_firstTile + i;
+		CRect rect = TileRect(index);
+		m_tooltip.AddTool(this, m_tiles[index].tip, &rect, i + 1);
+	}
+}
+
+void CLaunchPanel::StopMotion()
+{
+	m_pointerDown = m_dragging = m_touchPanning = m_animating = FALSE;
+	m_hot = m_pressed = -1;
+	if (GetSafeHwnd())
+	{
+		KillTimer(kSnapTimer);
+		if (GetCapture() == this) ReleaseCapture();
+	}
+}
+
+void CLaunchPanel::UpdateTileLayout()
+{
+	if (!GetSafeHwnd()) return;
+	StopMotion();
+	const int capacity = TileCapacity();
+	m_firstTile = LaunchPanelPaging::ClampPage(m_firstTile / capacity, PageCount()) * capacity;
+	m_focusTile = max(m_firstTile, min(m_focusTile, m_firstTile + VisibleTileCount() - 1));
+	m_scrollOffset = static_cast<double>(m_firstTile / capacity * PageWidth());
+	RebuildTooltips();
+}
+
+void CLaunchPanel::AnimateToPage(int page)
+{
+	page = LaunchPanelPaging::ClampPage(page, PageCount());
+	m_firstTile = page * TileCapacity();
+	m_hot = m_pressed = -1;
+	m_animationFrom = m_scrollOffset;
+	m_animationTo = static_cast<double>(page * PageWidth());
+	m_animationStart = GetTickCount();
+	BOOL animationAllowed = TRUE;
+	::SystemParametersInfo(0x1042, 0, &animationAllowed, 0); // SPI_GETCLIENTAREAANIMATION (Vista+)
+	m_animating = animationAllowed && m_animationFrom != m_animationTo;
+	ClearTooltips();
+	if (m_animating && !SetTimer(kSnapTimer, 16, NULL)) m_animating = FALSE;
+	if (!m_animating)
+	{
+		KillTimer(kSnapTimer);
+		m_scrollOffset = m_animationTo;
+		RebuildTooltips();
+	}
+	Invalidate(FALSE);
+}
+
+void CLaunchPanel::OnTimer(UINT_PTR eventId)
+{
+	if (eventId != kSnapTimer) { CWnd::OnTimer(eventId); return; }
+	const double progress = (GetTickCount() - m_animationStart) / 180.0;
+	m_scrollOffset = m_animationFrom + (m_animationTo - m_animationFrom) * LaunchPanelPaging::Ease(progress);
+	if (progress >= 1)
+	{
+		KillTimer(kSnapTimer);
+		m_animating = FALSE;
+		RebuildTooltips();
+	}
+	Invalidate(FALSE);
+}
+
+void CLaunchPanel::ChangePage(int direction)
+{
+	if (m_busyTile >= 0 || m_pointerDown) return;
+	const int page = LaunchPanelPaging::ClampPage(m_firstTile / TileCapacity() + direction, PageCount());
+	m_focusTile = page * TileCapacity();
+	AnimateToPage(page);
+}
+
+void CLaunchPanel::EnsureFocusVisible()
+{
+	if (m_pointerDown) return;
+	AnimateToPage(m_focusTile / TileCapacity());
+}
+
+LRESULT CLaunchPanel::OnHorizontalWheel(WPARAM wParam, LPARAM lParam)
+{
+	CPoint point(static_cast<short>(LOWORD(lParam)), static_cast<short>(HIWORD(lParam)));
+	return OnMouseWheel(LOWORD(wParam), -static_cast<short>(HIWORD(wParam)), point);
+}
+
+void CLaunchPanel::BeginDrag(CPoint point)
+{
+	if (m_busyTile >= 0 || !TileViewport().PtInRect(point)) return;
+	const BOOL wasAnimating = m_animating;
+	UpdateTileLayout();
+	m_pointerDown = TRUE;
+	m_dragOrigin = point;
+	m_dragPage = m_firstTile / TileCapacity();
+	m_pressed = wasAnimating ? -1 : HitTestTile(point);
+	if (m_pressed >= 0) m_focusTile = m_pressed;
+}
+
+void CLaunchPanel::MoveDrag(CPoint point)
+{
+	if (!m_pointerDown) return;
+	const int dx = point.x - m_dragOrigin.x, dy = point.y - m_dragOrigin.y;
+	if (!m_dragging && abs(dy) > Scale(6)) m_pressed = -1;
+	if (!m_dragging && abs(dx) >= Scale(6) && abs(dx) > abs(dy))
+	{
+		m_dragging = TRUE;
+		m_pressed = m_hot = -1;
+		ClearTooltips();
+	}
+	if (m_dragging)
+	{
+		m_scrollOffset = LaunchPanelPaging::DragOffset(static_cast<double>(m_dragPage * PageWidth() - dx),
+			static_cast<double>((PageCount() - 1) * PageWidth()));
+		Invalidate(FALSE);
+	}
+}
+
+void CLaunchPanel::EndDrag(CPoint point, BOOL allowClick)
+{
+	if (!m_pointerDown) return;
+	MoveDrag(point);
+	const int pressed = m_pressed;
+	const BOOL dragged = m_dragging;
+	m_pointerDown = m_dragging = m_touchPanning = FALSE;
+	m_pressed = -1;
+	if (GetCapture() == this) ReleaseCapture();
+	if (dragged)
+	{
+		const int page = LaunchPanelPaging::ReleasePage(m_dragPage, point.x - m_dragOrigin.x,
+			PageWidth(), max(Scale(24), PageWidth() / 6), PageCount());
+		m_focusTile = page * TileCapacity();
+		AnimateToPage(page);
+	}
+	else if (allowClick && pressed >= 0 && HitTestTile(point) == pressed) ActivateTile(pressed);
+	Invalidate(FALSE);
+}
+
+void CLaunchPanel::OnCaptureChanged(CWnd* window)
+{
+	if (m_pointerDown)
+	{
+		m_pointerDown = m_dragging = m_touchPanning = FALSE;
+		AnimateToPage(m_firstTile / TileCapacity());
+	}
+	CWnd::OnCaptureChanged(window);
+}
+
+LRESULT CLaunchPanel::OnGesture(WPARAM wParam, LPARAM lParam)
+{
+	HMODULE user = ::GetModuleHandle(L"user32.dll");
+	ReadPan read = reinterpret_cast<ReadPan>(::GetProcAddress(user, "GetGestureInfo"));
+	ClosePan close = reinterpret_cast<ClosePan>(::GetProcAddress(user, "CloseGestureInfoHandle"));
+	PanInfo info = { sizeof(info) };
+	if (!read || !close || !read(reinterpret_cast<HANDLE>(lParam), &info)) return DefWindowProc(0x0119, wParam, lParam);
+	if (info.id == 4) // GID_PAN
+	{
+		CPoint point(info.point.x, info.point.y); ScreenToClient(&point);
+		if (info.flags & 1) { BeginDrag(point); m_touchPanning = m_pointerDown; }
+		if (m_touchPanning)
+		{
+			MoveDrag(point);
+			if (info.flags & 4) EndDrag(point, FALSE);
+		}
+		close(reinterpret_cast<HANDLE>(lParam));
+		return 0;
+	}
+	if (info.id == 2 && m_touchPanning) // GID_END also covers an interrupted pan.
+	{
+		m_pointerDown = m_dragging = m_touchPanning = FALSE;
+		AnimateToPage(m_firstTile / TileCapacity());
+	}
+	return DefWindowProc(0x0119, wParam, lParam);
+}
+
+BOOL CLaunchPanel::OnMouseWheel(UINT flags, short delta, CPoint point)
+{
+	CPoint local = point;
+	ScreenToClient(&local);
+	if (local.y < Scale(m_compact ? TileTop() : kRecentLabelTop) || static_cast<int>(m_tiles.size()) <= TileCapacity())
+		return CWnd::OnMouseWheel(flags, delta, point);
+	m_wheelDelta += delta;
+	while (m_wheelDelta >= WHEEL_DELTA) { ChangePage(-1); m_wheelDelta -= WHEEL_DELTA; }
+	while (m_wheelDelta <= -WHEEL_DELTA) { ChangePage(1); m_wheelDelta += WHEEL_DELTA; }
+	return TRUE;
 }
 
 void CLaunchPanel::OnPaint()
@@ -269,10 +586,12 @@ void CLaunchPanel::OnPaint()
 
 	// Header glyph: a tray with a downward arrow.
 	{
-		CRect box(Scale(kPadding), Scale(20), Scale(kPadding + kIconBox), Scale(20 + kIconBox));
+		const int boxSize = m_compact ? 28 : kIconBox;
+		const int boxTop = m_compact ? (kCompactHeaderHeight - boxSize) / 2 : 20;
+		CRect box(Scale(kPadding), Scale(boxTop), Scale(kPadding + boxSize), Scale(boxTop + boxSize));
 		UiTheme::FillRoundRect(dc.m_hDC, box, Scale(12), m_enabled ? UiTheme::AccentSoft() : RGB(238, 241, 245), CLR_NONE);
 		CRect glyph = box;
-		glyph.DeflateRect(Scale(8), Scale(8));
+		glyph.DeflateRect(Scale(m_compact ? 5 : 8), Scale(m_compact ? 5 : 8));
 		UiTheme::DrawGlyph(dc.m_hDC, UiTheme::GLYPH_PROXY_TOOL, glyph,
 			m_enabled ? UiTheme::Accent() : RGB(160, 166, 177), max(1.6f, Scale(2) * 0.9f));
 	}
@@ -282,61 +601,108 @@ void CLaunchPanel::OnPaint()
 		CRect text = HeaderTextRect();
 		CFont* oldFont = dc.SelectObject(&m_titleFont);
 		dc.SetTextColor(primary);
-		CRect titleRect(text.left, text.top, text.right, text.top + Scale(24));
+		CRect titleRect(text.left, text.top, text.right, m_compact ? text.bottom : text.top + Scale(24));
 		dc.DrawText(m_title, titleRect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
-		dc.SelectObject(&m_bodyFont);
-		dc.SetTextColor(UiTheme::TextSecondary());
-		CRect bodyRect(text.left, titleRect.bottom + Scale(2), text.right, text.bottom);
-		dc.DrawText(m_body, bodyRect, DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
+		if (!m_compact)
+		{
+			dc.SelectObject(&m_bodyFont);
+			dc.SetTextColor(UiTheme::TextSecondary());
+			CRect bodyRect(text.left, titleRect.bottom + Scale(2), text.right, text.bottom);
+			dc.DrawText(m_body, bodyRect, DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
+		}
 		dc.SelectObject(oldFont);
 	}
 
 	// Divider between the header and the recent apps.
-	dc.FillSolidRect(Scale(kPadding), Scale(kHeaderHeight), client.Width() - Scale(kPadding) * 2, 1, UiTheme::BorderSoft());
+	dc.FillSolidRect(Scale(kPadding), Scale(m_compact ? kCompactHeaderHeight : kHeaderHeight), client.Width() - Scale(kPadding) * 2, 1, UiTheme::BorderSoft());
 
 	// Recent apps.
 	{
 		CFont* oldFont = dc.SelectObject(&m_labelFont);
 		dc.SetTextColor(UiTheme::TextSecondary());
-		CRect label(Scale(kPadding), Scale(kRecentLabelTop), client.right - Scale(kPadding), Scale(kRecentLabelTop + 20));
-		dc.DrawText(m_recentTitle, label, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+		const int labelTop = m_compact ? TileTop() : kRecentLabelTop;
+		CRect label(Scale(kPadding), Scale(labelTop), client.right - Scale(kPadding), Scale(labelTop + (m_compact ? TileHeight() : 20)));
+		if (m_compact) label.right = max(label.left, TileViewport().left - Scale(12));
+		if (PageCount() > 1)
+		{
+			const int dots = min(m_compact ? 5 : 7, PageCount());
+			const int page = m_firstTile / TileCapacity();
+			const int firstDot = max(0, min(page - dots / 2, PageCount() - dots));
+			const int dotLeft = client.right - Scale(kPadding + dots * 12);
+			if (!m_compact) label.right = dotLeft - Scale(8);
+			for (int d = 0; d < dots; ++d)
+			{
+				const BOOL active = firstDot + d == page;
+				const BOOL clipped = (d == 0 && firstDot > 0) || (d == dots - 1 && firstDot + dots < PageCount());
+				const int size = Scale(clipped && !active ? 3 : 5);
+				const int x = dotLeft + Scale(d * 12 + 6), y = label.CenterPoint().y;
+				CRect dot(x - size / 2, y - size / 2, x - size / 2 + size, y - size / 2 + size);
+				UiTheme::FillRoundRect(dc.m_hDC, dot, size / 2, active ? UiTheme::TextSecondary() : UiTheme::Border(), CLR_NONE);
+			}
+		}
+		dc.DrawText(m_recentTitle, label, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
 
 		const int count = VisibleTileCount();
 		if (count == 0)
 		{
 			dc.SelectObject(&m_bodyFont);
-			CRect empty(Scale(kPadding), Scale(kTileTop), client.right - Scale(kPadding), Scale(kTileTop + kTileHeight));
+			CRect empty = TileViewport();
 			dc.DrawText(m_emptyText, empty, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 		}
 		dc.SelectObject(&m_bodyFont);
-		for (int i = 0; i < count; ++i)
+		TEXTMETRIC captionMetrics = { 0 };
+		dc.GetTextMetrics(&captionMetrics);
+		const int savedDc = dc.SaveDC();
+		CRect viewport = TileViewport();
+		dc.IntersectClipRect(viewport);
+		for (int i = 0; i < static_cast<int>(m_tiles.size()); ++i)
 		{
 			CRect tile = TileRect(i);
-			const BOOL hot = m_enabled && i == m_hot;
+			if (tile.right <= viewport.left || tile.left >= viewport.right) continue;
+			const BOOL hot = m_busyTile < 0 && i == m_hot;
 			const BOOL down = hot && i == m_pressed;
 			UiTheme::FillRoundRect(dc.m_hDC, tile, Scale(10),
 				down ? UiTheme::AccentSoft() : (hot ? RGB(243, 247, 254) : RGB(255, 255, 255)),
 				hot ? UiTheme::AccentSoftBorder() : UiTheme::BorderSoft());
 
 			// Draw the shell's large icon at its own size; scaling makes it blurry.
-			const int iconSize = max(Scale(kTileIcon), min(::GetSystemMetrics(SM_CXICON), Scale(32)));
-			const int iconLeft = tile.left + Scale(10);
-			const int iconTop = tile.top + (tile.Height() - iconSize) / 2;
+			const int iconSize = m_compact ? Scale(20) : max(Scale(kTileIcon), min(::GetSystemMetrics(SM_CXICON), Scale(32)));
+			const int iconLeft = tile.left + (tile.Width() - iconSize) / 2;
+			const int contentHeight = m_compact ? iconSize : iconSize + Scale(6) + captionMetrics.tmHeight;
+			const int iconTop = tile.top + (tile.Height() - contentHeight) / 2;
 			if (m_tiles[i].icon && m_tiles[i].lightIcon)
 			{
 				CRect plate(iconLeft - Scale(2), iconTop - Scale(2), iconLeft + iconSize + Scale(2), iconTop + iconSize + Scale(2));
 				UiTheme::FillRoundRect(dc.m_hDC, plate, Scale(7), RGB(47, 52, 61), CLR_NONE);
 			}
-			if (m_tiles[i].icon)
+			if (m_compact && (i == m_busyTile || !m_tiles[i].icon))
+			{
+				dc.SetTextColor(UiTheme::TextPrimary());
+				dc.DrawText(i == m_busyTile ? CString(L"\x2026") : m_tiles[i].name.Left(1), tile,
+					DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+			}
+			else if (m_tiles[i].icon)
 				::DrawIconEx(dc.m_hDC, iconLeft, iconTop, m_tiles[i].icon, iconSize, iconSize, 0, NULL, DI_NORMAL);
-			dc.SetTextColor(m_enabled ? UiTheme::TextPrimary() : UiTheme::TextSecondary());
-			CRect name(iconLeft + iconSize + Scale(8), tile.top, tile.right - Scale(10), tile.bottom);
-			dc.DrawText(m_tiles[i].name, name, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+			if (m_tiles[i].elevated)
+			{
+				const int right = iconLeft + iconSize + Scale(2), bottom = iconTop + iconSize + Scale(2);
+				const int badgeSize = Scale(m_compact ? 11 : 14);
+				UiTheme::DrawElevationBadge(dc.m_hDC, CRect(right - badgeSize, bottom - badgeSize, right, bottom));
+			}
+			dc.SetTextColor(UiTheme::TextPrimary());
+			// Center the icon and single-line caption as one group, with equal
+			// space above and below. The tooltip retains the complete name.
+			const int captionTop = iconTop + iconSize + Scale(6);
+			CRect name(tile.left + Scale(6), captionTop, tile.right - Scale(6), captionTop + captionMetrics.tmHeight);
+			if (!m_compact)
+				dc.DrawText(i == m_busyTile ? Localization::Get(L"launch.opening") : m_tiles[i].name, name,
+					DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
 
 			const BOOL cuesHidden = (SendMessage(WM_QUERYUISTATE) & UISF_HIDEFOCUS) != 0;
-			if (m_enabled && !cuesHidden && ::GetFocus() == m_hWnd && i == m_focusTile)
+			if (!m_animating && !m_dragging && !cuesHidden && ::GetFocus() == m_hWnd && i == m_focusTile)
 				UiTheme::FillRoundRect(dc.m_hDC, tile, Scale(10), CLR_NONE, UiTheme::Accent());
 		}
+		dc.RestoreDC(savedDc);
 		dc.SelectObject(oldFont);
 	}
 
@@ -351,15 +717,10 @@ void CLaunchPanel::OnMouseMove(UINT flags, CPoint point)
 		TRACKMOUSEEVENT track = { sizeof(track), TME_LEAVE, m_hWnd, 0 };
 		m_tracking = _TrackMouseEvent(&track);
 	}
-	const int hit = HitTestTile(point);
+	MoveDrag(point);
+	const int hit = m_busyTile < 0 ? HitTestTile(point) : -1;
 	SetHotTile(hit);
-	CString tip = (hit >= 0 && hit < static_cast<int>(m_tiles.size())) ? m_tiles[hit].tip : CString();
-	if (tip != m_tipText)
-	{
-		if (m_tooltip.GetSafeHwnd()) m_tooltip.Pop();
-		m_tipText = tip;
-	}
-	::SetCursor(::LoadCursor(NULL, m_enabled && hit >= 0 ? IDC_HAND : IDC_ARROW));
+	::SetCursor(::LoadCursor(NULL, hit >= 0 ? IDC_HAND : IDC_ARROW));
 	CWnd::OnMouseMove(flags, point);
 }
 
@@ -372,13 +733,11 @@ LRESULT CLaunchPanel::OnMouseLeave(WPARAM, LPARAM)
 
 void CLaunchPanel::OnLButtonDown(UINT flags, CPoint point)
 {
-	SetFocus();
-	const int hit = HitTestTile(point);
-	if (m_enabled && hit >= 0)
+	if (!m_touchPanning && m_busyTile < 0)
 	{
-		m_pressed = hit;
-		m_focusTile = hit;
-		SetCapture();
+		SetFocus();
+		BeginDrag(point);
+		if (m_pointerDown) SetCapture();
 		Invalidate(FALSE);
 	}
 	CWnd::OnLButtonDown(flags, point);
@@ -386,28 +745,26 @@ void CLaunchPanel::OnLButtonDown(UINT flags, CPoint point)
 
 void CLaunchPanel::OnLButtonUp(UINT flags, CPoint point)
 {
-	const int pressed = m_pressed;
-	if (GetCapture() == this) ReleaseCapture();
-	m_pressed = -1;
-	Invalidate(FALSE);
-	if (pressed >= 0 && HitTestTile(point) == pressed)
-		ActivateTile(pressed);
+	if (!m_touchPanning) EndDrag(point, TRUE);
 	CWnd::OnLButtonUp(flags, point);
 }
 
 void CLaunchPanel::OnKeyDown(UINT character, UINT repeatCount, UINT flags)
 {
-	const int count = VisibleTileCount();
+	if (m_busyTile >= 0 || m_pointerDown) return;
+	const int count = static_cast<int>(m_tiles.size());
 	if (count > 0)
 	{
 		switch (character)
 		{
-		case VK_LEFT: m_focusTile = max(0, m_focusTile - 1); Invalidate(FALSE); return;
-		case VK_RIGHT: m_focusTile = min(count - 1, m_focusTile + 1); Invalidate(FALSE); return;
-		case VK_HOME: m_focusTile = 0; Invalidate(FALSE); return;
-		case VK_END: m_focusTile = count - 1; Invalidate(FALSE); return;
+		case VK_LEFT: m_focusTile = max(0, m_focusTile - 1); EnsureFocusVisible(); return;
+		case VK_RIGHT: m_focusTile = min(count - 1, m_focusTile + 1); EnsureFocusVisible(); return;
+		case VK_HOME: m_focusTile = 0; EnsureFocusVisible(); return;
+		case VK_END: m_focusTile = count - 1; EnsureFocusVisible(); return;
 		case VK_RETURN:
-		case VK_SPACE: ActivateTile(m_focusTile); return;
+		case VK_SPACE:
+			if (!(flags & KF_REPEAT)) ActivateTile(m_focusTile);
+			return;
 		}
 	}
 	CWnd::OnKeyDown(character, repeatCount, flags);
@@ -432,23 +789,21 @@ UINT CLaunchPanel::OnGetDlgCode()
 
 BOOL CLaunchPanel::PreTranslateMessage(MSG* message)
 {
-	if (m_tooltip.GetSafeHwnd())
+	if (message->hwnd == m_hWnd && message->message == WM_KEYDOWN && message->wParam == VK_ESCAPE && m_pointerDown)
 	{
-		m_tooltip.Activate(!m_tipText.IsEmpty());
+		UpdateTileLayout();
+		Invalidate(FALSE);
+		return TRUE;
+	}
+	if (message->hwnd == m_hWnd && message->message == WM_KEYDOWN && message->wParam == VK_RETURN)
+	{
+		// Enter normally goes to the enclosing dialog's default button.
+		if (!(message->lParam & (1L << 30))) ActivateTile(m_focusTile);
+		return TRUE;
+	}
+	if (m_tooltip.GetSafeHwnd() && !m_pointerDown && !m_animating && m_busyTile < 0)
+	{
 		m_tooltip.RelayEvent(message);
 	}
 	return CWnd::PreTranslateMessage(message);
-}
-
-BOOL CLaunchPanel::OnNotify(WPARAM wParam, LPARAM lParam, LRESULT* result)
-{
-	NMHDR* header = reinterpret_cast<NMHDR*>(lParam);
-	if (header && m_tooltip.GetSafeHwnd() && header->hwndFrom == m_tooltip.GetSafeHwnd() &&
-		header->code == TTN_NEEDTEXT)
-	{
-		reinterpret_cast<NMTTDISPINFO*>(header)->lpszText = const_cast<LPTSTR>(static_cast<LPCTSTR>(m_tipText));
-		*result = 0;
-		return TRUE;
-	}
-	return CWnd::OnNotify(wParam, lParam, result);
 }

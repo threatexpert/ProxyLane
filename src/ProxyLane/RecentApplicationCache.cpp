@@ -138,6 +138,7 @@ namespace
 					// afterwards without bringing a removed or unpinned row back.
 					RecentApplications::Load* snapshot = new RecentApplications::Load(entry.latest->profile, path, id);
 					RecentApplications::Clone(*saved, snapshot->entries);
+					RecentApplications::SortForDisplay(snapshot->entries);
 					for (size_t i = 0; entry.ready && i < snapshot->entries.size(); ++i)
 						for (size_t j = 0; j < entry.ready->entries.size(); ++j)
 							if (snapshot->entries[i].id == entry.ready->entries[j].id)

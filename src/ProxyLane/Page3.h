@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "afxwin.h"
 #include "afxmt.h"
 #include "..\ProxyLaneHook\ProxyModule.h"
@@ -7,6 +7,8 @@
 #include "RecentApplications.h"
 #include "BrowserLaunchWatch.h"
 #include "LaunchPanel.h"
+#include "AsyncSnapshot.h"
+#include <list>
 #include <map>
 #include <set>
 #include <vector>
@@ -14,6 +16,8 @@
 #define WM_WINDOW_FINDER_BEGIN    (WM_APP + 201)
 #define WM_WINDOW_FINDER_UPDATE   (WM_APP + 202)
 #define WM_WINDOW_FINDER_COMPLETE (WM_APP + 203)
+#define WM_PROCESS_LIST_REQUEST (WM_APP + 205)
+
 #define WM_WINDOW_FINDER_CANCEL   (WM_APP + 204)
 
 class CWindowFinderOverlay : public CWnd
@@ -106,6 +110,7 @@ class CPage3 : public CModernDialog
 #define TIMER_PROCESS_REGISTRY 0x102
 #define TIMER_BROWSER_LAUNCH 0x103
 #define TIMER_LAUNCH_PANEL 0x104
+#define TIMER_PROCESS_RESULT 0x105
 
 public:
 	CPage3(CWnd* pParent = NULL);   // 标准构造函数
@@ -122,7 +127,6 @@ public:
 	CModernButton m_btnSelectApp;
 	CModernButton m_btnTerminate;
 	CToolTipCtrl m_windowFinderToolTip;
-	CEvent m_evlock;
 	//CButton m_btnAuto;
 
 	// 自适应布局快照
@@ -140,10 +144,40 @@ private:
 		PROCESS_SORT_DESCENDING
 	};
 
+	AsyncSnapshot<std::list<_myPROCESSINFO>> m_processQuery;
+	std::map<DWORD, _myPROCESSINFO> m_pendingProcessRows;
+	BOOL m_applyingProcesses = FALSE;
+	BOOL m_pollingProcesses = FALSE;
+	BOOL m_processSlowShown = FALSE;
+	BOOL m_processStatusShown = FALSE;
+	int m_processApplyIndex = 0;
+	DWORD m_processQueryTick = 0;
+	HWND m_pendingFinderTarget = NULL;
+	DWORD m_pendingFinderPid = 0;
+	ULONGLONG m_pendingFinderTime = 0;
+	void PollProcessList();
+	void ApplyProcessBatch();
+	void CancelProcessRefresh();
+	void SortDisplayedProcesses();
+	void PublishProcessAccessibility(bool structureChanged);
+	afx_msg LRESULT OnProcessAccessibilityChanged(WPARAM force, LPARAM);
+	afx_msg LRESULT OnProcessAccessibilityRequest(WPARAM, LPARAM);
+	CString ProcessDisplayName(const _myPROCESSINFO& info) const;
+	LRESULT FinishWindowFinder(HWND targetWindow, DWORD expectedPid, ULONGLONG expectedTime);
+	afx_msg void OnShowWindow(BOOL show, UINT status);
+	afx_msg void OnDestroy();
+	afx_msg LRESULT OnProcessListRequest(WPARAM, LPARAM);
 	int m_sortColumn;
 	ProcessSortState m_sortState;
 	std::map<DWORD, _myPROCESSINFO> m_processSortData;
-	std::map<DWORD, ULONGLONG> m_displayedStartTimes;
+	struct DisplayedProcess {
+		DWORD pid;
+		ULONGLONG startTime;
+		CString columns[3];
+	};
+	// Mirrors native row order. Refresh comparisons must not send a message for
+	// every cell: UI Automation hooks can make even same-thread SendMessage slow.
+	std::vector<DisplayedProcess> m_displayedProcesses;
 	std::map<DWORD, CString> m_processTreePrefixes;
 	CString m_processNameSearchText;
 	DWORD m_processNameSearchTick;

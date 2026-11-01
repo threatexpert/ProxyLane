@@ -18,6 +18,7 @@ int DnsQueryPolicyTestsMain();
 int DeferredMitigationPolicyTestsMain();
 int AppContainerPipeAccessTestsMain();
 int ProcessActionsTestsMain();
+int AsyncSnapshotTestsMain();
 int ProcessRegistryTestsMain();
 int BrowserLaunchWatchTestsMain();
 int UdpBlockLogLimiterTestsMain();
@@ -68,6 +69,7 @@ int main(int argc, char** argv)
 		return 1;
 	if (AppContainerPipeAccessTestsMain() != 0)
 		return 1;
+	if (AsyncSnapshotTestsMain() != 0) return 1;
 	if (ProcessActionsTestsMain() != 0)
 		return 1;
 	if (ProcessRegistryTestsMain() != 0)

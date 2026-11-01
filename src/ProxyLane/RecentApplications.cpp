@@ -120,6 +120,7 @@ namespace
 		fields[L"Pinned"] = entry.pinned ? L"1" : L"0";
 		fields[L"Elevated"] = entry.elevated ? L"1" : L"0";
 		fields[L"LastUsed"].Format(L"%I64u", entry.lastUsed);
+		fields[L"DisplayOrder"].Format(L"%I64u", entry.displayOrder);
 		const LPCWSTR keys[] = {L"NameUtf8Base64", L"PathUtf8Base64", L"AumidUtf8Base64", L"ArgumentsUtf8Base64", L"WorkingDirectoryUtf8Base64", L"ShortcutUtf8Base64"};
 		const CString* values[] = {&entry.app.name, &entry.app.path, &entry.app.aumid, &entry.app.arguments, &entry.app.workingDirectory, &entry.shortcut};
 		size_t characters = 1;
@@ -143,6 +144,15 @@ namespace
 		errno = 0;
 		entry.lastUsed = _wcstoui64(timestamp, NULL, 10);
 		if (errno == ERANGE || entry.lastUsed == ~0ULL) return FALSE;
+		const CString order = fields[L"DisplayOrder"];
+		if (!order.IsEmpty())
+		{
+			if (order.GetLength() > 20) return FALSE;
+			for (int i = 0; i < order.GetLength(); ++i) if (order[i] < L'0' || order[i] > L'9') return FALSE;
+			errno = 0;
+			entry.displayOrder = _wcstoui64(order, NULL, 10);
+			if (errno == ERANGE || entry.displayOrder == ~0ULL) return FALSE;
+		}
 		entry.pinned = fields[L"Pinned"] == L"1";
 		entry.elevated = fields[L"Elevated"] == L"1";
 		return DecodeText(fields[L"NameUtf8Base64"], entry.app.name) &&
@@ -224,15 +234,13 @@ HICON RecentApplications::LoadIcon(const Entry& entry)
 	return info.hIcon;
 }
 
-CString RecentApplications::Description(const Entry& entry, const CString& profile)
+CString RecentApplications::Description(const Entry& entry)
 {
 	CString text = entry.app.name + L"\r\n" + InstalledApplications::LaunchTargetAndArguments(entry.app);
 	if (!entry.available) text += L"\r\n" + Localization::Get(L"recent.unavailable_hint");
 	if (!entry.shortcut.IsEmpty()) text += L"\r\n" + entry.shortcut;
 	if (!entry.app.workingDirectory.IsEmpty()) text += L"\r\n" + Localization::Get(L"apps.working_directory") + L": " + entry.app.workingDirectory;
 	if (entry.elevated) text += L"\r\n" + Localization::Get(L"recent.elevated");
-	text += L"\r\n" + (profile.IsEmpty() ? Localization::Get(L"page3.start_proxy_first") :
-		Localization::Format(L"recent.profile", static_cast<LPCTSTR>(profile)));
 	return text;
 }
 
@@ -290,7 +298,23 @@ BOOL RecentApplications::Store::ReadBound(std::vector<Entry>& entries, CString& 
 		// after writing but before trimming the oldest entry.
 		if (loaded.size() > kMaxEntries + 1) { SetLastError(ERROR_BUFFER_OVERFLOW); return FALSE; }
 	}
-	Sort(loaded); entries.swap(loaded);
+	Sort(loaded);
+	// Legacy histories acquire the order in which they were previously displayed.
+	ULONGLONG order = 0;
+	for (size_t i = 0; i < loaded.size(); ++i) order = max(order, loaded[i].displayOrder);
+	if (order > ~0ULL - 512)
+	{
+		// Rebase unusually large counters before assigning legacy/new positions.
+		std::stable_sort(loaded.begin(), loaded.end(), [](const Entry& a, const Entry& b) {
+			if (!a.displayOrder || !b.displayOrder) return a.displayOrder > b.displayOrder;
+			return a.displayOrder < b.displayOrder;
+		});
+		order = 0;
+		for (size_t i = 0; i < loaded.size(); ++i) loaded[i].displayOrder = ++order;
+		Sort(loaded);
+	}
+	for (size_t i = 0; i < loaded.size(); ++i) if (!loaded[i].displayOrder) loaded[i].displayOrder = ++order;
+	entries.swap(loaded);
 	return TRUE;
 }
 
@@ -341,6 +365,9 @@ BOOL RecentApplications::Store::Remember(Entry entry) const
 	if (!entry.profileId.IsEmpty() && entry.profileId != identity)
 	{ SetLastError(ERROR_INVALID_DATA); return FALSE; }
 	entry.profileId = identity;
+	entry.displayOrder = 0;
+	ULONGLONG nextOrder = 1;
+	for (size_t i = 0; i < entries.size(); ++i) nextOrder = max(nextOrder, entries[i].displayOrder + 1);
 	FILETIME now; GetSystemTimeAsFileTime(&now);
 	entry.lastUsed = (static_cast<ULONGLONG>(now.dwHighDateTime) << 32) | now.dwLowDateTime;
 	for (size_t i = 0; i < entries.size();)
@@ -349,12 +376,14 @@ BOOL RecentApplications::Store::Remember(Entry entry) const
 		if ((!entry.id.IsEmpty() && entry.id == entries[i].id) || SameLaunch(entry, entries[i]))
 		{
 			entry.id = entries[i].id; entry.pinned = entries[i].pinned;
+			entry.displayOrder = entries[i].displayOrder;
 			entries.erase(entries.begin() + i);
 		}
 		else ++i;
 	}
 	if (entry.id.IsEmpty()) entry.id = NewId();
 	if (!ValidId(entry.id)) { SetLastError(ERROR_INVALID_DATA); return FALSE; }
+	if (!entry.displayOrder) entry.displayOrder = nextOrder;
 	entries.push_back(entry); Sort(entries);
 	int recent = 0;
 	for (size_t i = 0; i < entries.size();)
@@ -381,6 +410,28 @@ BOOL RecentApplications::Store::Change(const CString& id, BOOL remove, BOOL pinn
 		}
 	SetLastError(ERROR_NOT_FOUND); return FALSE;
 }
+BOOL RecentApplications::Store::Move(const CString& id, int direction) const
+{
+	if (direction != -1 && direction != 1) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+	HistoryLock lock(m_path);
+	if (!lock.Valid()) return FALSE;
+	std::vector<Entry> entries; CString identity;
+	if (!ReadBound(entries, identity, FALSE)) return FALSE;
+	SortForDisplay(entries);
+	for (size_t i = 0; i < entries.size(); ++i)
+	{
+		if (entries[i].id != id) continue;
+		const int next = static_cast<int>(i) + direction;
+		// Fixed items stay ahead of ordinary items. Moves are within each group.
+		if (next < 0 || next >= static_cast<int>(entries.size()) || entries[i].pinned != entries[next].pinned) return TRUE;
+		std::swap(entries[i], entries[next]);
+		for (size_t j = 0; j < entries.size(); ++j) entries[j].displayOrder = j + 1;
+		Sort(entries); // Preserve MRU/eviction behavior independently of presentation.
+		return Write(entries, identity);
+	}
+	SetLastError(ERROR_NOT_FOUND); return FALSE;
+}
+
 BOOL RecentApplications::Store::SetPinned(const CString& id, BOOL pinned) const { return Change(id, FALSE, pinned); }
 BOOL RecentApplications::Store::Remove(const CString& id) const { return Change(id, TRUE, FALSE); }
 
@@ -439,6 +490,7 @@ static UINT ValidateRecentApplications(LPVOID parameter)
 	{
 		std::vector<RecentApplications::Entry> saved;
 		success = SUCCEEDED(initialized) && RecentApplications::Store(load->profile, load->path, load->profileId).Read(saved);
+		RecentApplications::SortForDisplay(saved);
 		for (size_t i = 0; success && i < saved.size() && WaitForSingleObject(load->cancel, 0) != WAIT_OBJECT_0; ++i)
 		{
 			InstalledApplications::Application resolved;
@@ -479,4 +531,12 @@ RecentApplications::Load* RecentApplications::BeginLoad(const CString& profile, 
 		load->Release(); load->done = TRUE;
 	}
 	return load;
+}
+
+void RecentApplications::SortForDisplay(std::vector<Entry>& entries)
+{
+	std::stable_sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
+		if (a.pinned != b.pinned) return a.pinned > b.pinned;
+		return a.displayOrder != b.displayOrder ? a.displayOrder < b.displayOrder : a.id < b.id;
+	});
 }

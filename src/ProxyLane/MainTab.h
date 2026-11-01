@@ -39,6 +39,7 @@ public:
 	void ShowTransientStatus(LPCTSTR text, CStatusLabel::Tone tone);
 	void HideTransientStatus();
 	void SetRunningProfile(LPCTSTR profileName, BOOL running);
+	void RefreshSidebarStatus();
 	BOOL IsProxyRunning() const { return m_proxyRunning; }
 	CString GetRunningProfileName() const { return m_runningProfileName; }
 	CString GetRunningRecentProfileId() const { return m_runningRecentProfileId; }
@@ -77,7 +78,6 @@ protected:
 	HICON m_brandIcon;
 	CStatusLabel m_sidebarStatus;
 	CStatusLabel m_transientStatus;
-	CToolTipCtrl m_sidebarTooltip;
 
 	afx_msg void OnPaint();
 	afx_msg BOOL OnEraseBkgnd(CDC* dc);

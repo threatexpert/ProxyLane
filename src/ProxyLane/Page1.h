@@ -120,6 +120,8 @@ public:
 	CString QuicUdpWarning(); // UI thread: active settings, or selected draft while stopped.
 	BOOL ConfirmDiscardUnsavedChanges();
 	BOOL HasUnsavedProfileChanges() const { return m_profileDirty; }
+	CString GetSelectedProfileName() { return GetCurrentProfileName(); }
+	CString GetSelectedRecentProfileId();
 	void GetSavedProfileNames(std::vector<CString>& names);
 
 	//重载IProxySettings的成员函数////////////////////////////////////////////
