@@ -28,6 +28,13 @@ Also run `python tests/ProcessListE2ETests.py <x64 ProxyLane executable>` for
 native row/cache agreement, sorting, refresh, collapse/reopen, inaccessible
 process metadata, and removal of exited processes.
 
+Run `python tests/ProcessListColorE2ETests.py <x64 ProxyLane executable>` to render
+the actual themed list and check new-process age colors, expiry, native selection
+precedence, and purple hook-result text before and after column sorting. It uses
+only a disposable GUI/profile and its own sleeping child, which it injects without
+making network requests. This catches custom-draw selection flags that disagree
+with the native list selection state. Requires Pillow and takes about 25 seconds.
+
 Run `python tests/ApplicationPreloadE2ETests.py <x64 ProxyLane executable>` for
 application search, warm reopen, closing during refresh, and profile isolation.
 It starts only its disposable fixture's proxy and does not launch an application.

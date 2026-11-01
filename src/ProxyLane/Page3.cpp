@@ -3105,8 +3105,11 @@ void CPage3::OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result)
 
 	int item = static_cast<int>(customDraw->nmcd.dwItemSpec);
 	if (item < 0
-		|| (customDraw->nmcd.uItemState & CDIS_SELECTED) != 0)
+		|| (m_ListCtrl.GetItemState(item, LVIS_SELECTED) & LVIS_SELECTED) != 0)
 	{
+		// The themed, double-buffered list can report CDIS_SELECTED for rows
+		// that are not selected. Query the actual native selection state; using
+		// uItemState here suppresses both age shading and hook-result colors.
 		// 被选中的行继续使用系统高亮色，避免自定义背景掩盖选择状态。
 		*result = CDRF_DODEFAULT;
 		return;
