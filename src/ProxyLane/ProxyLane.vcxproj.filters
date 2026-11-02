@@ -39,6 +39,9 @@
     <ClCompile Include="Base64.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ConfigLocation.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="IniFile.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -119,6 +122,12 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="BoundedLogQueue.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ConfigLocation.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ConfigLocationPolicy.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="IniFile.h">

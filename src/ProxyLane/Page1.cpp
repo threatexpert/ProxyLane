@@ -9,6 +9,7 @@
 #include "Page3.h"
 #include "Page4.h"
 #include "IniFile.h"
+#include "ConfigLocation.h"
 #include "Base64.h"
 #include "Localization.h"
 #include "..\ProxyLaneHook\DnsRedirectPolicy.h"
@@ -216,17 +217,7 @@ BOOL CPage1::OnInitDialog()
 	m_cbTransport.SetCurSel(PROXY_TRANSPORT_PLAIN);
 	UpdateTransportEnable();
 
-	g_ini.SetIniFileName(_T(""));
-#ifdef _WIN64
-	{
-		CString strIniPath = g_ini.GetIniFileName();
-		if (strIniPath.Right(6).CompareNoCase(_T("64.ini")) == 0)
-		{
-			strIniPath = strIniPath.Left(strIniPath.GetLength() - 6) + _T(".ini");
-			g_ini.SetIniFileName(strIniPath);
-		}
-	}
-#endif
+	g_ini.SetIniFileName(ConfigLocation::SettingsPath());
 
 	list<CfgProxyItem> cfgls;
 	CString lastSelectedName;
@@ -1008,9 +999,15 @@ BOOL CPage1::SaveCurrentProfile(LPCTSTR profileName)
 	if (!ValidateDnsRedirectSettings(TRUE))
 		return FALSE;
 
-	m_profileStore.SetLastSelected(item.strName);
 	UIGetCfg(&item);
-	m_profileStore.Save(item);
+	if (!m_profileStore.Save(item))
+	{
+		// Keep the page dirty: the edits only exist on screen.
+		MessageBox(Localization::Format(_T("profile.save_write_failed"), (LPCTSTR)g_ini.GetIniFileName()),
+			Localization::Get(_T("profile.save_failed_title")), MB_ICONERROR);
+		return FALSE;
+	}
+	m_profileStore.SetLastSelected(item.strName);
 
 	int index = m_cfgls.FindStringExact(-1, item.strName);
 	if (index == CB_ERR)

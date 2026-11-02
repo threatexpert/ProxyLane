@@ -7,6 +7,7 @@
 #include "Page3.h"
 #include "AutomationOptions.h"
 #include "Localization.h"
+#include "ConfigLocation.h"
 #include "AppVersion.h"
 #include "AppLauncher.h"
 
@@ -156,6 +157,7 @@ BOOL CProxyLaneApp::InitInstance()
 	InitCommonControlsEx(&InitCtrls);
 
 	CWinApp::InitInstance();
+	ConfigLocation::PrepareStorage();
 	Localization::Initialize();
 
 	AfxEnableControlContainer();

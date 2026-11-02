@@ -303,6 +303,7 @@
   "workflow.steps": "1. 确认上游代理地址或选择直连模式\r\n\r\n2. 启用配置\r\n\r\n3. 拖入程序，或选择应用启动并代理",
   "profile.name_required": "请先输入一个配置名称。",
   "profile.save_failed_title": "无法保存配置",
+  "profile.save_write_failed": "配置没有写入磁盘，文件可能是只读的，或者当前用户没有写入权限。你的修改还留在界面上，解决后请重新保存。\n\n配置文件：%s",
   "profile.invalid_endpoint": "请检查上游代理的地址和端口是否填写正确。",
   "profile.psk_required": "选择 gonc TLS-PSK 加密模式后必须填写 PSK。",
   "profile.secure_transport_unsupported": "gonc TLS-PSK 仅支持 SOCKS5、HTTP10 和 HTTP11。",

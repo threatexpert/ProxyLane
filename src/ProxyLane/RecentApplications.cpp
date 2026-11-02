@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "RecentApplications.h"
+#include "ConfigLocation.h"
 #include "Localization.h"
 #include "IniFile.h"
 #include "Base64.h"
@@ -180,12 +181,7 @@ namespace
 
 CString RecentApplications::DefaultPath()
 {
-	CIniFile ini; ini.SetIniFileName(L"");
-	CString path = ini.GetIniFileName();
-#ifdef _WIN64
-	if (path.Right(6).CompareNoCase(L"64.ini") == 0) path = path.Left(path.GetLength() - 6) + L".ini";
-#endif
-	return path;
+	return ConfigLocation::SettingsPath();
 }
 
 RecentApplications::Entry RecentApplications::FromApplication(const InstalledApplications::Application& app, BOOL elevated)

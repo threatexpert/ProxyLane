@@ -37,6 +37,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ProxyLaneTestsMain.cpp" />
+    <ClCompile Include="ConfigLocationPolicyTests.cpp" />
     <ClCompile Include="DirectIpv6RouteTests.cpp" />
     <ClCompile Include="MonitorLogFormatTests.cpp" />
     <ClCompile Include="ProfileShareCodecTests.cpp"><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions></ClCompile>

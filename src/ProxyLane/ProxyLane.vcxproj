@@ -249,6 +249,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     <ClCompile Include="AppVersion.cpp" />
     <ClCompile Include="AutomationOptions.cpp" />
     <ClCompile Include="Base64.cpp" />
+    <ClCompile Include="ConfigLocation.cpp" />
     <ClCompile Include="IniFile.cpp" />
     <ClCompile Include="Localization.cpp" />
     <ClCompile Include="ListCtrlEx.cpp" />
@@ -292,6 +293,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     <ClInclude Include="AutomationOptions.h" />
     <ClInclude Include="Base64.h" />
     <ClInclude Include="BoundedLogQueue.h" />
+    <ClInclude Include="ConfigLocation.h" />
+    <ClInclude Include="ConfigLocationPolicy.h" />
     <ClInclude Include="IniFile.h" />
     <ClInclude Include="Localization.h" />
     <ClInclude Include="ListCtrlEx.h" />

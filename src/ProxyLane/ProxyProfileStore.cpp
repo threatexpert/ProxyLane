@@ -129,32 +129,34 @@ BOOL CProxyProfileStore::ListNames(std::vector<CString>& names) const
 	return TRUE;
 }
 
-void CProxyProfileStore::Save(CfgProxyItem& item)
+BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 {
 	CString section = kProfilePrefix + item.strName;
-	m_ini.SetDWORD(section, _T("HookChildProcess"), item.bHookChildProcess);
-	m_ini.SetDWORD(section, _T("HookTCP"), item.bHookTCP);
-	m_ini.SetDWORD(section, _T("HookUDP"), item.bHookUDP);
-	m_ini.SetDWORD(section, _T("BlockUDP"), item.bBlockUDP);
-	m_ini.SetDWORD(section, _T("BlockIPv6"), item.bBlockIPv6);
+	BOOL saved = TRUE;
+	saved &= m_ini.SetDWORD(section, _T("HookChildProcess"), item.bHookChildProcess);
+	saved &= m_ini.SetDWORD(section, _T("HookTCP"), item.bHookTCP);
+	saved &= m_ini.SetDWORD(section, _T("HookUDP"), item.bHookUDP);
+	saved &= m_ini.SetDWORD(section, _T("BlockUDP"), item.bBlockUDP);
+	saved &= m_ini.SetDWORD(section, _T("BlockIPv6"), item.bBlockIPv6);
 	m_ini.DeleteKeyName(section, _T("UDPAddr"));
-	m_ini.SetDWORD(section, _T("dnsOpt"), item.dnsOpt);
-	m_ini.SetDWORD(section, _T("RedirectPrivateDNS"), item.bRedirectPrivateDNS);
-	m_ini.SetString(section, _T("RedirectDNS"), item.strRedirectDNS);
-	m_ini.SetString(section, _T("ChildFilter"), EncodeFilter(item.strChildFilter));
-	m_ini.SetDWORD(section, _T("ChildFilterMode"), item.nChildFilterMode);
-	m_ini.SetString(section, _T("TargetFilter"), EncodeFilter(item.strTargetFilter));
-	m_ini.SetDWORD(section, _T("TargetFilterMode"), item.nTargetFilterMode);
-	m_ini.SetString(section, _T("Type"), (CString)item.pi.strProxyType);
-	m_ini.SetString(section, _T("Host"), (CString)item.pi.strProxyHost);
-	m_ini.SetInt(section, _T("Port"), item.pi.nProxyPort);
-	m_ini.SetString(section, _T("User"), (CString)item.pi.strProxyUser);
-	m_ini.SetString(section, _T("Pass"), (CString)item.pi.strProxyPass);
-	m_ini.SetString(section, _T("Transport"), item.nTransportMode ==
+	saved &= m_ini.SetDWORD(section, _T("dnsOpt"), item.dnsOpt);
+	saved &= m_ini.SetDWORD(section, _T("RedirectPrivateDNS"), item.bRedirectPrivateDNS);
+	saved &= m_ini.SetString(section, _T("RedirectDNS"), item.strRedirectDNS);
+	saved &= m_ini.SetString(section, _T("ChildFilter"), EncodeFilter(item.strChildFilter));
+	saved &= m_ini.SetDWORD(section, _T("ChildFilterMode"), item.nChildFilterMode);
+	saved &= m_ini.SetString(section, _T("TargetFilter"), EncodeFilter(item.strTargetFilter));
+	saved &= m_ini.SetDWORD(section, _T("TargetFilterMode"), item.nTargetFilterMode);
+	saved &= m_ini.SetString(section, _T("Type"), (CString)item.pi.strProxyType);
+	saved &= m_ini.SetString(section, _T("Host"), (CString)item.pi.strProxyHost);
+	saved &= m_ini.SetInt(section, _T("Port"), item.pi.nProxyPort);
+	saved &= m_ini.SetString(section, _T("User"), (CString)item.pi.strProxyUser);
+	saved &= m_ini.SetString(section, _T("Pass"), (CString)item.pi.strProxyPass);
+	saved &= m_ini.SetString(section, _T("Transport"), item.nTransportMode ==
 		PROXY_TRANSPORT_GONC_TLS_PSK ? _T("GONC_TLS_PSK") : _T("PLAIN"));
 	// Initial secure-transport format intentionally stores the PSK directly
 	// in the profile, as selected by the user.
-	m_ini.SetString(section, _T("PSK"), item.strTransportPsk);
+	saved &= m_ini.SetString(section, _T("PSK"), item.strTransportPsk);
+	return saved;
 }
 
 BOOL CProxyProfileStore::Delete(LPCTSTR name)

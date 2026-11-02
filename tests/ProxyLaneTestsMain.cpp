@@ -26,6 +26,7 @@ int UdpBlockLogProbe(const char* output);
 int ExitProcessCleanupTestsMain();
 int ScopedProcessSuspensionTestsMain();
 int TrafficStatisticsTestsMain();
+int ConfigLocationPolicyTestsMain();
 
 int DetourHooksTestsMain();
 
@@ -40,6 +41,7 @@ int main(int argc, char** argv)
 	if (argc == 3 && std::strcmp(argv[1], "--detours-case") == 0)
 		return DetourHooksTestCase(argv[2]);
 	if (DetourHooksTestsMain() != 0) return 1;
+	if (ConfigLocationPolicyTestsMain() != 0) return 1;
 	if (TrafficStatisticsTestsMain() != 0)
 		return 1;
 	if (Socks5UdpCodecTestsMain() != 0)

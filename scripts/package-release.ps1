@@ -11,7 +11,6 @@ if (-not [System.IO.Path]::IsPathRooted($BinaryDirectory)) {
     $BinaryDirectory = Join-Path $repositoryRoot $BinaryDirectory
 }
 $binaryDirectory = [System.IO.Path]::GetFullPath($BinaryDirectory)
-$exampleConfig = Join-Path $repositoryRoot 'examples\ProxyLane.ini'
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $repositoryRoot 'dist'
@@ -28,7 +27,6 @@ $packageFiles = @(
     @{ Source = (Join-Path $binaryDirectory 'ProxyLaneHook64.dll'); Entry = 'ProxyLaneHook64.dll'; Versioned = $true },
     @{ Source = (Join-Path $binaryDirectory 'ProxyLaneSecureTransport64.dll'); Entry = 'ProxyLaneSecureTransport64.dll'; Versioned = $false },
     @{ Source = (Join-Path $binaryDirectory 'ProxyLaneMitm64.dll'); Entry = 'ProxyLaneMitm64.dll'; Versioned = $false },
-    @{ Source = $exampleConfig;                                     Entry = 'ProxyLane.ini';       Versioned = $false },
     @{ Source = (Join-Path $repositoryRoot 'README.md');            Entry = 'README.md';           Versioned = $false },
     @{ Source = (Join-Path $repositoryRoot 'README_EN.md');         Entry = 'README_EN.md';        Versioned = $false }
 )

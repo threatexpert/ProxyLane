@@ -114,6 +114,8 @@ gonc -e ":s5s -u -http" -l -k -psk YOUR_PSK -tls 1083
 
 请将 `YOUR_PSK` 替换为自己的密钥。支持 TLS 1.3，并兼容 TLS 1.2 服务端。PSK 明文保存在 `ProxyLane.ini` 中，请妥善保管配置文件。
 
+配置默认保存在 `%APPDATA%\ProxyLane\ProxyLane.ini`，升级或更换程序目录都不会丢失，最近 3 份自动备份在同目录的 `backups` 子目录。程序目录下已有 `ProxyLane.ini` 或 `portable.flag` 时，配置保存在程序目录（便携模式）。
+
 ## 兼容性与界面语言
 
 - 主体代理功能兼容 Windows XP 至 Windows 11，提供 Win32 与 x64 组件。
@@ -176,7 +178,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 
 脚本检查主程序与 Hook DLL 的版本是否一致，生成 `dist/ProxyLane-版本-Windows.zip`，并输出 SHA-256。可用 `-OutputDirectory D:\releases` 指定输出目录。
 
-发行包包含双架构主程序和 Hook DLL、64 位安全传输与 MITM DLL、中英文 README，以及汇总第三方声明的 `LICENSE`。配置取自 `examples/ProxyLane.ini`，不会打包本机 `bin/ProxyLane.ini`；测试程序和命令行辅助工具不进入发行包。
+发行包包含双架构主程序和 Hook DLL、64 位安全传输与 MITM DLL、中英文 README，以及汇总第三方声明的 `LICENSE`。发行包不含配置文件，因此解压覆盖升级不会影响已有配置；测试程序和命令行辅助工具不进入发行包。
 
 ## 项目结构
 

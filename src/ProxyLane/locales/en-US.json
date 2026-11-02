@@ -303,6 +303,7 @@
   "workflow.steps": "1. Check the upstream proxy address or select direct mode\r\n\r\n2. Enable the profile\r\n\r\n3. Drop an app or choose an application to launch",
   "profile.name_required": "Enter a profile name first.",
   "profile.save_failed_title": "Cannot Save Profile",
+  "profile.save_write_failed": "The profile was not written to disk. The file may be read-only, or the current user may not have write permission. Your changes remain on screen; save again after resolving this.\n\nSettings file: %s",
   "profile.invalid_endpoint": "Check the upstream proxy address and port.",
   "profile.psk_required": "A PSK is required when gonc TLS-PSK encryption is selected.",
   "profile.secure_transport_unsupported": "gonc TLS-PSK supports SOCKS5, HTTP10, and HTTP11 only.",

@@ -147,7 +147,7 @@ python tests/MonitorTrafficE2ETests.py
 
 ### MITM 选项与连接生命周期
 
-- 界面中的 MITM 选项集中提供当前用户 CA 信任管理和目标服务器证书校验开关。默认严格校验；跳过选项保存在程序旁 `ProxyLane.ini` 的 `[options] MitmSkipUpstreamVerify=0/1`，启动时恢复，由新 TLS 会话快照，仍验证 TLS 握手签名和记录完整性。它不改变客户端对 ProxyLane CA 的信任要求。
+- 界面中的 MITM 选项集中提供当前用户 CA 信任管理和目标服务器证书校验开关。默认严格校验；跳过选项保存在 `ProxyLane.ini` 的 `[options] MitmSkipUpstreamVerify=0/1`，启动时恢复，由新 TLS 会话快照，仍验证 TLS 握手签名和记录完整性。它不改变客户端对 ProxyLane CA 的信任要求。
 - 开启解密或监视时，对本实例尚未接入相应采集的 TCP 连接提供断开、仅新连接、取消。任务管理器先标记快照，CA/监视准备成功后才提交；网络线程的任务定时器负责断开。新任务不继承标记，失败或取消清除快照。
 - 无载荷的 TCP/TLS 连接也发布连接状态。列表以首个实际请求/流替换连接占位记录并保留序号，不为后续关闭事件增加重复行。握手失败保留错误信息，载荷区留空。
 - DNS 列表显示查询域名，详情上方保留 DNS 服务器地址和端口。DoH GET 的 dns 参数与 POST/响应的 application/dns-message 正文使用现有 DNS 解析器；正文先通过原有缓存解压，再解析 DNS。DoH 保留 HTTP 状态、头与请求归属，HexView 仍显示头和实际载荷字节。HTTP/3 通过下述 QUIC 入口接入相同的缓存和 DoH 还原。
@@ -158,7 +158,7 @@ python tests/MonitorTrafficE2ETests.py
 
 ### MITM 选项与持久化
 
-GUI 的 MITM 选项新增九项参数，保存到程序旁 `ProxyLane.ini` 的 `[mitm]` 段。
+GUI 的 MITM 选项新增九项参数，保存到 `ProxyLane.ini` 的 `[mitm]` 段。
 同目录程序共用 ini，32 位 GUI 不应用 MITM 设置；每个已运行的 64 位实例保留自己的配置快照，不热重载其他实例的修改。
 
 | INI 键 | 默认值 | 范围 | 单位/含义 |

@@ -114,6 +114,8 @@ gonc -e ":s5s -u -http" -l -k -psk YOUR_PSK -tls 1083
 
 Replace `YOUR_PSK` with your own key. TLS 1.3 is supported with TLS 1.2 server compatibility. The PSK is stored as plaintext in `ProxyLane.ini`, so keep the configuration file secure.
 
+Settings live in `%APPDATA%\ProxyLane\ProxyLane.ini` by default, so upgrading or moving the program folder keeps them, and the latest 3 automatic backups sit in the `backups` folder next to it. If the program folder already contains `ProxyLane.ini` or `portable.flag`, settings stay in the program folder (portable mode).
+
 ## Compatibility and Interface Languages
 
 - Core proxy features support Windows XP through Windows 11, with Win32 and x64 components.
@@ -176,7 +178,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 
 The script checks that the application and Hook DLL versions match, creates `dist/ProxyLane-version-Windows.zip`, and reports its SHA-256. Use `-OutputDirectory D:\releases` to choose another output directory.
 
-The package includes both application architectures and Hook DLLs, the 64-bit secure-transport and MITM DLLs, both README files, and a `LICENSE` containing third-party notices. The configuration comes from `examples/ProxyLane.ini`, not your local `bin/ProxyLane.ini`. Test executables and command-line helpers are excluded.
+The package includes both application architectures and Hook DLLs, the 64-bit secure-transport and MITM DLLs, both README files, and a `LICENSE` containing third-party notices. The package contains no configuration file, so extracting an upgrade over an existing install leaves your settings untouched. Test executables and command-line helpers are excluded.
 
 ## Project Structure
 

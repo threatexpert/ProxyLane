@@ -38,7 +38,7 @@ public:
 	BOOL Load(CfgProxyItem& item) const;
 	int LoadAll(std::list<CfgProxyItem>& items, CString& lastSelectedName) const;
 	BOOL ListNames(std::vector<CString>& names) const;
-	void Save(CfgProxyItem& item);
+	BOOL Save(CfgProxyItem& item);
 	BOOL Delete(LPCTSTR name);
 	void SetLastSelected(LPCTSTR name);
 

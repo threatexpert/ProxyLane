@@ -21,6 +21,7 @@
     <ClCompile Include="..\..\..\src\ProxyLane\IniFile.cpp" />
     <ClCompile Include="..\..\..\src\ProxyLane\Base64.cpp" />
     <ClCompile Include="..\..\..\src\ProxyLane\Localization.cpp" />
+    <ClCompile Include="..\..\..\src\ProxyLane\ConfigLocation.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

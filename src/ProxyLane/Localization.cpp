@@ -1,18 +1,13 @@
 #include "stdafx.h"
 #include "ProxyLane.h"
 #include "Localization.h"
+#include "ConfigLocation.h"
 #include "resource.h"
 #include <stdarg.h>
 
 CString Localization::SettingsPath()
 	{
-		TCHAR path[MAX_PATH] = { 0 };
-		GetModuleFileName(NULL, path, _countof(path));
-		CString result(path);
-		if (result.Right(6).CompareNoCase(_T("64.exe")) == 0)
-			return result.Left(result.GetLength() - 6) + _T(".ini");
-		int dot = result.ReverseFind(_T('.'));
-		return (dot >= 0 ? result.Left(dot) : result) + _T(".ini");
+		return ConfigLocation::SettingsPath();
 	}
 
 namespace
