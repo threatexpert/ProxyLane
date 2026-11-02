@@ -5,6 +5,7 @@
 #include "Page3.h"
 #include "Page4.h"
 #include "Page5.h"
+#include "DashboardPage.h"
 #include "TrafficRateSampler.h"
 
 #define WM_PROXY_STATUS_CHANGED (WM_APP + 102)
@@ -20,10 +21,11 @@ class CMainTab : public CWnd
 public:
 	enum PageIndex
 	{
-		PAGE_APPLICATIONS = 0,
+		PAGE_DASHBOARD = 0,
 		PAGE_PROXY,
-		PAGE_LOG,
+		PAGE_APPLICATIONS,
 		PAGE_MONITOR,
+		PAGE_LOG,
 		PAGE_ABOUT,
 		PAGE_COUNT
 	};
@@ -49,6 +51,8 @@ public:
 	CPage3* GetPage3() { return &m_page3; }
 	CPage4* GetPage4() { return &m_page4; }
 	CPage5* GetPage5() { return &m_page5; }
+	CDashboardPage* GetDashboard() { return &m_dashboard; }
+	void ToggleTheme();
 
 	void AddLogText(int uFlag, LPCTSTR text);
 	void CopyText();
@@ -72,7 +76,13 @@ protected:
 	CPage3 m_page3;
 	CPage4 m_page4;
 	CPage5 m_page5;
+	CDashboardPage m_dashboard;
+	BOOL m_navigationCollapsed;
+	DashboardTraffic m_traffic;
+	ULONGLONG m_trafficBaseUpload;
+	ULONGLONG m_trafficBaseDownload;
 	CDialog* m_pages[PAGE_COUNT];
+	CSize m_laidOutSize[PAGE_COUNT];
 	CFont m_navigationFont;
 	CFont m_brandFont;
 	HICON m_brandIcon;

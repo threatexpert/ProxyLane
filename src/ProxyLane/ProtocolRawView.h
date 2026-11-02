@@ -60,14 +60,14 @@ public:
         if(append) {SetSel(from,from,TRUE);ReplaceSel(text.Mid(from),FALSE);}
         else {SETTEXTEX settings={ST_DEFAULT,1200};SendMessage(EM_SETTEXTEX,(WPARAM)&settings,(LPARAM)(LPCTSTR)text);}
         CHARFORMAT2 format={};format.cbSize=sizeof(format);format.dwMask=CFM_BACKCOLOR|CFM_COLOR;
-        format.crTextColor=UiTheme::TextPrimary();format.crBackColor=UiTheme::PageBackground();
+        format.crTextColor=UiTheme::TextPrimary();format.crBackColor=UiTheme::Surface();
         SetSel(from,text.GetLength(),TRUE);SendMessage(EM_SETCHARFORMAT,SCF_SELECTION,(LPARAM)&format);
         size_t visiblePacket=0;
         for(size_t i=0;i<ranges.size();++i) {
             const auto& range=ranges[i];
             const bool unchanged=append && i<m_ranges.size() && range.first==m_ranges[i].first && range.last==m_ranges[i].last;
             if(range.first==range.last) continue;
-            format.crBackColor=(visiblePacket++%2) ? RGB(218,232,248) : UiTheme::PageBackground();
+            format.crBackColor=(visiblePacket++%2) ? UiTheme::AccentSoft() : UiTheme::Surface();
             if(unchanged) continue;
             SetSel(range.first,range.last,TRUE);SendMessage(EM_SETCHARFORMAT,SCF_SELECTION,(LPARAM)&format);
         }

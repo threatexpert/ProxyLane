@@ -189,9 +189,15 @@ void CPage1::OnImportAllConfig()
     const CString title = Localization::Get(L"import.action");
     picker.m_ofn.lpstrTitle = title;
     if (picker.DoModal() != IDOK) return;
+    ImportConfigFromFile(picker.GetPathName());
+}
+
+void CPage1::ImportConfigFromFile(const CString& path)
+{
+    if (theApp.HasPendingConfigImport() || !CanImportAllConfig()) return;
     std::unique_ptr<ConfigImport::Pending> pending(new ConfigImport::Pending);
     CString error;
-    if (!pending->Prepare(picker.GetPathName(), error))
+    if (!pending->Prepare(path, error))
     {
         MessageBox(error, Localization::Get(L"import.title"), MB_OK | MB_ICONERROR);
         return;

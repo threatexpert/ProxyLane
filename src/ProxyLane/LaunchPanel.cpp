@@ -413,6 +413,10 @@ void CLaunchPanel::UpdateProfileLayout()
 	}
 	else
 	{
+		// Only as tall as one line, so it never pokes out above the card.
+		const int lineHeight = Scale(22);
+		summary.top = summary.CenterPoint().y - lineHeight / 2;
+		summary.bottom = summary.top + lineHeight;
 		MapWindowPoints(GetParent(), &summary);
 		m_profileLink.SetWindowPos(&wndTop, summary.left, summary.top, summary.Width(), summary.Height(),
 			SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -758,11 +762,11 @@ void CLaunchPanel::OnPaint()
 		const int boxSize = m_compact ? 28 : kIconBox;
 		const int boxTop = m_compact ? (kCompactHeaderHeight - boxSize) / 2 : 20;
 		CRect box(Scale(kPadding), Scale(boxTop), Scale(kPadding + boxSize), Scale(boxTop + boxSize));
-		UiTheme::FillRoundRect(dc.m_hDC, box, Scale(12), m_enabled ? UiTheme::AccentSoft() : RGB(238, 241, 245), CLR_NONE);
+		UiTheme::FillRoundRect(dc.m_hDC, box, Scale(12), m_enabled ? UiTheme::AccentSoft() : UiTheme::Inner(), CLR_NONE);
 		CRect glyph = box;
 		glyph.DeflateRect(Scale(m_compact ? 5 : 8), Scale(m_compact ? 5 : 8));
 		UiTheme::DrawGlyph(dc.m_hDC, UiTheme::GLYPH_PROXY_TOOL, glyph,
-			m_enabled ? UiTheme::Accent() : RGB(160, 166, 177), max(1.6f, Scale(2) * 0.9f));
+			m_enabled ? UiTheme::AccentText() : UiTheme::TextDisabled(), max(1.6f, Scale(2) * 0.9f));
 	}
 
 	// Header title and body.
@@ -832,7 +836,7 @@ void CLaunchPanel::OnPaint()
 			const BOOL hot = m_busyTile < 0 && i == m_hot;
 			const BOOL down = hot && i == m_pressed;
 			UiTheme::FillRoundRect(dc.m_hDC, tile, Scale(10),
-				down ? UiTheme::AccentSoft() : (hot ? RGB(243, 247, 254) : RGB(255, 255, 255)),
+				down ? UiTheme::AccentSoft() : (hot ? UiTheme::Hover() : UiTheme::Surface()),
 				hot ? UiTheme::AccentSoftBorder() : UiTheme::BorderSoft());
 
 			// Draw the shell's large icon at its own size; scaling makes it blurry.

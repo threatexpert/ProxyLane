@@ -20,11 +20,13 @@ struct AutomationOptions
 	AutomationOptions()
 		: enabled(FALSE)
 		, showHelp(FALSE)
+		, background(FALSE)
 	{
 	}
 
 	BOOL enabled;
 	BOOL showHelp;
+	BOOL background;
 	CString profileName;
 	CString targetPath;
 	std::vector<CString> targetArguments;

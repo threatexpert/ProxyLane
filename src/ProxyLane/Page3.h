@@ -228,6 +228,10 @@ private:
 	// Launch area: one-click recent apps and the main launch action.
 	CLaunchPanel m_launchPanel;
 	CModernButton m_processToggle;
+	CSoftEdit m_processSearch;
+	CToggleButton m_onlyHooked;
+	BOOL MatchesProcessFilter(const _myPROCESSINFO& info) const;
+	afx_msg void OnProcessFilterChanged();
 	CModernButton m_btnStopProxy;
 	BOOL m_processesExpanded;
 	std::vector<RecentApplications::Entry> m_recentEntries;
@@ -244,6 +248,9 @@ private:
 public:
 
 	void OnPageActivated();
+	const std::vector<RecentApplications::Entry>& RecentEntries() const { return m_recentEntries; }
+	void PickApplicationFromDashboard();
+	virtual COLORREF BackdropForChild(CWnd* child);
 	int UpdatePslist(BOOL bRefresh);
 	BOOL ProxyProcess(DWORD dwPid);
 	BOOL GetRunningHookedProcesses(std::vector<_myPROCESSINFO>& processes);

@@ -191,7 +191,7 @@ void CWindowFinderButton::DrawItem(LPDRAWITEMSTRUCT info)
 	const int arm = UiTheme::ScaleForWindow(m_hWnd, 9);
 	COLORREF color = IsWindowEnabled()
 		? (m_tracking || m_hot ? UiTheme::Accent() : UiTheme::TextPrimary())
-		: RGB(160, 166, 177);
+		: UiTheme::TextDisabled();
 	CPen pen(PS_SOLID, UiTheme::ScaleForWindow(m_hWnd, 1), color);
 	CPen* oldPen = dc.SelectObject(&pen);
 	CBrush* oldBrush = static_cast<CBrush*>(dc.SelectStockObject(NULL_BRUSH));
@@ -832,7 +832,6 @@ BOOL CPage3::OnInitDialog()
 	m_btnWindowFinder.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	m_btnRefresh.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	m_btnSelectApp.SetVisualStyle(CModernButton::STYLE_PRIMARY);
-	m_btnSelectApp.SetBackdropColor(UiTheme::Surface());
 	m_btnInject.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	m_btnTerminate.SetVisualStyle(CModernButton::STYLE_DANGER);
 	m_btnTerminate.EnableWindow(FALSE);
@@ -851,12 +850,16 @@ BOOL CPage3::OnInitDialog()
 		WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_STOP_PROXY_APP);
 	m_btnStopProxy.SetFont(&m_uiFont, FALSE);
 	m_btnStopProxy.SetVisualStyle(CModernButton::STYLE_SECONDARY);
-	m_btnStopProxy.SetBackdropColor(UiTheme::Surface());
 	if (m_launchPanel.Create(this, IDC_LAUNCH_PANEL))
 		m_launchPanel.SetWindowPos(&wndBottom, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 	SetTimer(TIMER_LAUNCH_PANEL, 500, NULL);
 	RefreshLaunchPanel();
-	SetProcessesExpanded(FALSE);
+	m_processSearch.Create(WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, CRect(), this, 0x2310);
+	m_processSearch.SetFont(&m_uiFont, FALSE);
+	m_processSearch.SendMessage(EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(static_cast<LPCTSTR>(Localization::Get(_T("page3.search")))));
+	m_onlyHooked.Create(Localization::Get(_T("page3.only_hooked")), WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, CRect(), this, 0x2311);
+	m_onlyHooked.SetFont(&m_uiFont, FALSE);
+	SetProcessesExpanded(TRUE);
 	if (m_windowFinderToolTip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX))
 	{
 		m_windowFinderToolTip.AddTool(
@@ -868,10 +871,10 @@ BOOL CPage3::OnInitDialog()
 	m_ListCtrl.ModifyStyle(LVS_SINGLESEL, 0);
 	m_ListCtrl.EnableSnapshotAccessibility();
 
-	m_ListCtrl.InsertColumn(0, _T("PID"), 0, 50);
-	m_ListCtrl.InsertColumn(1, Localization::Get(_T("page3.column_process")), 0, 180);
-	m_ListCtrl.InsertColumn(2, Localization::Get(_T("page3.column_started")), 0, 150);
-	m_ListCtrl.InsertColumn(3, Localization::Get(_T("page3.column_path")), 0, 200);
+	m_ListCtrl.InsertColumn(0, _T("PID"), 0, UiTheme::ScaleForWindow(m_hWnd, 64));
+	m_ListCtrl.InsertColumn(1, Localization::Get(_T("page3.column_process")), 0, UiTheme::ScaleForWindow(m_hWnd, 200));
+	m_ListCtrl.InsertColumn(2, Localization::Get(_T("page3.column_started")), 0, UiTheme::ScaleForWindow(m_hWnd, 150));
+	m_ListCtrl.InsertColumn(3, Localization::Get(_T("page3.column_path")), 0, UiTheme::ScaleForWindow(m_hWnd, 200));
 
 	DWORD dwStyle = m_ListCtrl.GetExtendedStyle();
 	dwStyle |= LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER;
@@ -1241,6 +1244,8 @@ BEGIN_MESSAGE_MAP(CPage3, CModernDialog)
 	ON_NOTIFY(LVN_COLUMNCLICK, IDC_PSLIST, &CPage3::OnLvnColumnClickProcessList)
 	ON_NOTIFY(NM_CUSTOMDRAW, IDC_PSLIST, &CPage3::OnNMCustomdrawProcessList)
 	ON_MESSAGE(WM_LAUNCH_PANEL_TILE, &CPage3::OnLaunchPanelTile)
+	ON_EN_CHANGE(0x2310, &CPage3::OnProcessFilterChanged)
+	ON_BN_CLICKED(0x2311, &CPage3::OnProcessFilterChanged)
 	ON_MESSAGE(WM_LAUNCH_PANEL_PROFILE, &CPage3::OnLaunchPanelProfile)
 	ON_BN_CLICKED(IDC_PROCESS_TOGGLE, &CPage3::OnBnClickedProcessToggle)
 	ON_BN_CLICKED(IDC_STOP_PROXY_APP, &CPage3::OnBnClickedStopProxy)
@@ -1319,10 +1324,19 @@ void CPage3::LayoutProcessPage()
 	const int terminateWidth = textWidth(m_btnTerminate, 90);
 	const int toolbarWidth = finderWidth + refreshWidth + injectWidth + terminateWidth + gap * 3;
 	const int headingWidth = textWidth(m_processToggle, 150);
-	const BOOL separateRow = rcClient.Width() - margin * 2 < toolbarWidth + headingWidth + gap;
+	const int searchWidth = UiTheme::ScaleForWindow(m_hWnd, 180);
+	const int onlyWidth = UiTheme::ScaleForWindow(m_hWnd, 124);
+	const BOOL separateRow = rcClient.Width() - margin * 2 < toolbarWidth + headingWidth + searchWidth + onlyWidth + gap * 3;
 
 	if (m_processToggle.GetSafeHwnd())
 		m_processToggle.MoveWindow(margin, top, headingWidth, buttonHeight);
+	if (m_processSearch.GetSafeHwnd())
+	{
+		m_processSearch.ShowWindow(m_processesExpanded ? SW_SHOW : SW_HIDE);
+		m_onlyHooked.ShowWindow(m_processesExpanded ? SW_SHOW : SW_HIDE);
+		m_processSearch.MoveWindow(margin + headingWidth + gap, top, searchWidth, buttonHeight);
+		m_onlyHooked.MoveWindow(margin + headingWidth + gap * 2 + searchWidth, top, onlyWidth, buttonHeight);
+	}
 	if (!m_processesExpanded)
 		return;
 	int left = separateRow ? margin : rcClient.right - margin - toolbarWidth;
@@ -1347,7 +1361,7 @@ void CPage3::LayoutProcessPage()
 	{
 		CRect rc(margin, listTop, rcClient.right - margin, max(listTop, rcClient.bottom - margin));
 		m_ListCtrl.MoveWindow(&rc);
-		int pathWidth = rc.Width() - UiTheme::ScaleForWindow(m_hWnd, 445);
+		int pathWidth = rc.Width() - UiTheme::ScaleForWindow(m_hWnd, 438);
 		if (pathWidth > UiTheme::ScaleForWindow(m_hWnd, 140)) m_ListCtrl.SetColumnWidth(3, pathWidth);
 	}
 }
@@ -1638,6 +1652,52 @@ LRESULT CPage3::OnRecentApplicationsChanged(WPARAM, LPARAM)
 {
 	ReloadRecentApplications(TRUE);
 	return 0;
+}
+
+BOOL CPage3::MatchesProcessFilter(const _myPROCESSINFO& info) const
+{
+	if (m_onlyHooked.GetSafeHwnd() && m_onlyHooked.SendMessage(BM_GETCHECK) == BST_CHECKED)
+	{
+		HookProcessIdentityInfo identity = { 0 };
+		if (!m_processRegistry || !m_processRegistry->Get(info.pid, info.hasStartTime ? info.startTimeValue : 0, &identity)
+			|| identity.hookState != PROCESS_HOOK_STATE_SUCCEEDED)
+			return FALSE;
+	}
+	if (!m_processSearch.GetSafeHwnd()) return TRUE;
+	CString query;
+	m_processSearch.GetWindowText(query);
+	query.Trim();
+	if (query.IsEmpty()) return TRUE;
+	query.MakeLower();
+	CString name(info.proname), path(info.propath), pid;
+	pid.Format(_T("%lu"), info.pid);
+	name.MakeLower();
+	path.MakeLower();
+	return name.Find(query) >= 0 || path.Find(query) >= 0 || pid.Find(query) >= 0;
+}
+
+void CPage3::OnProcessFilterChanged()
+{
+	UpdatePslist(TRUE);
+}
+
+COLORREF CPage3::BackdropForChild(CWnd* child)
+{
+	// Buttons placed on the launch panel follow its surface in either theme.
+	if (child && m_launchPanel.GetSafeHwnd() && m_launchPanel.IsWindowVisible())
+	{
+		CRect panel, rect;
+		m_launchPanel.GetWindowRect(&panel);
+		child->GetWindowRect(&rect);
+		if (child->m_hWnd != m_launchPanel.m_hWnd && panel.PtInRect(rect.CenterPoint()))
+			return UiTheme::Surface();
+	}
+	return CModernDialog::BackdropForChild(child);
+}
+
+void CPage3::PickApplicationFromDashboard()
+{
+	OnBnClickedSelectApp();
 }
 
 void CPage3::OnBnClickedSelectApp()
@@ -2573,6 +2633,8 @@ void CPage3::PollProcessList()
 	for (const auto& row : result->value) m_processSortData[row.pid] = row;
 	BuildProcessTree();
 	m_pendingProcessRows = m_processSortData;
+	for (auto it = m_pendingProcessRows.begin(); it != m_pendingProcessRows.end();)
+		it = MatchesProcessFilter(it->second) ? std::next(it) : m_pendingProcessRows.erase(it);
 	SetTimer(TIMER_PROCESS_RESULT, 16, NULL);
 	ApplyProcessBatch();
 }
@@ -3148,13 +3210,13 @@ void CPage3::OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result)
 		switch (identity.hookState)
 		{
 		case PROCESS_HOOK_STATE_SUCCEEDED:
-			customDraw->clrText = RGB(112, 48, 160);
+			customDraw->clrText = UiTheme::IsDark() ? RGB(196, 167, 255) : RGB(112, 48, 160);
 			break;
 		case PROCESS_HOOK_STATE_FAILED:
-			customDraw->clrText = RGB(200, 0, 0);
+			customDraw->clrText = UiTheme::Danger();
 			break;
 		case PROCESS_HOOK_STATE_PENDING:
-			customDraw->clrText = RGB(180, 110, 0);
+			customDraw->clrText = UiTheme::Warning();
 			break;
 		default:
 			break;
@@ -3183,11 +3245,11 @@ void CPage3::OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result)
 	const ULONGLONG unitsPerSecond = 10000000ULL;
 	ULONGLONG age = currentTime.QuadPart - process->second.startTimeValue;
 	if (age < 5 * unitsPerSecond)
-		customDraw->clrTextBk = RGB(255, 236, 179); // 刚刚出现：浅金黄色
+		customDraw->clrTextBk = UiTheme::IsDark() ? RGB(82, 66, 24) : RGB(255, 236, 179); // 刚刚出现：浅金黄色
 	else if (age < 10 * unitsPerSecond)
-		customDraw->clrTextBk = RGB(220, 243, 228); // 新进程：浅绿色
+		customDraw->clrTextBk = UiTheme::SuccessSoft(); // 新进程：浅绿色
 	else if (age < 20 * unitsPerSecond)
-		customDraw->clrTextBk = RGB(229, 240, 252); // 近期进程：浅蓝色
+		customDraw->clrTextBk = UiTheme::AccentSoft(); // 近期进程：浅蓝色
 
 	*result = CDRF_DODEFAULT;
 }

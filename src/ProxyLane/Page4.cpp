@@ -104,9 +104,9 @@ static CString MonitorStartError(const char* text)
 class CMitmSectionHeader : public CStatic {
     void DrawItem(LPDRAWITEMSTRUCT item) override {
         CDC dc;dc.Attach(item->hDC);CRect rect=item->rcItem;
-        dc.FillSolidRect(rect,RGB(239,244,250));
-        dc.FillSolidRect(rect.left,rect.top,UiTheme::ScaleForWindow(m_hWnd,3),rect.Height(),RGB(106,140,181));
-        dc.FillSolidRect(rect.left,rect.bottom-1,rect.Width(),1,RGB(205,216,230));
+        dc.FillSolidRect(rect,UiTheme::AccentSoft());
+        dc.FillSolidRect(rect.left,rect.top,UiTheme::ScaleForWindow(m_hWnd,3),rect.Height(),UiTheme::AccentText());
+        dc.FillSolidRect(rect.left,rect.bottom-1,rect.Width(),1,UiTheme::AccentSoftBorder());
         CFont* old=dc.SelectObject(GetFont());dc.SetBkMode(TRANSPARENT);dc.SetTextColor(UiTheme::TextPrimary());
         rect.DeflateRect(UiTheme::ScaleForWindow(m_hWnd,9),0);
         CString caption;GetWindowText(caption);dc.DrawText(caption,rect,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);
@@ -374,10 +374,10 @@ public:
     afx_msg HBRUSH OnCtlColor(CDC* dc, CWnd* wnd, UINT color) {
         HBRUSH brush=CModernDialog::OnCtlColor(dc,wnd,color);
         if(color==CTLCOLOR_STATIC && wnd && wnd->GetSafeHwnd()==m_quicUdpHint.GetSafeHwnd())
-            dc->SetTextColor(RGB(184,135,0));
+            dc->SetTextColor(UiTheme::Warning());
         if(color==CTLCOLOR_STATIC && wnd && wnd->GetDlgCtrlID()==IDC_MITM_STATUS &&
             !m_job && m_flags>=0 && !IsTrusted())
-            dc->SetTextColor(RGB(184,135,0)); // Dark yellow remains readable on white.
+            dc->SetTextColor(UiTheme::Warning()); // Dark yellow remains readable on white.
         return brush;
     }
     afx_msg void OnTimer(UINT_PTR id) {
@@ -501,7 +501,7 @@ void CPage4::LayoutControls(int cx, int cy)
         control->ShowWindow(offline?SW_HIDE:SW_SHOW);
     m_openRecording.ShowWindow(offline?SW_SHOW:SW_HIDE);
     m_recordingViewStatus.ShowWindow(offline || m_stopJob?SW_SHOW:SW_HIDE);
-    int monitorWidth=labelWidth(m_monitor,20),caWidth=labelWidth(m_options,16);
+    int monitorWidth=labelWidth(m_monitor,56),caWidth=labelWidth(m_options,16);
     int clearWidth=max(s(48),labelWidth(m_clear,16)),gap=s(10);
     m_monitor.MoveWindow(s(8), top, monitorWidth, h);
     m_clear.MoveWindow(cx - s(8) - clearWidth, top, clearWidth, h);

@@ -98,7 +98,7 @@ void CPage4::InitProtocolView() {
     CRect empty;
     m_openRecording.Create(Localization::Get(L"recording.view_close"),(child&~WS_VISIBLE)|BS_PUSHBUTTON,empty,this,IDC_ARCHIVE_OPEN);
     m_recordingViewStatus.Create(L"",WS_CHILD|WS_VISIBLE|SS_LEFTNOWORDWRAP|SS_ENDELLIPSIS,empty,this,IDC_ARCHIVE_STATUS);
-    m_requests.Create(child | WS_BORDER | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_SHAREIMAGELISTS, empty, this, IDC_PROTOCOL_REQUESTS);
+    m_requests.Create(child | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_SHAREIMAGELISTS, empty, this, IDC_PROTOCOL_REQUESTS);
     m_requests.SetExtendedStyle(LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP | LVS_EX_INFOTIP | LVS_EX_SUBITEMIMAGES);
     const int iconSize=UiTheme::ScaleForWindow(m_hWnd,16);
     if(m_processIcons.Create(iconSize,iconSize,ILC_COLOR32|ILC_MASK,1,8)) {
@@ -106,7 +106,7 @@ void CPage4::InitProtocolView() {
             m_requests.SetImageList(&m_processIcons,LVSIL_SMALL);
         else m_processIcons.DeleteImageList();
     }
-    m_requests.SetBkColor(UiTheme::PageBackground()); m_requests.SetTextBkColor(UiTheme::PageBackground());
+    UiTheme::ApplyListColors(m_requests.m_hWnd);
     const LPCTSTR columns[] = {L"#", L"protocol.process", L"PID", L"protocol.version", L"protocol.method", L"protocol.address", L"protocol.status", L"protocol.size"};
     for (int i = 0; i < _countof(columns); ++i)
         m_requests.InsertColumn(i, i == 0 || i == 2 ? columns[i] : Localization::Get(columns[i]), LVCFMT_LEFT, 80);
@@ -134,9 +134,9 @@ void CPage4::InitProtocolView() {
         m_detailTooltip.Activate(FALSE);
     }
     AfxInitRichEdit2();
-    m_detail.Create(child | WS_BORDER | ES_MULTILINE | ES_READONLY | ES_AUTOHSCROLL | WS_VSCROLL | WS_HSCROLL,
+    m_detail.Create(child | ES_MULTILINE | ES_READONLY | ES_AUTOHSCROLL | WS_VSCROLL | WS_HSCROLL,
         empty, this, IDC_PROTOCOL_DETAIL);
-    m_detail.SetBackgroundColor(FALSE,UiTheme::PageBackground());
+    m_detail.SetBackgroundColor(FALSE,UiTheme::Surface());
     m_detail.SetEventMask(m_detail.GetEventMask() | ENM_SELCHANGE);
     m_detail.SendMessage(EM_SETUNDOLIMIT,0);
     m_hexView.Create(this, IDC_PROTOCOL_HEX); m_hexView.SetFont(&m_font);
@@ -742,7 +742,7 @@ void CPage4::SetRecordingListMode(bool offline) {
     m_requests.DestroyWindow();
     m_requests.Create(offline?style|LVS_OWNERDATA:style&~LVS_OWNERDATA,bounds,this,IDC_PROTOCOL_REQUESTS);
     m_requests.SetExtendedStyle(extended);m_requests.SetFont(&m_uiFont);
-    m_requests.SetBkColor(UiTheme::PageBackground());m_requests.SetTextBkColor(UiTheme::PageBackground());
+    UiTheme::ApplyListColors(m_requests.m_hWnd);
     if(m_processIcons.GetSafeHandle()) m_requests.SetImageList(&m_processIcons,LVSIL_SMALL);
     for(int i=0;i<8;++i) m_requests.InsertColumn(i,titles[i],LVCFMT_LEFT,widths[i]);
     m_requests.SetColumnOrderArray(8,order);

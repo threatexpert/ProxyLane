@@ -186,7 +186,7 @@ protected:
 		GetClientRect(&rect);
 		dc.SetBkMode(TRANSPARENT);
 
-		const COLORREF fill = m_hot ? RGB(219, 234, 254) : UiTheme::AccentSoft();
+		const COLORREF fill = m_hot ? UiTheme::Hover() : UiTheme::AccentSoft();
 		const COLORREF border = m_hot ? UiTheme::AccentHover() : UiTheme::Accent();
 		CBrush backgroundBrush(fill);
 		CPen borderPen(PS_SOLID, UiTheme::ScaleForWindow(m_hWnd, m_hot ? 2 : 1), border);
@@ -520,6 +520,7 @@ void CProxyLaneDlg::DoDataExchange(CDataExchange* pDX)
 
 BEGIN_MESSAGE_MAP(CProxyLaneDlg, CModernDialog)
 	ON_WM_SYSCOMMAND()
+	ON_WM_WINDOWPOSCHANGING()
 	ON_WM_PAINT()
 	ON_WM_QUERYDRAGICON()
 	ON_MESSAGE(WM_SHELLICON_NOTIFY, OnShellIconNotify)
@@ -636,7 +637,15 @@ BOOL CProxyLaneDlg::OnInitDialog()
 	AddTaskbarIcons();
 	m_MainTab.FinalizeLayout(FALSE);
 	// The dialog is hidden while its child pages are initialized, so explicitly
-	// apply the normal dialog centering before its first visible frame.
+	// apply the normal size and centering before its first visible frame.
+	{
+		CRect workArea;
+		::SystemParametersInfo(SPI_GETWORKAREA, 0, &workArea, 0);
+		SetWindowPos(NULL, 0, 0,
+			min(UiTheme::ScaleForWindow(m_hWnd, 1100), workArea.Width()),
+			min(UiTheme::ScaleForWindow(m_hWnd, 720), workArea.Height()),
+			SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+	}
 	CenterWindow();
 	SetRedraw(TRUE);
 
@@ -647,9 +656,18 @@ BOOL CProxyLaneDlg::OnInitDialog()
 	}
 	else
 	{
-		ShowWindow(SW_SHOW);
+		if (theApp.GetAutomationOptions().background)
+		{
+			m_suppressInitialShow = TRUE;
+			ShowWindow(SW_HIDE);
+		}
+		else
+			ShowWindow(SW_SHOW);
 		RedrawWindow(NULL, NULL,
 			RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+		if (GetPrivateProfileInt(_T("options"), _T("AutoEnableProfile"), 0, Localization::SettingsPath()) == 1
+			&& !m_MainTab.GetPage1()->GetSelectedProfileName().IsEmpty())
+			m_MainTab.GetPage1()->StartProxy(FALSE);
 		PostMessage(WM_PRELOAD_APPLICATIONS);
 		// Also acknowledge a normal GUI restart after a complete INI import.
 		theApp.SignalAutomationReady();
@@ -904,6 +922,14 @@ LRESULT CProxyLaneDlg::OnProfileCommandRequest(WPARAM, LPARAM lParam)
 		SetEvent(request->completedEvent);
 	request->Release();
 	return 0;
+}
+
+void CProxyLaneDlg::OnWindowPosChanging(WINDOWPOS* position)
+{
+	// Stays hidden until the user opens it from the tray.
+	if (m_suppressInitialShow)
+		position->flags &= ~SWP_SHOWWINDOW;
+	CModernDialog::OnWindowPosChanging(position);
 }
 
 void CProxyLaneDlg::OnSysCommand(UINT nID, LPARAM lParam)
@@ -1191,6 +1217,7 @@ void CProxyLaneDlg::StartProxyFromTaskbarProfile(LPCTSTR profileName)
 
 void CProxyLaneDlg::ShowAndActivate()
 {
+	m_suppressInitialShow = FALSE;
 	ShowWindow(IsIconic() ? SW_RESTORE : SW_SHOW);
 
 	// Raise the window without leaving it permanently topmost.
@@ -1221,9 +1248,9 @@ void CProxyLaneDlg::OnGetMinMaxInfo(MINMAXINFO* minMaxInfo)
 {
 	CModernDialog::OnGetMinMaxInfo(minMaxInfo);
 	// English navigation is 34 logical pixels wider; keep the settings column visible.
-	const int minimumWidth = Localization::CurrentLanguage().CompareNoCase(_T("en-US")) == 0 ? 674 : 640;
+	const int minimumWidth = Localization::CurrentLanguage().CompareNoCase(_T("en-US")) == 0 ? 884 : 860;
 	minMaxInfo->ptMinTrackSize.x = UiTheme::ScaleForWindow(m_hWnd, minimumWidth);
-	minMaxInfo->ptMinTrackSize.y = UiTheme::ScaleForWindow(m_hWnd, 488);
+	minMaxInfo->ptMinTrackSize.y = UiTheme::ScaleForWindow(m_hWnd, 600);
 }
 
 BOOL CProxyLaneDlg::RegisterFileDropTarget(CWnd* window)

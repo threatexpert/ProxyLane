@@ -191,6 +191,10 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_BN_CLICKED(IDC_RADIO_TAB_BASIC, &CPage1::OnBnClickedTabBasic)
 	ON_BN_CLICKED(IDC_RADIO_TAB_CHILD, &CPage1::OnBnClickedTabChild)
 	ON_BN_CLICKED(IDC_RADIO_TAB_TARGET, &CPage1::OnBnClickedTabTarget)
+	ON_LBN_SELCHANGE(0x2301, &CPage1::OnProfileListSelect)
+	ON_BN_CLICKED(0x2302, &CPage1::OnNewProfile)
+	ON_BN_CLICKED(0x2303, &CPage1::OnPasteProfile)
+	ON_BN_CLICKED(0x2304, &CPage1::OnToggleAdvanced)
 	ON_MESSAGE(WM_RECENT_APPLICATIONS_CHANGED, &CPage1::OnRecentApplicationsChanged)
 	ON_WM_TIMER()
 END_MESSAGE_MAP()
@@ -219,6 +223,27 @@ BOOL CPage1::OnInitDialog()
 
 	g_ini.SetIniFileName(ConfigLocation::SettingsPath());
 
+	{
+		const DWORD child = WS_CHILD | WS_VISIBLE;
+		const DWORD button = child | WS_TABSTOP | BS_OWNERDRAW;
+		m_cardProfiles.Create(Localization::Get(_T("profile.list_title")), child | BS_GROUPBOX, CRect(), this, 0x2300);
+		m_cardProfiles.SetFont(&m_uiFont);
+		m_profileList.Create(child | WS_TABSTOP | WS_VSCROLL | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT, CRect(), this, 0x2301);
+		m_profileList.SetFont(&m_uiFont);
+		m_profileList.SetItemHeight(0, UiTheme::ScaleForWindow(m_hWnd, 42));
+		UiTheme::ApplyControlTheme(m_profileList.m_hWnd);
+		m_btnNewProfile.Create(Localization::Get(_T("profile.new")), button, CRect(), this, 0x2302);
+		m_btnNewProfile.SetFont(&m_uiFont);
+		m_btnNewProfile.SetVisualStyle(CModernButton::STYLE_GHOST);
+		m_btnPasteProfile.Create(Localization::Get(_T("profile.paste_code")), button, CRect(), this, 0x2303);
+		m_btnPasteProfile.SetFont(&m_uiFont);
+		m_btnPasteProfile.SetVisualStyle(CModernButton::STYLE_GHOST);
+		m_btnAdvanced.Create(_T(""), button, CRect(), this, 0x2304);
+		m_btnAdvanced.SetFont(&m_uiFont);
+		m_btnAdvanced.SetVisualStyle(CModernButton::STYLE_GHOST);
+		UpdateAdvancedCaption();
+	}
+
 	list<CfgProxyItem> cfgls;
 	CString lastSelectedName;
 	m_profileStore.LoadAll(cfgls, lastSelectedName);
@@ -242,6 +267,10 @@ BOOL CPage1::OnInitDialog()
 		}
 	}
 
+UiTheme::CreateUiFont(m_listNameFont, m_hWnd, 10, FW_BOLD);
+	UiTheme::CreateUiFont(m_listSummaryFont, m_hWnd, 8, FW_NORMAL);
+	m_profileList.m_nameFont = &m_listNameFont;
+	m_profileList.m_summaryFont = &m_listSummaryFont;
 	m_bHookLanIP = g_ini.GetInt(_T("options"), _T("HookLanIP"), 1);
 	m_bDisableLLMNR = g_ini.GetInt(_T("options"), _T("DisableLLMNR"), 1);
 	m_bDisableMDNS = g_ini.GetInt(_T("options"), _T("DisableMDNS"), 1);
@@ -260,6 +289,144 @@ BOOL CPage1::OnInitDialog()
 	}
 
 	return TRUE;
+}
+
+void CProfileListBox::MeasureItem(LPMEASUREITEMSTRUCT measure)
+{
+	measure->itemHeight = UiTheme::ScaleForWindow(m_hWnd, 42);
+}
+
+void CProfileListBox::DrawItem(LPDRAWITEMSTRUCT draw)
+{
+	CDC target;
+	target.Attach(draw->hDC);
+	CRect rect(draw->rcItem);
+	target.FillSolidRect(rect, UiTheme::Surface());
+	if (draw->itemID != static_cast<UINT>(-1) && static_cast<int>(draw->itemID) < GetCount())
+	{
+		const BOOL selected = (draw->itemState & ODS_SELECTED) != 0;
+		CRect pill = rect;
+		pill.DeflateRect(0, UiTheme::ScaleForWindow(m_hWnd, 1));
+		if (selected)
+			UiTheme::FillRoundRect(target.m_hDC, pill, UiTheme::ScaleForWindow(m_hWnd, 9), UiTheme::AccentSoft(), CLR_NONE);
+		CString name;
+		GetText(draw->itemID, name);
+		const CString summary = draw->itemID < m_summaries.size() ? m_summaries[draw->itemID] : CString();
+		const int pad = UiTheme::ScaleForWindow(m_hWnd, 8);
+		target.SetBkMode(TRANSPARENT);
+		CRect nameRect(rect.left + pad, rect.top + UiTheme::ScaleForWindow(m_hWnd, 3), rect.right - pad, rect.CenterPoint().y + UiTheme::ScaleForWindow(m_hWnd, 2));
+		CRect summaryRect(rect.left + pad, nameRect.bottom - UiTheme::ScaleForWindow(m_hWnd, 1), rect.right - pad, rect.bottom - UiTheme::ScaleForWindow(m_hWnd, 3));
+		CFont* oldFont = target.SelectObject(selected && m_nameFont ? m_nameFont : GetFont());
+		target.SetTextColor(UiTheme::TextPrimary());
+		target.DrawText(name, nameRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+		if (m_summaryFont) target.SelectObject(m_summaryFont);
+		target.SetTextColor(UiTheme::TextSecondary());
+		target.DrawText(summary, summaryRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+		target.SelectObject(oldFont);
+	}
+	target.Detach();
+}
+
+void CPage1::SyncProfileList()
+{
+	if (!m_profileList.GetSafeHwnd() || !m_cfgls.GetSafeHwnd())
+		return;
+	std::vector<CString> names, summaries;
+	CString key;
+	CString namesKey;
+	for (int i = 0; i < m_cfgls.GetCount(); ++i)
+	{
+		CString name;
+		m_cfgls.GetLBText(i, name);
+		namesKey += name + _T("\n");
+	}
+	// Typing marks the page dirty on every key; only a save, load or a changed
+	// list of names can change what the summaries say.
+	if (m_profileDirty && namesKey == m_profileNamesKey)
+	{
+		const int selected = m_profileList.FindStringExact(-1, GetCurrentProfileName());
+		if (m_profileList.GetCurSel() != selected)
+			m_profileList.SetCurSel(selected);
+		return;
+	}
+	m_profileNamesKey = namesKey;
+	for (int i = 0; i < m_cfgls.GetCount(); ++i)
+	{
+		CString name;
+		m_cfgls.GetLBText(i, name);
+		CfgProxyItem item;
+		item.strName = name;
+		CString summary;
+		if (m_profileStore.Load(item))
+		{
+			const CString type = (CString)item.pi.strProxyType;
+			if (type.CompareNoCase(_T("NOPROXY")) == 0)
+				summary = Localization::Get(_T("dashboard.direct"));
+			else
+				summary.Format(_T("%s \x00B7 %s:%d"), static_cast<LPCTSTR>(type), static_cast<LPCTSTR>((CString)item.pi.strProxyHost), item.pi.nProxyPort);
+		}
+		names.push_back(name);
+		summaries.push_back(summary);
+		key += name + _T("|") + summary + _T("\n");
+	}
+	const CString current = GetCurrentProfileName();
+	if (key != m_profileListKey)
+	{
+		m_profileListKey = key;
+		m_profileList.SetRedraw(FALSE);
+		m_profileList.ResetContent();
+		m_profileList.SetSummaries(summaries);
+		for (size_t i = 0; i < names.size(); ++i)
+			m_profileList.AddString(names[i]);
+		m_profileList.SetRedraw(TRUE);
+	}
+	const int selected = m_profileList.FindStringExact(-1, current);
+	if (m_profileList.GetCurSel() != selected)
+		m_profileList.SetCurSel(selected);
+	m_profileList.Invalidate(FALSE);
+}
+
+void CPage1::OnProfileListSelect()
+{
+	const int index = m_profileList.GetCurSel();
+	if (index >= 0)
+	{
+		CString name;
+		m_profileList.GetText(index, name);
+		SwitchProfile(name);
+	}
+	SyncProfileList();
+}
+
+void CPage1::OnNewProfile()
+{
+	if (!ConfirmDiscardUnsavedChanges())
+		return;
+	const CString base = Localization::Get(_T("profile.new_name"));
+	CString name = base;
+	for (int i = 2; m_cfgls.FindStringExact(-1, name) != CB_ERR; ++i)
+		name.Format(_T("%s %d"), static_cast<LPCTSTR>(base), i);
+	m_loadingProfile = TRUE;
+	m_cfgls.SetCurSel(-1);
+	m_cfgls.SetWindowText(name);
+	m_loadingProfile = FALSE;
+	m_draftProfileName = name;
+	m_loadedProfileName.Empty();
+	SetProfileDirty(TRUE);
+	SyncProfileList();
+	m_edit_HostName.SetFocus();
+}
+
+void CPage1::UpdateAdvancedCaption()
+{
+	m_btnAdvanced.SetWindowText(Localization::Get(m_advancedOpen ? _T("profile.advanced_hide") : _T("profile.advanced_show")));
+}
+
+void CPage1::OnToggleAdvanced()
+{
+	m_advancedOpen = !m_advancedOpen;
+	UpdateAdvancedCaption();
+	LayoutSettingsPage();
 }
 
 void CPage1::OnSize(UINT nType, int cx, int cy)
@@ -339,8 +506,9 @@ void CPage1::LayoutSettingsPage()
 	const int fieldH = S(26);
 	const int labelH = S(18);
 	const int rowStep = labelH + S(2) + fieldH + S(8);
-	const int contentW = min(client.Width() - margin * 2, S(780));
-	const int x0 = margin;
+	const int profileColumn = S(176);
+	const int x0 = margin + profileColumn + S(10);
+	const int contentW = max(S(420), client.Width() - x0 - margin);
 	const int innerX = x0 + pad;
 	const int innerW = contentW - pad * 2;
 	int y = S(64);
@@ -357,7 +525,7 @@ void CPage1::LayoutSettingsPage()
 		const int labelW = textWidth(IDC_STATIC_CONFIG_LABEL) + S(6);
 		const int menuX = x0 + contentW - menuW;
 		const int saveX = menuX - gap - saveW;
-		const int inlineLeft = x0 + S(228);
+		const int inlineLeft = margin + S(228);
 		// Decide on the width without the scroll bar, otherwise showing the bar
 		// can push this row down, which in turn keeps the bar visible.
 		const int barWidth = (GetStyle() & WS_VSCROLL) ? ::GetSystemMetrics(SM_CXVSCROLL) : 0;
@@ -369,22 +537,36 @@ void CPage1::LayoutSettingsPage()
 			title->GetWindowRect(&titleRect);
 			ScreenToClient(&titleRect);
 			const int titleRight = inlineProfile ? inlineLeft - S(12) : x0 + contentW;
-			place(IDC_STATIC_PAGE_TITLE, titleRect.left, S(4), max(0, titleRight - titleRect.left), S(36));
+			place(IDC_STATIC_PAGE_TITLE, margin, S(4), max(0, titleRight - margin), S(36));
 			if (CWnd* subtitle = GetDlgItem(IDC_STATIC_PAGE_SUBTITLE))
 			{
 				CRect subtitleRect;
 				subtitle->GetWindowRect(&subtitleRect);
 				ScreenToClient(&subtitleRect);
-				place(IDC_STATIC_PAGE_SUBTITLE, subtitleRect.left, S(38), subtitleRect.Width(), S(18));
+				place(IDC_STATIC_PAGE_SUBTITLE, margin, S(38), max(subtitleRect.Width(), S(420)), S(18));
 			}
 		}
-		const int left = inlineProfile ? inlineLeft : x0 + S(2);
+		const int left = inlineProfile ? inlineLeft : margin + S(2);
 		place(IDC_STATIC_CONFIG_LABEL, left, rowY + (fieldH - labelH) / 2, labelW, labelH);
 		const int comboX = left + labelW + S(8);
 		place(IDC_COMBO_CFGS, comboX, rowY, saveX - gap - comboX, S(260));
 		place(IDC_BUTTON_SAVE_PROFILE, saveX, rowY, saveW, fieldH);
 		place(IDC_BUTTON_PROFILE_MENU, menuX, rowY, menuW, fieldH);
 		y = inlineProfile ? S(62) : y + fieldH + S(12);
+	}
+
+	// Saved profiles down the left side.
+	{
+		const int top = y;
+		const int columnHeight = max(S(300), client.Height() - margin - top + m_scrollY);
+		const int inset = S(8);
+		const int buttonH = S(28);
+		place(0x2300, margin, top, profileColumn, columnHeight);
+		const int listTop = top + S(32);
+		const int listBottom = top + columnHeight - buttonH * 2 - S(16);
+		place(0x2301, margin + inset, listTop, profileColumn - inset * 2, max(S(60), listBottom - listTop));
+		place(0x2302, margin + inset, top + columnHeight - buttonH * 2 - S(10), profileColumn - inset * 2, buttonH);
+		place(0x2303, margin + inset, top + columnHeight - buttonH - S(8), profileColumn - inset * 2, buttonH);
 	}
 
 	// Proxy server card.
@@ -419,21 +601,32 @@ void CPage1::LayoutSettingsPage()
 		place(IDC_EDIT_PORT, innerX + typeW + hostW + gapX * 2, row + labelH + S(2), portW, fieldH);
 
 		row += rowStep;
-		const int half = (innerW - gapX) / 2;
-		place(IDC_STATIC_USER_LABEL, innerX, row, half, labelH);
-		place(IDC_EDIT_USER, innerX, row + labelH + S(2), half, fieldH);
-		place(IDC_STATIC_PASSWORD_LABEL, innerX + half + gapX, row, half, labelH);
-		place(IDC_EDIT_PASS, innerX + half + gapX, row + labelH + S(2), half, fieldH);
+		place(0x2304, innerX - S(4), row, S(180), S(26));
+		row += S(30);
+		const UINT advancedIds[] = { IDC_STATIC_USER_LABEL, IDC_EDIT_USER, IDC_STATIC_PASSWORD_LABEL, IDC_EDIT_PASS,
+			IDC_STATIC_TRANSPORT_LABEL, IDC_COMBO_TRANSPORT, IDC_STATIC_PSK_LABEL, IDC_EDIT_TRANSPORT_PSK };
+		for (int i = 0; i < _countof(advancedIds); ++i)
+			if (CWnd* control = GetDlgItem(advancedIds[i]))
+				control->ShowWindow(m_advancedOpen ? SW_SHOW : SW_HIDE);
+		if (m_advancedOpen)
+		{
+			const int half = (innerW - gapX) / 2;
+			place(IDC_STATIC_USER_LABEL, innerX, row, half, labelH);
+			place(IDC_EDIT_USER, innerX, row + labelH + S(2), half, fieldH);
+			place(IDC_STATIC_PASSWORD_LABEL, innerX + half + gapX, row, half, labelH);
+			place(IDC_EDIT_PASS, innerX + half + gapX, row + labelH + S(2), half, fieldH);
 
-		row += rowStep;
-		const int transportW = S(200);
-		const int pskW = innerW - transportW - gapX;
-		place(IDC_STATIC_TRANSPORT_LABEL, innerX, row, transportW, labelH);
-		place(IDC_COMBO_TRANSPORT, innerX, row + labelH + S(2), transportW, S(260));
-		place(IDC_STATIC_PSK_LABEL, innerX + transportW + gapX, row, pskW, labelH);
-		place(IDC_EDIT_TRANSPORT_PSK, innerX + transportW + gapX, row + labelH + S(2), pskW, fieldH);
+			row += rowStep;
+			const int transportW = S(200);
+			const int pskW = innerW - transportW - gapX;
+			place(IDC_STATIC_TRANSPORT_LABEL, innerX, row, transportW, labelH);
+			place(IDC_COMBO_TRANSPORT, innerX, row + labelH + S(2), transportW, S(260));
+			place(IDC_STATIC_PSK_LABEL, innerX + transportW + gapX, row, pskW, labelH);
+			place(IDC_EDIT_TRANSPORT_PSK, innerX + transportW + gapX, row + labelH + S(2), pskW, fieldH);
+			row += rowStep;
+		}
 
-		row += rowStep + S(2);
+		row += S(2);
 		const int buttonH = S(30);
 		const int testW = max(S(110), textWidth(IDC_TestProxy) + S(24));
 		const int startW = max(S(88), textWidth(IDOK) + S(24));
@@ -851,6 +1044,7 @@ void CPage1::GetSavedProfileNames(std::vector<CString>& names)
 void CPage1::SetProfileDirty(BOOL dirty)
 {
 	m_profileDirty = dirty;
+	SyncProfileList();
 	if (m_OK.GetSafeHwnd())
 		UpdateProxyStateUi();
 	else if (m_btnSaveProfile.GetSafeHwnd())
@@ -1275,8 +1469,60 @@ void CPage1::OnDestroy()
 }
 
 
+void CPage1::SwitchProfile(const CString& name)
+{
+	if (name.CompareNoCase(GetCurrentProfileName()) == 0 && !m_profileDirty)
+		return;
+	if (!ConfirmDiscardUnsavedChanges())
+		return;
+	if (!LoadProfileByName(name, TRUE))
+		return;
+	// A running proxy moves to the chosen profile for new connections.
+	if (m_proxyController.IsRunning())
+		ApplyRuntimeSettings();
+	if (g_MainTab)
+		g_MainTab->RefreshSidebarStatus();
+}
+
+void CPage1::QuickSetOption(UINT checkId, BOOL checked)
+{
+	const BOOL hadDraft = m_profileDirty;
+	CWnd* control = GetDlgItem(checkId);
+	if (!control)
+		return;
+	CheckDlgButton(checkId, checked ? BST_CHECKED : BST_UNCHECKED);
+	SendMessage(WM_COMMAND, MAKEWPARAM(checkId, BN_CLICKED), reinterpret_cast<LPARAM>(control->m_hWnd));
+	// An unrelated draft stays a draft; the user decides when to save that.
+	if (hadDraft)
+		return;
+	if (SaveCurrentProfile() && m_proxyController.IsRunning())
+		ApplyRuntimeSettings();
+}
+
+CString CPage1::GetUpstreamText()
+{
+	CString type, host, port;
+	m_cbProxyType.GetWindowText(type);
+	if (type.CompareNoCase(_T("NOPROXY")) == 0)
+		return Localization::Get(_T("dashboard.direct"));
+	m_edit_HostName.GetWindowText(host);
+	m_edit_Port.GetWindowText(port);
+	return host.IsEmpty() ? CString(_T("-")) : host + _T(":") + port;
+}
+
+CString CPage1::GetTestSummary()
+{
+	CString status;
+	m_staticTestProxy.GetWindowText(status);
+	if (m_testLatencyMs >= 0 && !m_bIsTesting)
+		return Localization::Format(_T("dashboard.latency"), m_testLatencyMs) + _T(" \x00B7 ") + status;
+	return status;
+}
+
 void CPage1::OnBnClickedTestproxy()
 {
+	m_testStartTick = GetTickCount();
+	m_testLatencyMs = -1;
 	// TODO: 在此添加控件通知处理程序代码
 	if (m_pTestProxy == NULL)
 	{
@@ -1521,6 +1767,8 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 			szText = Localization::Get(_T("status.connecting"));
 		}else if (nCode == connected)
 		{
+			if (m_testLatencyMs < 0)
+				m_testLatencyMs = static_cast<int>(GetTickCount() - m_testStartTick);
 			szText = Localization::Get(_T("status.negotiating"));
 		}else
 		{
@@ -1849,6 +2097,17 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_edit_HostName.SetWindowText(szHost);
 		m_edit_Port.SetWindowText(szPort);
 		m_edit_User.SetWindowText(szUser);
+		{
+			// Credentials open by themselves when the profile uses them.
+			CString usedPass = (CString)item->pi.strProxyPass;
+			const BOOL open = !szUser.IsEmpty() || !usedPass.IsEmpty() || item->nTransportMode != PROXY_TRANSPORT_PLAIN;
+			if (open != m_advancedOpen)
+			{
+				m_advancedOpen = open;
+				UpdateAdvancedCaption();
+				if (!m_inLayout) LayoutSettingsPage();
+			}
+		}
 		m_edit_Pass.SetWindowText(szPass);
 		m_cbTransport.SetCurSel(item->nTransportMode ==
 			PROXY_TRANSPORT_GONC_TLS_PSK ? PROXY_TRANSPORT_GONC_TLS_PSK :

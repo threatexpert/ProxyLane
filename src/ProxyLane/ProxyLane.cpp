@@ -8,6 +8,7 @@
 #include "AutomationOptions.h"
 #include "Localization.h"
 #include "ConfigLocation.h"
+#include "ModernUI.h"
 #include "AppVersion.h"
 #include "AppLauncher.h"
 
@@ -158,6 +159,7 @@ BOOL CProxyLaneApp::InitInstance()
 
 	CWinApp::InitInstance();
 	ConfigLocation::PrepareStorage();
+	UiTheme::Initialize();
 	Localization::Initialize();
 
 	AfxEnableControlContainer();

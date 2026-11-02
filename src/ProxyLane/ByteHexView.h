@@ -8,7 +8,7 @@ class CByteHexView : public CWnd {
     friend class ProtocolPageHarness;
 public:
     bool Create(CWnd* parent, UINT id) {
-        return CreateEx(WS_EX_CLIENTEDGE, AfxRegisterWndClass(CS_DBLCLKS, LoadCursor(NULL, IDC_IBEAM)),
+        return CreateEx(0, AfxRegisterWndClass(CS_DBLCLKS, LoadCursor(NULL, IDC_IBEAM)),
             L"", WS_CHILD | WS_TABSTOP | WS_VSCROLL | WS_HSCROLL, CRect(), parent, id) != FALSE;
     }
     void SetBytes(std::vector<unsigned char> bytes, bool preserve=false) {
@@ -147,7 +147,7 @@ private:
         if (b != d) InvalidateBytes(min(b, d) + 1, max(b, d));
     }
     void DrawBytes(CDC& dc, const CRect& dirty) {
-        dc.FillSolidRect(dirty, RGB(255,255,255));
+        dc.FillSolidRect(dirty, UiTheme::Surface());
         CFont* font = GetFont(); CFont* old = font ? dc.SelectObject(font) : nullptr;
         dc.SetBkMode(TRANSPARENT);
         const size_t first = min(m_first, m_last), last = max(m_first, m_last);
@@ -156,17 +156,17 @@ private:
             const auto& line=m_lines[row];
             int y = (row - m_top) * m_ch;
             if(m_packets) {
-                dc.FillSolidRect(dirty.left,y,dirty.Width(),m_ch,line.packet%2 ? RGB(218,232,248) : RGB(255,255,255));
-                if(line.offset==0 && row>0) dc.FillSolidRect(dirty.left,y,dirty.Width(),1,RGB(166,190,216));
+                dc.FillSolidRect(dirty.left,y,dirty.Width(),m_ch,line.packet%2 ? UiTheme::AccentSoft() : UiTheme::Surface());
+                if(line.offset==0 && row>0) dc.FillSolidRect(dirty.left,y,dirty.Width(),1,UiTheme::AccentSoftBorder());
             }
             CString address; address.Format(L"%08X",(unsigned)line.offset);
-            dc.SetTextColor(RGB(105,105,105)); dc.TextOut(0 - m_left, y, address);
+            dc.SetTextColor(UiTheme::TextSecondary()); dc.TextOut(0 - m_left, y, address);
             for (int b = 0; b < (int)line.count; ++b) {
                 size_t index = line.first + b;
                 bool selected = m_hasSelection && index >= first && index <= last;
                 const int hx = (10 + b * 3) * m_cw - m_left, ax = (60 + b) * m_cw - m_left;
                 if (selected) { dc.FillSolidRect(hx, y, m_cw * 2, m_ch, RGB(0,100,200)); dc.FillSolidRect(ax, y, m_cw, m_ch, RGB(0,100,200)); }
-                dc.SetTextColor(selected ? RGB(255,255,255) : RGB(20,20,20));
+                dc.SetTextColor(selected ? RGB(255,255,255) : UiTheme::TextPrimary());
                 CString hex; hex.Format(L"%02X", m_bytes[index]); dc.TextOut(hx, y, hex);
                 wchar_t c = m_bytes[index] >= 32 && m_bytes[index] < 127 ? m_bytes[index] : L'.'; dc.TextOut(ax, y, &c, 1);
             }

@@ -52,7 +52,7 @@ private:
 	CString SourceSummary(const InstalledApplications::Application& application) const;
 	CString LaunchText(const InstalledApplications::Application& application) const;
 	CString ItemDetails(const InstalledApplications::Application& application) const;
-	CEdit m_search;
+	CSoftEdit m_search;
 	CListCtrlEx m_list;
 	std::vector<ProcessListAccessibility::Row> m_visibleRows;
 	ULONGLONG m_rowGeneration = 0;

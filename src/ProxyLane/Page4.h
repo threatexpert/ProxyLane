@@ -82,10 +82,10 @@ private:
     void UpdateDetailTooltip();
     void RebuildRequests();
     bool CanFollowLatest();
-    CTabCtrl m_detailTabs, m_viewTabs;
-    CEdit m_filter;
-    CButton m_follow;
-    CComboBox m_protocolFilter;
+    CSoftTab m_detailTabs, m_viewTabs;
+    CSoftEdit m_filter;
+    CToggleButton m_follow;
+    CSoftCombo m_protocolFilter;
     CByteHexView m_hexView;
     double m_splitRatio = 0.42;
     bool m_dragging = false;
@@ -97,7 +97,7 @@ private:
     CToolTipCtrl m_detailTooltip;
     CString m_detailStatusText;
     std::shared_ptr<ProtocolPageData> m_protocol;
-    CButton m_monitor;
+    CToggleButton m_monitor;
     CModernButton m_clear, m_options;
     CStatic m_recordStatus;
     CFont m_font;

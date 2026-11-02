@@ -41,6 +41,8 @@ protected:
 	CNormalDropBanner* m_normalDropBanner;
 	UINT m_fileDragGeneration;
 	BOOL m_confirmingExit = FALSE;
+	// --background: swallow the one show that the modal loop does on its own.
+	BOOL m_suppressInitialShow = FALSE;
 
 
 	BOOL AddTaskbarIcons();
@@ -68,6 +70,7 @@ protected:
 	virtual BOOL OnInitDialog();
 	virtual void OnCancel();
 	afx_msg void OnSysCommand(UINT nID, LPARAM lParam);
+	afx_msg void OnWindowPosChanging(WINDOWPOS* position);
 	afx_msg void OnPaint();
 	afx_msg HCURSOR OnQueryDragIcon();
 	DECLARE_MESSAGE_MAP()

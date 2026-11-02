@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <afxwin.h>
+#include <vector>
 
 namespace UiTheme
 {
@@ -16,6 +17,29 @@ namespace UiTheme
 	COLORREF AccentSoftBorder();
 	COLORREF Surface();
 	COLORREF BorderSoft();
+	// Fields, inactive pills and other shapes that sit on a card.
+	COLORREF Inner();
+	COLORREF Hover();
+	COLORREF TextDisabled();
+	// Accent used for text and icons; Accent() itself is meant for fills.
+	COLORREF AccentText();
+	COLORREF Warning();
+	COLORREF WarningSoft();
+
+	// Fonts, DPI awareness and the saved theme. Call once before any window exists.
+	void Initialize();
+	BOOL IsDark();
+	void SetDark(BOOL dark);
+	// Dark caption bar on Windows versions that support it.
+	void ApplyWindowChrome(HWND hWnd);
+	// Dark scroll bars and headers for native lists and multi-line edits.
+	void ApplyControlTheme(HWND hWnd);
+	void ApplyListColors(HWND hWnd);
+	// Shared brush for a theme colour; owned by the theme, never delete it.
+	HBRUSH BrushFor(COLORREF color);
+	// What a control sits on: the card under it, otherwise the page.
+	COLORREF BackdropFor(CWnd* control);
+	COLORREF BackdropAmongCards(CWnd* parent, CWnd* control);
 
 	// Anti-aliased drawing (GDI+, available on Windows XP and later).
 	// fill/border may be CLR_NONE to skip that part. `radius` is in pixels.
@@ -34,18 +58,29 @@ namespace UiTheme
 		GLYPH_DROP,
 		GLYPH_PROXY_TOOL,
 		GLYPH_CHEVRON_DOWN,
-		GLYPH_CHEVRON_UP
+		GLYPH_CHEVRON_UP,
+		GLYPH_GLOBE,
+		GLYPH_TABLE,
+		GLYPH_MOON,
+		GLYPH_SIDEBAR,
+		GLYPH_ARROW_UP,
+		GLYPH_ARROW_DOWN,
+		GLYPH_CHECK,
+		GLYPH_MINUS,
+		GLYPH_PLAY
 	};
 	// Draws a line glyph centred in `box`; `strokePx` is the pen width in pixels.
 	void DrawGlyph(HDC dc, Glyph glyph, const CRect& box, COLORREF color, float strokePx);
+	void DrawFilledGlyph(HDC dc, Glyph glyph, const CRect& box, COLORREF color);
 	COLORREF Success();
 	COLORREF SuccessSoft();
 	COLORREF Danger();
 	COLORREF DangerSoft();
 
 	int ScaleForWindow(HWND hWnd, int value);
+	// A NULL face means the bundled UI font.
 	BOOL CreateUiFont(CFont& font, HWND hWnd, int pointSize,
-		int weight = FW_NORMAL, LPCTSTR faceName = _T("Segoe UI"));
+		int weight = FW_NORMAL, LPCTSTR faceName = NULL);
 	void ApplyFontToChildren(CWnd* parent, CFont* font);
 }
 
@@ -56,6 +91,11 @@ class CModernDialog : public CDialog
 public:
 	CModernDialog(UINT templateId, CWnd* parent = NULL);
 	virtual ~CModernDialog();
+	void AdoptNativeControls();
+	// What a child sits on; pages that paint their own cards override this.
+	virtual COLORREF BackdropForChild(CWnd* child);
+	// Card frames on this page, found once instead of on every paint.
+	std::vector<HWND> m_cards;
 
 protected:
 	virtual BOOL OnInitDialog();
@@ -85,12 +125,15 @@ public:
 	{
 		STYLE_SECONDARY,
 		STYLE_PRIMARY,
-		STYLE_DANGER
+		STYLE_DANGER,
+		STYLE_PILL,
+		STYLE_PILL_ACTIVE,
+		STYLE_GHOST
 	};
 
 	CModernButton();
 	void SetVisualStyle(VisualStyle style);
-	// Colour behind the rounded corners; defaults to the page background.
+	// Colour behind the rounded corners; follows the card or page by default.
 	void SetBackdropColor(COLORREF color);
 
 protected:
@@ -102,6 +145,41 @@ protected:
 	VisualStyle m_visualStyle;
 	COLORREF m_backdrop;
 	BOOL m_hot;
+
+	DECLARE_MESSAGE_MAP()
+};
+
+// Check boxes draw as switches and radio buttons as segmented pills. The check
+// state stays behind BM_GETCHECK/BM_SETCHECK, so callers keep using CButton's API.
+class CToggleButton : public CButton
+{
+	DECLARE_DYNAMIC(CToggleButton)
+
+public:
+	CToggleButton();
+
+protected:
+	virtual void PreSubclassWindow();
+	virtual void PostNcDestroy();
+	virtual void DrawItem(LPDRAWITEMSTRUCT drawItemStruct);
+	afx_msg LRESULT OnGetCheck(WPARAM, LPARAM);
+	afx_msg LRESULT OnSetCheck(WPARAM state, LPARAM);
+	afx_msg UINT OnGetDlgCode();
+	afx_msg BOOL OnClicked();
+	afx_msg void OnLButtonDblClk(UINT flags, CPoint point);
+	afx_msg void OnMouseMove(UINT flags, CPoint point);
+	afx_msg LRESULT OnMouseLeave(WPARAM, LPARAM);
+	afx_msg void OnTimer(UINT_PTR timer);
+
+	BOOL m_radio;
+	float m_knob;      // 0 = off, 1 = on; slides between the two.
+	DWORD m_animStart;
+	BOOL m_automatic;
+	BOOL m_autoDelete;
+	int m_check;
+	BOOL m_hot;
+
+	friend class CModernDialog;
 
 	DECLARE_MESSAGE_MAP()
 };
@@ -159,9 +237,41 @@ class CCardFrame : public CButton
 
 protected:
 	virtual void PreSubclassWindow();
+	virtual void PostNcDestroy();
 	virtual void DrawItem(LPDRAWITEMSTRUCT drawItemStruct);
 	afx_msg BOOL OnEraseBkgnd(CDC* dc);
 	afx_msg LRESULT OnNcHitTest(CPoint point);
+	afx_msg LRESULT OnSendToBack(WPARAM, LPARAM);
+
+	BOOL m_autoDelete = FALSE;
+	friend class CModernDialog;
+
+	DECLARE_MESSAGE_MAP()
+};
+
+// Tab strip drawn as pills. Selection and hit testing stay native.
+class CSoftTab : public CTabCtrl
+{
+	DECLARE_DYNAMIC(CSoftTab)
+
+protected:
+	virtual void PreSubclassWindow();
+	afx_msg void OnPaint();
+	afx_msg BOOL OnEraseBkgnd(CDC* dc);
+	afx_msg void OnSize(UINT type, int cx, int cy);
+
+	DECLARE_MESSAGE_MAP()
+};
+
+// List header painted to match the theme; sizing and clicks stay native.
+class CSoftHeader : public CHeaderCtrl
+{
+	DECLARE_DYNAMIC(CSoftHeader)
+
+protected:
+	virtual void PostNcDestroy();
+	afx_msg void OnPaint();
+	afx_msg BOOL OnEraseBkgnd(CDC* dc);
 
 	DECLARE_MESSAGE_MAP()
 };
@@ -174,6 +284,9 @@ class CSoftEdit : public CEdit
 
 protected:
 	virtual void PreSubclassWindow();
+	virtual void PostNcDestroy();
+	BOOL m_autoDelete = FALSE;
+	friend class CModernDialog;
 	afx_msg void OnNcCalcSize(BOOL calcValidRects, NCCALCSIZE_PARAMS* params);
 	afx_msg void OnNcPaint();
 	afx_msg void OnSetFocus(CWnd* oldWindow);

@@ -67,6 +67,8 @@ END
 IDR_MAINFRAME           ICON                    "res\\ProxyLane.ico"
 IDR_LANG_ZH_CN          RCDATA                  "locales\\zh-CN.json"
 IDR_LANG_EN_US          RCDATA                  "locales\\en-US.json"
+IDR_FONT_UI_REGULAR     RCDATA                  "..\\..\\third_party\\noto-sans-sc\\NotoSansSC-Subset-Regular.ttf"
+IDR_FONT_UI_BOLD        RCDATA                  "..\\..\\third_party\\noto-sans-sc\\NotoSansSC-Subset-Bold.ttf"
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -261,6 +263,12 @@ BEGIN
     CONTROL         "",IDC_MITM_SKIP_VERIFY,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,12,70,376,12
     LTEXT           "",IDC_MITM_SKIP_HINT,12,84,376,14,SS_NOPREFIX
     DEFPUSHBUTTON   "",IDOK,336,202,52,17
+END
+
+IDD_PageDashboard DIALOGEX 0, 0, 290, 230
+STYLE DS_SETFONT | WS_CHILD
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
 END
 
 IDD_Page5 DIALOGEX 0, 0, 290, 230

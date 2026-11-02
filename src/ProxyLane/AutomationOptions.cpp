@@ -73,6 +73,11 @@ BOOL ParseAutomationOptions(
 		{
 			targetArguments = TRUE;
 		}
+		else if (argument.CompareNoCase(_T("--background")) == 0)
+		{
+			// Sign-in start: stay in the tray until the user opens the window.
+			options.background = TRUE;
+		}
 		else if (argument.CompareNoCase(_T("--auto")) == 0)
 		{
 			if (options.enabled)

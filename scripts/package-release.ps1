@@ -38,7 +38,8 @@ $thirdPartyLicenses = @(
     @{ Name = 'TLS trust notices'; Source = (Join-Path $repositoryRoot 'third_party\tls-trust\NOTICE.txt') },
     @{ Name = 'webpki-root-certs'; Source = (Join-Path $repositoryRoot 'third_party\tls-trust\LICENSE-webpki-root-certs.txt') },
     @{ Name = 'rustls-platform-verifier'; Source = (Join-Path $repositoryRoot 'third_party\tls-trust\LICENSE-rustls-platform-verifier.txt') },
-    @{ Name = 'h3-quinn'; Source = (Join-Path $repositoryRoot 'third_party\h3-quinn\LICENSE') }
+    @{ Name = 'h3-quinn'; Source = (Join-Path $repositoryRoot 'third_party\h3-quinn\LICENSE') },
+    @{ Name = 'Noto Sans SC'; Source = (Join-Path $repositoryRoot 'third_party\noto-sans-sc\OFL.txt') }
 )
 foreach ($packageFile in @($packageFiles) + @(@{ Source = $projectLicense }) + @($thirdPartyLicenses)) {
     if (-not (Test-Path -LiteralPath $packageFile.Source -PathType Leaf)) {

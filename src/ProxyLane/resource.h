@@ -10,8 +10,11 @@
 #define IDD_Page4                       132
 #define IDD_Page5                       133
 #define IDD_APPLICATION_PICKER          134
+#define IDD_PageDashboard               136
 #define IDR_LANG_ZH_CN                  200
 #define IDR_LANG_EN_US                  201
+#define IDR_FONT_UI_REGULAR             203
+#define IDR_FONT_UI_BOLD                204
 #define IDC_EDIT1                       1000
 #define IDC_CB_PROXYTYPE                1001
 #define IDC_EDIT_PORT                   1002
@@ -123,7 +126,7 @@
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        203
+#define _APS_NEXT_RESOURCE_VALUE        205
 #define _APS_NEXT_COMMAND_VALUE         32771
 #define _APS_NEXT_CONTROL_VALUE         1114
 #define _APS_NEXT_SYMED_VALUE           101

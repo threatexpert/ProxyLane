@@ -27,14 +27,17 @@ namespace
 	}
 	const UiTheme::Glyph kNavigationGlyphs[] =
 	{
-		UiTheme::GLYPH_APPS, UiTheme::GLYPH_PROXY, UiTheme::GLYPH_LOG,
-		UiTheme::GLYPH_MONITOR, UiTheme::GLYPH_ABOUT
+		UiTheme::GLYPH_APPS, UiTheme::GLYPH_GLOBE, UiTheme::GLYPH_TABLE,
+		UiTheme::GLYPH_MONITOR, UiTheme::GLYPH_LOG, UiTheme::GLYPH_PROXY
 	};
 	LPCTSTR kNavigationKeys[] =
 	{
-		_T("nav.apps"), _T("nav.proxy"), _T("nav.log"),
-		_T("nav.monitor"), _T("nav.about")
+		_T("nav.dashboard"), _T("nav.proxy"), _T("nav.apps"),
+		_T("nav.monitor"), _T("nav.log"), _T("nav.about")
 	};
+	// Hit-test results beyond the page indexes.
+	const int kNavigationTheme = CMainTab::PAGE_COUNT;
+	const int kNavigationCollapse = CMainTab::PAGE_COUNT + 1;
 }
 
 CMainTab* g_MainTab = NULL;
@@ -47,7 +50,11 @@ CMainTab::CMainTab()
 	, m_attentionPage(-1)
 	, m_proxyRunning(FALSE)
 	, m_brandIcon(NULL)
+	, m_navigationCollapsed(FALSE)
+	, m_trafficBaseUpload(0)
+	, m_trafficBaseDownload(0)
 {
+	ZeroMemory(&m_traffic, sizeof(m_traffic));
 	ZeroMemory(m_pages, sizeof(m_pages));
 	g_MainTab = this;
 }
@@ -77,19 +84,20 @@ BOOL CMainTab::CreateTabCtrl(CWnd* parent)
 	}
 
 	UiTheme::CreateUiFont(m_navigationFont, m_hWnd, 10, FW_NORMAL);
-	UiTheme::CreateUiFont(m_brandFont, m_hWnd, 13, FW_BOLD, _T("Tahoma"));
-	m_brandIcon = static_cast<HICON>(::LoadImage(AfxGetResourceHandle(), MAKEINTRESOURCE(IDR_MAINFRAME),
-		IMAGE_ICON, UiTheme::ScaleForWindow(m_hWnd, 30), UiTheme::ScaleForWindow(m_hWnd, 30), LR_DEFAULTCOLOR));
+	UiTheme::CreateUiFont(m_brandFont, m_hWnd, 10, FW_BOLD);
+	m_navigationCollapsed = GetPrivateProfileInt(_T("options"), _T("NavCollapsed"), 0, Localization::SettingsPath()) == 1;
 
 	if (!m_page1.Create(IDD_Page1, this)
 		|| !m_page2.Create(IDD_Page2, this)
 		|| !m_page3.Create(IDD_Page3, this)
 		|| !m_page4.Create(IDD_Page4, this)
-		|| !m_page5.Create(IDD_Page5, this))
+		|| !m_page5.Create(IDD_Page5, this)
+		|| !m_dashboard.Create(IDD_PageDashboard, this))
 	{
 		return FALSE;
 	}
 
+	m_pages[PAGE_DASHBOARD] = &m_dashboard;
 	m_pages[PAGE_PROXY] = &m_page1;
 	m_page4.SetQuicUdpWarningProvider([this]() { return m_page1.QuicUdpWarning(); });
 	m_pages[PAGE_APPLICATIONS] = &m_page3;
@@ -101,11 +109,16 @@ BOOL CMainTab::CreateTabCtrl(CWnd* parent)
 	// have finished initialization. Showing page 0 here can expose a partially
 	// painted dialog when startup is slow.
 	for (int i = 0; i < PAGE_COUNT; ++i)
+	{
 		m_pages[i]->ShowWindow(SW_HIDE);
+		// Pages create more controls during their own initialization.
+		static_cast<CModernDialog*>(m_pages[i])->AdoptNativeControls();
+	}
 
 	CString stoppedText = Localization::Get(_T("status.proxy_stopped"));
+	// Kept for its accessible text and tooltip data; the dashboard shows this state now.
 	if (!m_sidebarStatus.Create(stoppedText,
-		WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
+		WS_CHILD | SS_OWNERDRAW,
 		CRect(0, 0, 0, 0), this, kSidebarStatusId))
 	{
 		return FALSE;
@@ -124,8 +137,8 @@ BOOL CMainTab::CreateTabCtrl(CWnd* parent)
 
 	if (m_page1.m_cfgls.GetCount() == 0)
 		m_currentPage = PAGE_PROXY;
-	if (m_currentPage == PAGE_APPLICATIONS)
-		m_page3.OnPageActivated();
+	// The dashboard lists recent applications, so they load at startup too.
+	m_page3.OnPageActivated();
 	FinalizeLayout(FALSE);
 	// Hide focus rectangles until the keyboard is used, like standard dialogs do.
 	if (CWnd* top = GetTopLevelParent())
@@ -149,27 +162,35 @@ END_MESSAGE_MAP()
 
 int CMainTab::NavigationWidth() const
 {
+	if (m_navigationCollapsed)
+		return UiTheme::ScaleForWindow(m_hWnd, 52);
 	const int width = Localization::CurrentLanguage().CompareNoCase(_T("en-US")) == 0
-		? 196 : 164;
+		? 184 : 160;
 	return UiTheme::ScaleForWindow(m_hWnd, width);
 }
 
 CRect CMainTab::NavigationItemRect(int index) const
 {
-	int margin = UiTheme::ScaleForWindow(m_hWnd, 10);
-	int top = UiTheme::ScaleForWindow(m_hWnd, 72);
-	int height = UiTheme::ScaleForWindow(m_hWnd, 40);
-	int gap = UiTheme::ScaleForWindow(m_hWnd, 4);
-	return CRect(
-		margin,
-		top + index * (height + gap),
-		NavigationWidth() - margin,
-		top + index * (height + gap) + height);
+	const int margin = UiTheme::ScaleForWindow(m_hWnd, 8);
+	const int height = UiTheme::ScaleForWindow(m_hWnd, 36);
+	const int gap = UiTheme::ScaleForWindow(m_hWnd, 3);
+	CRect client;
+	GetClientRect(&client);
+	int top;
+	if (index == kNavigationCollapse)
+		top = margin;
+	else if (index == PAGE_ABOUT)
+		top = client.bottom - margin - height;
+	else if (index == kNavigationTheme)
+		top = client.bottom - margin - height * 2 - gap;
+	else
+		top = UiTheme::ScaleForWindow(m_hWnd, 50) + index * (height + gap);
+	return CRect(margin, top, NavigationWidth() - margin, top + height);
 }
 
 int CMainTab::HitTestNavigation(CPoint point) const
 {
-	for (int i = 0; i < PAGE_COUNT; ++i)
+	for (int i = 0; i <= kNavigationCollapse; ++i)
 	{
 		if (NavigationItemRect(i).PtInRect(point))
 			return i;
@@ -194,66 +215,77 @@ void CMainTab::OnPaint()
 	CRect sidebar = client;
 	sidebar.right = NavigationWidth();
 	dc.FillSolidRect(sidebar, UiTheme::SidebarBackground());
-	dc.FillSolidRect(sidebar.right - 1, sidebar.top, 1, sidebar.Height(), UiTheme::Border());
 
 	dc.SetBkMode(TRANSPARENT);
 	dc.SetTextColor(UiTheme::TextPrimary());
 
-	// Brand: program icon, name and subtitle.
-	const int iconSize = UiTheme::ScaleForWindow(m_hWnd, 30);
-	const int brandLeft = UiTheme::ScaleForWindow(m_hWnd, 16);
-	const int brandTop = UiTheme::ScaleForWindow(m_hWnd, 16);
-	if (m_brandIcon)
-		::DrawIconEx(dc.m_hDC, brandLeft, brandTop, m_brandIcon, iconSize, iconSize, 0, NULL, DI_NORMAL);
-	const int textLeft = brandLeft + iconSize + UiTheme::ScaleForWindow(m_hWnd, 10);
-	CFont* oldFont = dc.SelectObject(&m_brandFont);
-	CRect brand(textLeft, UiTheme::ScaleForWindow(m_hWnd, 10),
-		NavigationWidth() - UiTheme::ScaleForWindow(m_hWnd, 10), UiTheme::ScaleForWindow(m_hWnd, 34));
-	dc.DrawText(_T("ProxyLane"), brand, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-
-	dc.SelectObject(&m_navigationFont);
-	dc.SetTextColor(UiTheme::TextSecondary());
-	CRect subtitle = brand;
-	subtitle.top = UiTheme::ScaleForWindow(m_hWnd, 32);
-	subtitle.bottom = UiTheme::ScaleForWindow(m_hWnd, 52);
-	CString subtitleText = Localization::Get(_T("nav.subtitle"));
-	dc.DrawText(subtitleText, subtitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-
-	for (int i = 0; i < PAGE_COUNT; ++i)
+	CFont* oldFont = dc.SelectObject(&m_navigationFont);
+	for (int i = 0; i <= kNavigationCollapse; ++i)
 	{
 		CRect item = NavigationItemRect(i);
+		const BOOL isPage = i < PAGE_COUNT;
 		BOOL selected = i == m_currentPage;
 		BOOL hot = i == m_hoverPage;
 		if (selected || hot)
 		{
 			UiTheme::FillRoundRect(dc.m_hDC, item, UiTheme::ScaleForWindow(m_hWnd, 9),
-				selected ? UiTheme::AccentSoft() : RGB(240, 243, 248), CLR_NONE);
+				selected ? UiTheme::Surface() : UiTheme::Hover(), CLR_NONE);
+		}
+		if (selected)
+		{
+			const int barInset = UiTheme::ScaleForWindow(m_hWnd, 10);
+			CRect bar(item.left, item.top + barInset, item.left + UiTheme::ScaleForWindow(m_hWnd, 3), item.bottom - barInset);
+			UiTheme::FillRoundRect(dc.m_hDC, bar, bar.Width(), UiTheme::Accent(), CLR_NONE);
+		}
+		if (!isPage)
+		{
+			const int size = UiTheme::ScaleForWindow(m_hWnd, 16);
+			const int left = m_navigationCollapsed ? item.CenterPoint().x - size / 2 : item.left + UiTheme::ScaleForWindow(m_hWnd, 12);
+			CRect box(left, item.CenterPoint().y - size / 2, left + size, item.CenterPoint().y - size / 2 + size);
+			UiTheme::DrawGlyph(dc.m_hDC, i == kNavigationTheme ? UiTheme::GLYPH_MOON : UiTheme::GLYPH_SIDEBAR, box,
+				UiTheme::TextSecondary(), max(1.4f, UiTheme::ScaleForWindow(m_hWnd, 3) / 2.0f));
+			if (i == kNavigationTheme && !m_navigationCollapsed)
+			{
+				CRect label = item;
+				label.left = box.right + UiTheme::ScaleForWindow(m_hWnd, 10);
+				dc.SetTextColor(UiTheme::TextSecondary());
+				const CString themeText = Localization::Get(UiTheme::IsDark() ? _T("nav.theme_light") : _T("nav.theme_dark"));
+				dc.DrawText(themeText, label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+			}
+			continue;
 		}
 
-		const COLORREF ink = selected ? UiTheme::Accent() : UiTheme::TextPrimary();
-		const int glyph = UiTheme::ScaleForWindow(m_hWnd, 18);
-		CRect glyphRect(item.left + UiTheme::ScaleForWindow(m_hWnd, 12), item.CenterPoint().y - glyph / 2,
-			item.left + UiTheme::ScaleForWindow(m_hWnd, 12) + glyph, item.CenterPoint().y - glyph / 2 + glyph);
-		UiTheme::DrawGlyph(dc.m_hDC, kNavigationGlyphs[i], glyphRect, selected ? ink : UiTheme::TextSecondary(),
+		const COLORREF ink = selected ? UiTheme::TextPrimary() : UiTheme::TextSecondary();
+		const int glyph = UiTheme::ScaleForWindow(m_hWnd, 16);
+		const int glyphLeft = m_navigationCollapsed ? item.CenterPoint().x - glyph / 2 : item.left + UiTheme::ScaleForWindow(m_hWnd, 12);
+		CRect glyphRect(glyphLeft, item.CenterPoint().y - glyph / 2,
+			glyphLeft + glyph, item.CenterPoint().y - glyph / 2 + glyph);
+		UiTheme::DrawGlyph(dc.m_hDC, kNavigationGlyphs[i], glyphRect, selected ? UiTheme::AccentText() : UiTheme::TextSecondary(),
 			max(1.4f, UiTheme::ScaleForWindow(m_hWnd, 3) / 2.0f));
 
-		CRect label = item;
-		label.left = glyphRect.right + UiTheme::ScaleForWindow(m_hWnd, 10);
-		label.right -= UiTheme::ScaleForWindow(m_hWnd, 22);
-		dc.SetTextColor(ink);
-		CString navigationText = Localization::Get(kNavigationKeys[i]);
-		dc.DrawText(navigationText, label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+		if (!m_navigationCollapsed)
+		{
+			CRect label = item;
+			label.left = glyphRect.right + UiTheme::ScaleForWindow(m_hWnd, 10);
+			label.right -= UiTheme::ScaleForWindow(m_hWnd, 22);
+			dc.SetTextColor(ink);
+			CString navigationText = Localization::Get(kNavigationKeys[i]);
+			CFont* navFont = selected ? dc.SelectObject(&m_brandFont) : NULL;
+			dc.DrawText(navigationText, label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+			if (navFont) dc.SelectObject(navFont);
+		}
 
 		const bool monitoring = i == PAGE_MONITOR && m_page4.IsMonitoring();
 		if (monitoring || (i == m_attentionPage && !selected))
 		{
 			const int dotSize = UiTheme::ScaleForWindow(m_hWnd, 7);
+			const int dotRight = m_navigationCollapsed ? UiTheme::ScaleForWindow(m_hWnd, 9) : UiTheme::ScaleForWindow(m_hWnd, 17);
 			CRect dot(
-				item.right - UiTheme::ScaleForWindow(m_hWnd, 17),
+				item.right - dotRight,
 				item.CenterPoint().y - dotSize / 2,
-				item.right - UiTheme::ScaleForWindow(m_hWnd, 17) + dotSize,
+				item.right - dotRight + dotSize,
 				item.CenterPoint().y - dotSize / 2 + dotSize);
-			const COLORREF dotColor = monitoring ? UiTheme::Success() : UiTheme::Accent();
+			const COLORREF dotColor = monitoring ? UiTheme::Success() : UiTheme::AccentText();
 			CBrush dotBrush(dotColor);
 			CPen dotPen(PS_SOLID, 1, dotColor);
 			CBrush* oldDotBrush = dc.SelectObject(&dotBrush);
@@ -370,6 +402,9 @@ void CMainTab::SelectPage(int pageIndex)
 	if (pageIndex < 0 || pageIndex >= PAGE_COUNT || pageIndex == m_currentPage)
 		return;
 
+	// Swap pages with drawing frozen and lay the new one out synchronously, so
+	// the switch paints once instead of flashing the old layout first.
+	SetRedraw(FALSE);
 	if (m_pages[m_currentPage])
 		m_pages[m_currentPage]->ShowWindow(SW_HIDE);
 	m_currentPage = pageIndex;
@@ -380,14 +415,20 @@ void CMainTab::SelectPage(int pageIndex)
 		m_pages[m_currentPage]->ShowWindow(SW_SHOW);
 		if (m_currentPage == PAGE_APPLICATIONS)
 			m_page3.OnPageActivated();
+		if (m_currentPage == PAGE_DASHBOARD)
+			m_dashboard.Refresh();
 		CRect pageClient;
 		m_pages[m_currentPage]->GetClientRect(&pageClient);
-		m_pages[m_currentPage]->PostMessage(WM_SIZE, SIZE_RESTORED,
-			MAKELPARAM(pageClient.Width(), pageClient.Height()));
-		m_pages[m_currentPage]->RedrawWindow(
-			NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+		// Re-laying out an unchanged size is the slow part of a switch; skip it.
+		if (m_laidOutSize[m_currentPage] != pageClient.Size())
+		{
+			m_laidOutSize[m_currentPage] = pageClient.Size();
+			m_pages[m_currentPage]->SendMessage(WM_SIZE, SIZE_RESTORED,
+				MAKELPARAM(pageClient.Width(), pageClient.Height()));
+		}
 	}
-	Invalidate(FALSE);
+	SetRedraw(TRUE);
+	RedrawWindow(NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
 }
 
 void CMainTab::SetPageAttention(int pageIndex, BOOL attention)
@@ -461,6 +502,7 @@ void CMainTab::SetRunningProfile(LPCTSTR profileName, BOOL running)
 
 		if (running)
 		{
+			if (!wasRunning) ZeroMemory(&m_traffic, sizeof(m_traffic));
 			UpdateTrafficRates(!wasRunning);
 			SetTimer(kTrafficRateTimer, 1000, NULL);
 		}
@@ -507,9 +549,20 @@ void CMainTab::UpdateTrafficRates(BOOL reset)
 	const DWORD now = GetTickCount();
 	double uploadRate = 0, downloadRate = 0;
 	if (reset)
+	{
 		m_trafficSampler.Reset(upload, download, now);
+		m_trafficBaseUpload = upload;
+		m_trafficBaseDownload = download;
+	}
 	else
 		m_trafficSampler.Sample(upload, download, now, uploadRate, downloadRate);
+	m_traffic.uploadRate = uploadRate;
+	m_traffic.downloadRate = downloadRate;
+	m_traffic.uploadPeak = max(m_traffic.uploadPeak, uploadRate);
+	m_traffic.downloadPeak = max(m_traffic.downloadPeak, downloadRate);
+	m_traffic.uploadTotal = upload >= m_trafficBaseUpload ? upload - m_trafficBaseUpload : 0;
+	m_traffic.downloadTotal = download >= m_trafficBaseDownload ? download - m_trafficBaseDownload : 0;
+	m_dashboard.SetTraffic(m_traffic);
 	m_sidebarStatus.SetTrafficRates(
 		CString(_T("\u2191 ")) + FormatTrafficRate(uploadRate),
 		CString(_T("\u2193 ")) + FormatTrafficRate(downloadRate));
@@ -518,8 +571,21 @@ void CMainTab::UpdateTrafficRates(BOOL reset)
 void CMainTab::OnLButtonDown(UINT flags, CPoint point)
 {
 	int page = HitTestNavigation(point);
-	if (page >= 0)
+	if (page == kNavigationTheme)
+	{
+		ToggleTheme();
+	}
+	else if (page == kNavigationCollapse)
+	{
+		m_navigationCollapsed = !m_navigationCollapsed;
+		WritePrivateProfileString(_T("options"), _T("NavCollapsed"), m_navigationCollapsed ? _T("1") : _T("0"), Localization::SettingsPath());
+		PositionWnd();
+		Invalidate(FALSE);
+	}
+	else if (page >= 0)
+	{
 		SelectPage(page);
+	}
 	CWnd::OnLButtonDown(flags, point);
 }
 
@@ -542,6 +608,16 @@ LRESULT CMainTab::OnMouseLeave(WPARAM, LPARAM)
 	m_hoverPage = -1;
 	Invalidate(FALSE);
 	return 0;
+}
+
+void CMainTab::ToggleTheme()
+{
+	UiTheme::SetDark(!UiTheme::IsDark());
+	CWnd* top = GetTopLevelParent();
+	if (top) UiTheme::ApplyWindowChrome(top->m_hWnd);
+	for (int i = 0; i < PAGE_COUNT; ++i)
+		if (m_pages[i]) static_cast<CModernDialog*>(m_pages[i])->AdoptNativeControls();
+	if (top) top->RedrawWindow(NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
 }
 
 void CMainTab::AddLogText(int, LPCTSTR text)
