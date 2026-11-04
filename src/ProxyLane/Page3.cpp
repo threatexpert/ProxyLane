@@ -850,7 +850,7 @@ BOOL CPage3::OnInitDialog()
 	m_btnStopProxy.Create(Localization::Get(_T("action.stop_proxy")),
 		WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_STOP_PROXY_APP);
 	m_btnStopProxy.SetFont(&m_uiFont, FALSE);
-	m_btnStopProxy.SetVisualStyle(CModernButton::STYLE_SECONDARY);
+	m_btnStopProxy.SetVisualStyle(CModernButton::STYLE_DANGER);
 	m_btnStopProxy.SetBackdropColor(UiTheme::Surface());
 	if (m_launchPanel.Create(this, IDC_LAUNCH_PANEL))
 		m_launchPanel.SetWindowPos(&wndBottom, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
