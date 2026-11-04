@@ -225,6 +225,12 @@ public:
 	// Optional GUI host capabilities; non-GUI/older hosts do not advertise them.
 	virtual BOOL GetAppLauncherHostInfo(AppLauncherHostInfo*) { return FALSE; }
 	virtual BOOL LaunchAppFromShell(const AppLauncherRequest&, AppLauncherResult&) { return FALSE; }
+	// Strings are borrowed for the duration of this callback, as above.
+	virtual void OnProxyFailure(const LPPRCClient client, LPCWSTR processName,
+		LPCWSTR target, BOOL connectingProxy, DWORD error, LPCWSTR detail)
+	{
+		OnConnectionFailure(client, processName, STAGE_CONNECT, error);
+	}
 };
 
 

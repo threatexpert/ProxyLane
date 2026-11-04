@@ -23,6 +23,8 @@ public:
 		LPCWSTR processName);
 	BOOL GetAppLauncherHostInfo(AppLauncherHostInfo* info);
 	BOOL LaunchAppFromShell(const AppLauncherRequest& request, AppLauncherResult& result);
+	void OnProxyFailure(const LPPRCClient client, LPCWSTR processName,
+		LPCWSTR target, BOOL connectingProxy, DWORD error, LPCWSTR detail);
 
 private:
 
@@ -37,3 +39,5 @@ void LogConnectionEvent(IProxyLog::ConnectionEvent event, const LPPRCClient clie
 void LogUdpFirstDatagram(CProxyReceptionCentre *receptionCentre,
 	const LPPRCClient lpC, const LPProxyInfo lpPI);
 void LogDnsRedirect(const LPPRCClient lpC, LPCWSTR processName);
+void LogProxyFailure(CProxyReceptionCentre* receptionCentre, const LPPRCClient client,
+	BOOL connectingProxy, int socketError, LPCSTR detail);

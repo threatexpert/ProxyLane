@@ -44,6 +44,8 @@ public:
 		ConnectionStage stage, DWORD error);
 	void OnConnectionEvent(ConnectionEvent event, const LPPRCClient client,
 		LPCWSTR processName);
+	void OnProxyFailure(const LPPRCClient client, LPCWSTR processName,
+		LPCWSTR target, BOOL connectingProxy, DWORD error, LPCWSTR detail);
 	void LogProcessEvent(DWORD processId, LPCTSTR processPath, LPCTSTR messageKey);
 
 public:

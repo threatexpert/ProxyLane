@@ -76,6 +76,19 @@ int main(int argc, char** argv) {
             page.DestroyWindow();parent.DestroyWindow();return 0;
         }
         if (!baseline) {
+            PRCClient timeoutClient = {};
+            timeoutClient.dwPid = 32012; timeoutClient.sType = SOCK_STREAM;
+            WCHAR timeoutTarget[] = L"example.test:22";
+            page.OnProxyFailure(&timeoutClient, L"curl.exe", timeoutTarget,
+                TRUE, WSAETIMEDOUT, NULL);
+            timeoutTarget[0] = L'X'; timeoutClient.dwPid = 0;
+            Drain(page);
+            CString timeoutLog = Contents(page);
+            Require(timeoutLog.Find(L"curl.exe (32012)") >= 0 &&
+                timeoutLog.Find(L"example.test:22") >= 0 && timeoutLog.Find(L"10060") >= 0 &&
+                timeoutLog.Find(Localization::Get(L"log.connection_timeout")) >= 0,
+                "localized timeout preserves borrowed PID and target in queued log");
+            page.ClearAll();
             Require(page.IsDlgButtonChecked(IDC_CHECK_LOADER_CAPTURE)==BST_UNCHECKED,"diagnostic capture defaults off");
             page.CheckDlgButton(IDC_CHECK_LOADER_CAPTURE,BST_CHECKED);
             page.OnBnClickedLoaderCapture();

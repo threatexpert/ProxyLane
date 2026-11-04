@@ -629,7 +629,8 @@ void CPRCTcpPeer::OnTimer()
 		{
 			if(m_TimeoutMonitor[TM_CONN].IsTimeout())
 			{
-				PrintText(_T("connect to the proxy is timeout.\r\n"));
+				LogProxyFailure(m_pNotify->m_pTaskmgr->m_pPRC, m_ppi.lpC,
+					TRUE, WSAETIMEDOUT, NULL);
 				ClearBuffer();
 				TriggerEvent(FD_CLOSE, WSAETIMEDOUT);
 				return;
@@ -693,11 +694,13 @@ PROXYERROR_CANTRESOLVEHOST 7
 			switch (nCode)
 			{
 			case PROXYERROR_NOCONN:
-				PrintText(_T("Connect to proxy failed.\r\n"));
+				LogProxyFailure(m_pNotify->m_pTaskmgr->m_pPRC, m_ppi.lpC,
+					TRUE, (int)wParam, NULL);
 				break;
 				/* fall through */
 			case PROXYERROR_REQUESTFAILED:
-				PrintText(_T("Proxy server failed to connect to the peer.\r\n"));
+				LogProxyFailure(m_pNotify->m_pTaskmgr->m_pPRC, m_ppi.lpC,
+					FALSE, (int)wParam, (LPCSTR)lParam);
 				break;
 			case PROXYERROR_AUTHREQUIRED:
 				PrintText(_T("Proxy Error: Authentication required.\r\n"));

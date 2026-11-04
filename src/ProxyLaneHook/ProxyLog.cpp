@@ -182,7 +182,7 @@ void LogUdpFirstDatagram(CProxyReceptionCentre *receptionCentre,
 	LogDnsRedirect(lpC, processName);
 }
 
-static CString FormatDnsEndpoint(const _SockAddr& address)
+static CString FormatLogEndpoint(const _SockAddr& address)
 {
 	TCHAR text[INET6_ADDRSTRLEN] = { 0 };
 	if (address.IsIPv6())
@@ -208,9 +208,52 @@ void LogDnsRedirect(const LPPRCClient lpC, LPCWSTR processName)
 {
 	if (!lpC || !lpC->HasProxyDestination())
 		return;
-	CString original = FormatDnsEndpoint(lpC->dstAddr);
-	CString effective = FormatDnsEndpoint(lpC->proxyDstAddr);
+	CString original = FormatLogEndpoint(lpC->dstAddr);
+	CString effective = FormatLogEndpoint(lpC->proxyDstAddr);
 	CString name(processName && processName[0] ? processName : L"Unknown");
 	PrintText(_T("[DNS] %s (%lu) \x00b7 %s \x2192 %s\r\n"),
 		(LPCTSTR)name, lpC->dwPid, (LPCTSTR)original, (LPCTSTR)effective);
+}
+
+void CProxyLog::OnProxyFailure(const LPPRCClient client, LPCWSTR processName,
+	LPCWSTR target, BOOL connectingProxy, DWORD error, LPCWSTR detail)
+{
+	for (IProxyLog* p = m_pNext; p; p = p->m_pNext)
+		p->OnProxyFailure(client, processName, target, connectingProxy, error, detail);
+}
+
+void LogProxyFailure(CProxyReceptionCentre* receptionCentre, const LPPRCClient client,
+	BOOL connectingProxy, int socketError, LPCSTR detail)
+{
+	if (!g_pProxyLog || !client)
+		return;
+	// Diagnostics must not change the error observed by the connection code.
+	const int savedError = WSAGetLastError();
+	WCHAR path[MAX_PATH] = {};
+	if (receptionCentre)
+		receptionCentre->GetProcessIdentity(client->dwPid, path, _countof(path));
+	path[_countof(path) - 1] = L'\0';
+	LPCWSTR name = wcsrchr(path, L'\\');
+	CString processName(name ? name + 1 : path);
+
+	// Match ConnectProxy: use the domain instead of a fake IP, unless routing
+	// selected an explicit upstream destination (for example DNS redirection).
+	CString target;
+	if (client->IsDNValid() && !client->HasProxyDestination())
+	{
+		CString host(CStringA(client->szDomainName,
+			(int)strnlen_s(client->szDomainName, sizeof(client->szDomainName))));
+		target.Format(_T("%s:%d"), (LPCTSTR)host, client->dstAddr.GetPort());
+	}
+	else
+		target = FormatLogEndpoint(client->GetProxyDestination());
+
+	// Callback strings are borrowed; copy only a bounded description before
+	// returning. Never include proxy credentials or entire HTTP headers.
+	CString description;
+	if (detail && detail[0])
+		description = CString(CStringA(detail, (int)strnlen_s(detail, 256)));
+	g_pProxyLog->OnProxyFailure(client, CStringW(processName), CStringW(target),
+		connectingProxy, (DWORD)socketError, CStringW(description));
+	WSASetLastError(savedError);
 }

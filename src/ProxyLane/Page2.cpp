@@ -539,6 +539,26 @@ void CPage2::OnConnectionFailure(const LPPRCClient client, LPCWSTR processName,
 		static_cast<LPCTSTR>(stageText), error));
 }
 
+void CPage2::OnProxyFailure(const LPPRCClient client, LPCWSTR processName,
+	LPCWSTR target, BOOL connectingProxy, DWORD error, LPCWSTR detail)
+{
+	if (!client) return;
+	CString name = LogProcessName(processName);
+	CString reason = Localization::Get(error == WSAETIMEDOUT ?
+		_T("log.connection_timeout") : connectingProxy ?
+		_T("log.proxy_connect_failed") : _T("log.proxy_request_failed"));
+	CString text = Localization::Format(_T("log.proxy_failure"),
+		(LPCTSTR)name, client->dwPid, target ? target : L"",
+		client->sType == SOCK_DGRAM ? _T("UDP") : _T("TCP"), (LPCTSTR)reason);
+	if (error)
+		text += Localization::Format(_T("log.error_code_suffix"), error);
+	if (detail && detail[0])
+		text += _T(" \x00b7 ") + CString(detail);
+	text.Replace(_T('\r'), _T(' '));
+	text.Replace(_T('\n'), _T(' '));
+	AddLogText(text + _T("\r\n"));
+}
+
 void CPage2::OnHookLogtext(LPHookLogtext log)
 {
 	CString str;

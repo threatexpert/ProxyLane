@@ -10,6 +10,7 @@
 #include <netioapi.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
 #include "../src/ProxyLaneHook/ProxyModule.h"
 
 static void Check(bool ok, const char* message)
@@ -44,6 +45,9 @@ public:
 	LONG failed = 0, direct = 0;
 	ConnectionStage failureStage = STAGE_ALLOCATE;
 	DWORD failureError = 0;
+	LONG proxyFailures = 0;
+	DWORD failurePid = 0;
+	std::wstring failureTarget;
 	void LogText(LPCWSTR) override {}
 	void LogNewProxyTask(const LPPRCClient) override {}
 	BOOL ShouldInjectNewProcess(LPHookNewProcessInfo) override { return TRUE; }
@@ -61,6 +65,14 @@ public:
 		failureError = error;
 		++failed;
 	}
+	void OnProxyFailure(const LPPRCClient client, LPCWSTR, LPCWSTR target,
+		BOOL, DWORD error, LPCWSTR) override
+	{
+		++proxyFailures;
+		failurePid = client->dwPid;
+		failureTarget = target;
+		failureError = error;
+	}
 };
 
 static void Write(HANDLE pipe, const void* data, DWORD size)
@@ -76,7 +88,7 @@ static void Read(HANDLE pipe, void* data, DWORD size)
 }
 
 static bool Run(int domain, DWORD transport, const TCHAR* type, const TCHAR* psk,
-	bool expectedFailure)
+	bool expectedFailure, int timeoutMode = 0)
 {
 	Settings settings;
 	ZeroMemory(&settings.info, sizeof(settings.info));
@@ -99,6 +111,12 @@ static bool Run(int domain, DWORD transport, const TCHAR* type, const TCHAR* psk
 		listen(listener, 1) == 0, "listen");
 	int len = sizeof(local);
 	Check(getsockname(listener, (sockaddr*)&local, &len) == 0, "listener address");
+	if (timeoutMode >= 2)
+	{
+		settings.info.strProxyType = timeoutMode == 2 ? TEXT("SOCKS5") : TEXT("HTTP11");
+		settings.info.strProxyHost = TEXT("127.0.0.1");
+		settings.info.nProxyPort = local.GetPort();
+	}
 	SOCKET client = socket(AF_INET, SOCK_STREAM, 0);
 	sockaddr_in source = {};
 	source.sin_family = AF_INET;
@@ -157,6 +175,7 @@ static bool Run(int domain, DWORD transport, const TCHAR* type, const TCHAR* psk
 	FD_SET(listener, &ready);
 	timeval timeout = { 2, 0 };
 	bool echo = false;
+	bool timedOut = false;
 	if (select(0, &ready, NULL, NULL, &timeout) > 0)
 	{
 		SOCKET accepted = accept(listener, NULL, NULL);
@@ -164,19 +183,59 @@ static bool Run(int domain, DWORD transport, const TCHAR* type, const TCHAR* psk
 		DWORD receiveTimeout = 2000;
 		setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (char*)&receiveTimeout, sizeof(receiveTimeout));
 		setsockopt(accepted, SOL_SOCKET, SO_RCVTIMEO, (char*)&receiveTimeout, sizeof(receiveTimeout));
+		if (timeoutMode == 3)
+		{
+			std::string request;
+			while (request.find("\r\n\r\n") == std::string::npos)
+			{
+				char buffer[512];
+				int count = recv(accepted, buffer, sizeof(buffer), 0);
+				Check(count > 0 && request.size() < 4096, "HTTP CONNECT request");
+				request.append(buffer, count);
+			}
+			Check(request.find("CONNECT localhost:") == 0, "HTTP CONNECT domain target");
+			const char reply[] = "HTTP/1.1 200 Connection established\r\n\r\n";
+			Check(send(accepted, reply, sizeof(reply) - 1, 0) == sizeof(reply) - 1,
+				"HTTP CONNECT success");
+		}
+		if (timeoutMode == 1 || timeoutMode == 3)
+		{
+			puts("Waiting 17s on an established, idle connection...");
+			Sleep(17000);
+		}
 		char value = 0;
-		echo = send(client, "x", 1, 0) == 1 && recv(accepted, &value, 1, 0) == 1 && value == 'x' &&
-			send(accepted, "y", 1, 0) == 1 && recv(client, &value, 1, 0) == 1 && value == 'y';
+		if (timeoutMode == 2)
+		{
+			// Accept TCP but never answer the SOCKS greeting: the real PRC
+			// connection deadline must close the client and report its target.
+			receiveTimeout = 22000;
+			setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (char*)&receiveTimeout, sizeof(receiveTimeout));
+			DWORD started = GetTickCount();
+			int result = recv(client, &value, 1, 0);
+			DWORD elapsed = GetTickCount() - started;
+			timedOut = (result == 0 || (result == SOCKET_ERROR && WSAGetLastError() == WSAECONNRESET)) &&
+				elapsed >= 14000 && elapsed < 21000;
+		}
+		else
+			echo = send(client, "x", 1, 0) == 1 && recv(accepted, &value, 1, 0) == 1 && value == 'x' &&
+				send(accepted, "y", 1, 0) == 1 && recv(client, &value, 1, 0) == 1 && value == 'y';
 		closesocket(accepted);
 	}
 	closesocket(client);
 	closesocket(listener);
 	Check(proxy->DisableProxy() != FALSE, "disable proxy");
 	// Disable joins the worker; only read callback state after it has stopped.
-	const bool passed = expectedFailure
+	wchar_t expectedTarget[80];
+	swprintf_s(expectedTarget, L"localhost:%d", local.GetPort());
+	const bool passed = timeoutMode == 2
+		? timedOut && log.proxyFailures == 1 && log.failureError == WSAETIMEDOUT &&
+			log.failurePid == GetCurrentProcessId() && log.failureTarget == expectedTarget
+		: expectedFailure
 		? !echo && log.failed == 1 && log.direct == 0 &&
 			log.failureStage == IProxyLog::STAGE_TRANSPORT && log.failureError == WSAEINVAL
-		: echo && log.failed == 0 && log.direct == 1;
+		: echo && log.failed == 0 && log.proxyFailures == 0 && log.direct == (timeoutMode == 3 ? 0 : 1);
+	if (timeoutMode) printf("%s timeout scenario %d, reports=%ld, target=%ls\n",
+		passed ? "PASS" : "FAIL", timeoutMode, log.proxyFailures, log.failureTarget.c_str());
 	printf("%s: %s transport=%lu type=%s echo=%d failures=%ld stage=%d error=%lu\n",
 		passed ? "PASS" : "FAIL", literalIPv6 ? "literal IPv6" : domain == 2 ? "fake IPv6 + hostname" : domain ? "fake IPv4 + hostname" : "IP",
 		transport, settings.info.strProxyType.szbuf, echo, log.failed, log.failureStage, log.failureError);
@@ -302,6 +361,9 @@ int main()
 	}
 	passed &= Run(true, PROXY_TRANSPORT_GONC_TLS_PSK, TEXT("HTTP11"), TEXT(""), true);
 	passed &= Run(true, PROXY_TRANSPORT_GONC_TLS_PSK, TEXT("SOCKS4"), TEXT("test-psk"), true);
+	passed &= Run(true, PROXY_TRANSPORT_PLAIN, TEXT(""), TEXT(""), false, 1);
+	passed &= Run(true, PROXY_TRANSPORT_PLAIN, TEXT(""), TEXT(""), false, 2);
+	passed &= Run(true, PROXY_TRANSPORT_PLAIN, TEXT(""), TEXT(""), false, 3);
 	WSACleanup();
 	return passed ? 0 : 1;
 }
