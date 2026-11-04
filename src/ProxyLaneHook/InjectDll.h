@@ -1,4 +1,4 @@
 #pragma once
 
 
-int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName);
+int InjectDll(HANDLE hProc, HANDLE hThread, LPCWSTR lpMyDll, LPCSTR lpszPipeName);

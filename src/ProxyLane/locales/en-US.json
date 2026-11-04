@@ -1,4 +1,13 @@
 {
+  "page2.loader_capture": "Capture loader diagnostics",
+  "page2.loader_capture_started": "Loader diagnostic capture enabled; it can capture load failure reports from some processes. DebugView and similar tools cannot share this capture channel.",
+  "page2.hook_failure": "[Hook initialization diagnostic] PID %lu | stage=%s | module=%s | API=%s | error %lu: %s",
+  "page2.loader_capture_stopped": "Loader diagnostic capture disabled.",
+  "page2.loader_capture_busy": "Cannot enable loader diagnostic capture: the channel is in use by DebugView, another PL instance, or another debug-output monitor. Stop that capture and retry.",
+  "page2.loader_capture_failed": "Cannot enable loader diagnostic capture; error %lu.",
+  "page2.loader_error_unknown": "System error description unavailable",
+  "page2.loader_failure": "[Loader diagnostic] PID %lu reported LoadLibraryW failure, error %lu: %s",
+  "page2.loader_capture_dropped": "Loader diagnostic queue was full; %u reports dropped.",
   "launch.edit_profile": "Edit current profile",
   "launch.profile_direct": "Direct (NOPROXY)",
   "page1.direct_group": "Direct Mode",

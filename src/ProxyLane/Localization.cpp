@@ -238,7 +238,8 @@ void Localization::ApplyDialog(CWnd* dialog, UINT dialogId)
 	};
 	static const ControlTranslation page2[] = {
 		{ IDC_STATIC_PAGE_TITLE, _T("page2.title") }, { IDC_STATIC_PAGE_SUBTITLE, _T("page2.subtitle") },
-		{ IDC_BTN_COPY_LOG, _T("action.copy_all") }, { IDC_BTN_CLEAR_LOG, _T("action.clear") }
+		{ IDC_BTN_COPY_LOG, _T("action.copy_all") }, { IDC_BTN_CLEAR_LOG, _T("action.clear") },
+		{ IDC_CHECK_LOADER_CAPTURE, _T("page2.loader_capture") }
 	};
 	static const ControlTranslation page3[] = {
 		{ IDC_STATIC_PAGE_TITLE, _T("page3.title") }, { IDC_STATIC_PAGE_SUBTITLE, _T("page3.subtitle") },

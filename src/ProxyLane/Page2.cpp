@@ -86,6 +86,7 @@ CPage2::CPage2(CWnd* pParent /*=NULL*/)
 
 CPage2::~CPage2()
 {
+	m_loaderCapture.Stop();
 }
 
 void CPage2::DoDataExchange(CDataExchange* pDX)
@@ -132,6 +133,7 @@ BEGIN_MESSAGE_MAP(CPage2, CModernDialog)
 	ON_MESSAGE(WM_PRINTLOGTEXT, OnPrintLogText)
 	ON_BN_CLICKED(IDC_BTN_COPY_LOG, &CPage2::OnBnClickedCopy)
 	ON_BN_CLICKED(IDC_BTN_CLEAR_LOG, &CPage2::OnBnClickedClear)
+	ON_BN_CLICKED(IDC_CHECK_LOADER_CAPTURE, &CPage2::OnBnClickedLoaderCapture)
 END_MESSAGE_MAP()
 
 
@@ -158,7 +160,21 @@ void CPage2::OnSize(UINT nType, int cx, int cy)
 	int buttonWidth = UiTheme::ScaleForWindow(m_hWnd, 78);
 	int buttonHeight = UiTheme::ScaleForWindow(m_hWnd, 30);
 	int buttonTop = UiTheme::ScaleForWindow(m_hWnd, 8);
-	const int toolbarLeft = rcClient.right - margin - buttonWidth * 2 - gap;
+	const int copyLeft = rcClient.right - margin - buttonWidth * 2 - gap;
+	int toolbarLeft = copyLeft;
+	if (CWnd* capture = GetDlgItem(IDC_CHECK_LOADER_CAPTURE))
+	{
+		CString label;
+		capture->GetWindowText(label);
+		CClientDC dc(capture);
+		CFont* font = capture->GetFont();
+		CFont* oldFont = font ? dc.SelectObject(font) : NULL;
+		const int width = max(UiTheme::ScaleForWindow(m_hWnd, 110),
+			dc.GetTextExtent(label).cx + UiTheme::ScaleForWindow(m_hWnd, 26));
+		if (oldFont) dc.SelectObject(oldFont);
+		toolbarLeft = copyLeft - gap - width;
+		capture->MoveWindow(toolbarLeft, buttonTop, width, buttonHeight);
+	}
 	if (CWnd* title = GetDlgItem(IDC_STATIC_PAGE_TITLE))
 	{
 		CRect titleRect;
@@ -214,6 +230,7 @@ void CPage2::ScheduleLogFlush()
 
 void CPage2::OnTimer(UINT_PTR timer)
 {
+	if (m_captureTimer && timer == m_captureTimer) { FlushLoaderDiagnostics(); return; }
 	if (m_logTimer && timer == m_logTimer)
 	{
 		KillTimer(m_logTimer);
@@ -226,6 +243,9 @@ void CPage2::OnTimer(UINT_PTR timer)
 
 void CPage2::OnDestroy()
 {
+	if (m_captureTimer) KillTimer(m_captureTimer);
+	m_captureTimer = 0;
+	m_loaderCapture.Stop();
 	if (m_logTimer) KillTimer(m_logTimer);
 	m_logTimer = 0;
 	CModernDialog::OnDestroy();
@@ -529,4 +549,54 @@ void CPage2::OnHookLogtext(LPHookLogtext log)
 	str.Format(_T("pid=%lu: %S\r\n"), log->dwProcessId, log->str);
 #endif
 	AddLogText(str);
+}
+
+void CPage2::OnBnClickedLoaderCapture()
+{
+    if (IsDlgButtonChecked(IDC_CHECK_LOADER_CAPTURE) != BST_CHECKED) {
+        if (m_captureTimer) KillTimer(m_captureTimer);
+        m_captureTimer = 0;
+        FlushLoaderDiagnostics();
+        m_loaderCapture.Stop();
+        LogText(Localization::Get(_T("page2.loader_capture_stopped")));
+        return;
+    }
+    DWORD error = m_loaderCapture.Start();
+    if (!error) {
+        m_captureTimer = SetTimer(2, LOG_REFRESH_MS, NULL);
+        if (!m_captureTimer) error = ERROR_NOT_ENOUGH_MEMORY;
+    }
+    if (error) {
+        m_loaderCapture.Stop();
+        CheckDlgButton(IDC_CHECK_LOADER_CAPTURE, BST_UNCHECKED);
+        LogText(error == ERROR_ALREADY_EXISTS ?
+            Localization::Get(_T("page2.loader_capture_busy")) :
+            Localization::Format(_T("page2.loader_capture_failed"), error));
+    } else {
+        LogText(Localization::Get(_T("page2.loader_capture_started")));
+    }
+}
+
+void CPage2::FlushLoaderDiagnostics()
+{
+    LoaderDiagnosticCapture::Record records[100];
+    unsigned dropped = 0;
+    unsigned count = m_loaderCapture.Drain(records, _countof(records), dropped);
+    for (unsigned i = 0; i < count; ++i) {
+        WCHAR description[512];
+        DWORD length = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+            NULL, records[i].error, 0, description, _countof(description), NULL);
+        CString detail = length ? CString(description) : Localization::Get(_T("page2.loader_error_unknown"));
+        detail.Trim();
+        if (records[i].hookFailure) {
+            CString stage(records[i].stage), module(records[i].module), api(records[i].api);
+            LogText(Localization::Format(_T("page2.hook_failure"), records[i].processId,
+                static_cast<LPCTSTR>(stage), static_cast<LPCTSTR>(module),
+                static_cast<LPCTSTR>(api), records[i].error, static_cast<LPCTSTR>(detail)));
+            continue;
+        }
+        LogText(Localization::Format(_T("page2.loader_failure"), records[i].processId,
+            records[i].error, static_cast<LPCTSTR>(detail)));
+    }
+    if (dropped) LogText(Localization::Format(_T("page2.loader_capture_dropped"), dropped));
 }

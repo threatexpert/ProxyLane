@@ -63,6 +63,7 @@ static DWORD WINAPI Serve(void*)
     if (log->dwProcessId != GetCurrentProcessId() || log->len < 2 ||
         log->len != static_cast<int>(header.dataSize - 8)) return 9;
     const WCHAR* detail = log->str;
+    if (wcsncmp(detail, L"[ProxyLane.Hook.v1] ", 20) != 0) return 10;
     WCHAR path[MAX_PATH] = {};
     GetModuleFileNameW(NULL, path, MAX_PATH);
     const WCHAR* name = wcsrchr(path, L'\\'); name = name ? name + 1 : path;

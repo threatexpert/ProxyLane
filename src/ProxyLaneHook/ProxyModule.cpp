@@ -271,12 +271,13 @@ static UINT get_arg(LPSTR lpszIn, LPCSTR lpszOpt, LPSTR lpszBuf, int size)
 DWORD WINAPI AttachToHandles(HANDLE hProcess, HANDLE hThread, LPCSTR szPipeName)
 {
 	DWORD dwExitCode = 0xf;
-	char myDllPath[MAX_PATH];
+	WCHAR myDllPath[MAX_PATH];
 
 	if (!hProcess || !hThread || !szPipeName || !szPipeName[0])
 		return dwExitCode;
 
-	if (!GetModuleFileNameA(g_hDllModule, myDllPath, MAX_PATH))
+	DWORD pathLength = GetModuleFileNameW(g_hDllModule, myDllPath, _countof(myDllPath));
+	if (!pathLength || pathLength >= _countof(myDllPath))
 		return dwExitCode;
 	myDllPath[MAX_PATH - 1] = '\0';
 
@@ -291,7 +292,7 @@ DWORD WINAPI AttachToI(DWORD dwPid, DWORD dwTid, LPCSTR szPipeName)
 	DWORD dwExitCode = 0xf;
 	HANDLE hProc = NULL;
 	HANDLE hThread = NULL;
-	char myDllPath[MAX_PATH];
+	WCHAR myDllPath[MAX_PATH];
 
 	HANDLE hRemoteThread = NULL;
 	PTHREAD_START_ROUTINE pfnThreadRtn = NULL;
@@ -305,7 +306,8 @@ DWORD WINAPI AttachToI(DWORD dwPid, DWORD dwTid, LPCSTR szPipeName)
 	memcpy(scspace + sizeof(scspace)-sizeof(sc_ret), sc_ret, sizeof(sc_ret));
 #endif
 
-	if (!GetModuleFileNameA(g_hDllModule, myDllPath, MAX_PATH))
+	DWORD pathLength = GetModuleFileNameW(g_hDllModule, myDllPath, _countof(myDllPath));
+	if (!pathLength || pathLength >= _countof(myDllPath))
 		return dwExitCode;
 	myDllPath[MAX_PATH - 1] = '\0';
 

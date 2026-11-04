@@ -3,8 +3,8 @@
 
 typedef HMODULE
 WINAPI
-_Def_LoadLibraryA(
-				  LPCSTR lpLibFileName
+_Def_LoadLibraryW(
+				  LPCWSTR lpLibFileName
 				  );
 
 typedef
@@ -17,7 +17,7 @@ typedef DWORD WINAPI _Def_Onload(LPVOID p);
 
 struct myapi
 {
-	_Def_LoadLibraryA* LoadLibraryA;
+	_Def_LoadLibraryW* LoadLibraryW;
 	_Def_GetProcAddress* GetProcAddress;
 	_Def_Sleep* Sleep;
 	_Def_SetEvent* SetEvent;
@@ -25,11 +25,15 @@ struct myapi
 
 	HANDLE hEvent;
 	DWORD status;
-	CHAR szMyDll[MAX_PATH];
+	WCHAR szMyDll[MAX_PATH];
 	CHAR szMyEntry[64];
 	void *EntryParam;
 	bool noSleep;
 	DWORD_PTR retval;
+    DWORD (WINAPI *GetLastError)();
+    DWORD (WINAPI *FormatMessageA)(DWORD, LPCVOID, DWORD, DWORD, LPSTR, DWORD, va_list*);
+    VOID (WINAPI *OutputDebugStringA)(LPCSTR);
+    CHAR loadFailureFormat[96];
 };
 
 DWORD_PTR WINAPI remoteCode(LPVOID lParam);

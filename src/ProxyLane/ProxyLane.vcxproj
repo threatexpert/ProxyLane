@@ -302,6 +302,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     <ClInclude Include="ProfileShareCodec.h" />
     <ClInclude Include="ConfigImport.h" />
     <ClInclude Include="Page2.h" />
+    <ClInclude Include="LoaderDiagnosticCapture.h" />
     <ClInclude Include="Page3.h" />
     <ClInclude Include="MitmSettings.h" />
     <ClInclude Include="RecordingSettings.h" />

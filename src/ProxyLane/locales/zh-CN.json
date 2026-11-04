@@ -1,4 +1,13 @@
 {
+  "page2.loader_capture": "加载诊断捕获",
+  "page2.loader_capture_started": "已开启加载诊断捕获，可捕获有些进程加载失败的报告。DebugView 等工具不能同时占用此捕获通道。",
+  "page2.hook_failure": "[Hook 初始化诊断] PID %lu · 阶段=%s · 模块=%s · API=%s · 错误码 %lu：%s",
+  "page2.loader_capture_stopped": "已关闭加载诊断捕获。",
+  "page2.loader_capture_busy": "无法开启加载诊断捕获：通道已被 DebugView、其他 PL 实例或调试输出工具占用，请关闭其捕获后重试。",
+  "page2.loader_capture_failed": "无法开启加载诊断捕获，错误码 %lu。",
+  "page2.loader_error_unknown": "无法取得系统错误说明",
+  "page2.loader_failure": "[加载诊断] PID %lu 报告 LoadLibraryW 失败，错误码 %lu：%s",
+  "page2.loader_capture_dropped": "加载诊断队列已满，丢弃 %u 条报告。",
   "launch.edit_profile": "修改当前配置",
   "launch.profile_direct": "直连（NOPROXY）",
   "page1.direct_group": "直连模式",

@@ -58,7 +58,7 @@ Detours 源码位于 `third_party/detours`，固定到 Microsoft 上游提交
 
 ### Hook 安装失败诊断
 
-安装失败时，Hook DLL 通过既有 `PRCPD_Logtext` 上报一条 `[Hook failure]`
+安装失败时，Hook DLL 通过既有 `PRCPD_Logtext` 上报一条 `[ProxyLane.Hook.v1]`
 详情，并通过既有 `PRCPD_HOOKWSOCK_RESULT` 上报原始错误码。没有改变管道结构，
 旧主程序也能显示详情；旧 Hook DLL 不会因此自动获得详细诊断。
 

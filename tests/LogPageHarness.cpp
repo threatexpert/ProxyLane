@@ -56,7 +56,7 @@ static void Drain(CPage2& page) {
     Pump(150);
 }
 CWinApp testApplication;
-int main(int argc, char**) {
+int main(int argc, char** argv) {
     try {
         const bool baseline=argc>1;
         Require(AfxWinInit(GetModuleHandle(nullptr),nullptr,GetCommandLine(),0)!=FALSE,"MFC init");
@@ -67,6 +67,40 @@ int main(int argc, char**) {
             CRect(20,20,1000,740),nullptr,0)!=FALSE,"parent");
         MeasuredPage page;Require(page.Create(IDD_Page2,&parent)!=FALSE,"log page");
         page.MoveWindow(0,0,960,660);page.ShowWindow(SW_SHOW);parent.ShowWindow(SW_SHOWNOACTIVATE);
+        if (argc > 1 && !strcmp(argv[1], "--preview")) {
+            page.CheckDlgButton(IDC_CHECK_LOADER_CAPTURE,BST_CHECKED);
+            page.OnBnClickedLoaderCapture();
+            OutputDebugStringA("[ProxyLane.Loader.v1] stage=LoadLibraryW error=0000007E\n");
+            OutputDebugStringW(L"[ProxyLane.Hook.v1] fixture.exe (1) | stage=connect-control-pipe | module=kernel32.dll | API=CreateFile/WaitNamedPipe | error=5 (0x00000005) | Access denied");
+            Pump(45000);
+            page.DestroyWindow();parent.DestroyWindow();return 0;
+        }
+        if (!baseline) {
+            Require(page.IsDlgButtonChecked(IDC_CHECK_LOADER_CAPTURE)==BST_UNCHECKED,"diagnostic capture defaults off");
+            page.CheckDlgButton(IDC_CHECK_LOADER_CAPTURE,BST_CHECKED);
+            page.OnBnClickedLoaderCapture();
+            Require(page.IsDlgButtonChecked(IDC_CHECK_LOADER_CAPTURE)==BST_CHECKED,"diagnostic capture starts");
+            OutputDebugStringA("[ProxyLane.Loader.v1] stage=LoadLibraryW error=0000007E\n");
+            Pump(400);Drain(page);
+            Require(Contents(page).Find(L"126")>=0 && Contents(page).Find(L"LoadLibraryW")>=0,"diagnostic reaches real log edit");
+            OutputDebugStringW(L"[ProxyLane.Hook.v1] fixture.exe (1) | stage=connect-control-pipe | module=kernel32.dll | API=CreateFile/WaitNamedPipe | error=5 (0x00000005) | Access denied");
+            Pump(400);Drain(page);
+            Require(Contents(page).Find(L"connect-control-pipe")>=0 && Contents(page).Find(L"CreateFile/WaitNamedPipe")>=0,"Hook initialization failure reaches real log edit");
+            CRect checkbox,edit,copy;
+            page.GetDlgItem(IDC_CHECK_LOADER_CAPTURE)->GetWindowRect(&checkbox);
+            page.m_Edit.GetWindowRect(&edit);
+            page.GetDlgItem(IDC_BTN_COPY_LOG)->GetWindowRect(&copy);
+            Require(checkbox.bottom<=edit.top,"capture control does not overlap log");
+            Require(checkbox.right<copy.left && checkbox.top==copy.top,"capture control is left of copy in toolbar");
+            page.CheckDlgButton(IDC_CHECK_LOADER_CAPTURE,BST_UNCHECKED);
+            page.OnBnClickedLoaderCapture();Drain(page);page.ClearAll();
+            LoaderDiagnosticCapture occupied;
+            Require(occupied.Start()==ERROR_SUCCESS,"test owns diagnostic channel");
+            page.CheckDlgButton(IDC_CHECK_LOADER_CAPTURE,BST_CHECKED);
+            page.OnBnClickedLoaderCapture();
+            Require(page.IsDlgButtonChecked(IDC_CHECK_LOADER_CAPTURE)==BST_UNCHECKED,"occupied capture reverts checkbox");
+            occupied.Stop();Drain(page);page.ClearAll();
+        }
         // Seed near the old line cap; actual producer/notification/control path below.
         CString seed;
         for(int i=0;i<9990;++i) seed+=L"old log line\r\n";

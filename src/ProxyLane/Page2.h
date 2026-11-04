@@ -2,6 +2,7 @@
 
 #include "..\ProxyLaneHook\ProxyModule.h"
 #include "BoundedLogQueue.h"
+#include "LoaderDiagnosticCapture.h"
 #include "ModernUI.h"
 #include <afxmt.h>
 #include <deque>
@@ -75,6 +76,7 @@ public:
 	afx_msg BOOL OnEraseBkgnd(CDC* pDC);
 	afx_msg void OnBnClickedCopy();
 	afx_msg void OnBnClickedClear();
+	afx_msg void OnBnClickedLoaderCapture();
 	afx_msg void OnTimer(UINT_PTR timer);
 	afx_msg void OnDestroy();
 
@@ -93,6 +95,9 @@ private:
 	CString m_lastLogDate;
 	std::deque<LogDateMarker> m_logDates;
 	UINT_PTR m_logTimer = 0;
+	UINT_PTR m_captureTimer = 0;
+	LoaderDiagnosticCapture m_loaderCapture;
+	void FlushLoaderDiagnostics();
 	void ScheduleLogFlush();
 	void FlushLogText();
 	void AppendLogEntry(const LogEntry& entry, CString& output, int baseOffset);

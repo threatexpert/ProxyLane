@@ -31,7 +31,7 @@ struct HookFailureDiagnostics
         for (WCHAR* p = description; *p; ++p)
             if (*p == L'\r' || *p == L'\n') *p = L' ';
         _snwprintf_s(output, count, _TRUNCATE,
-            L"[Hook failure] %s (%lu) | stage=%hs | module=%hs | API=%hs | error=%lu (0x%08lX) | %s",
+            L"[ProxyLane.Hook.v1] %s (%lu) | stage=%hs | module=%hs | API=%hs | error=%lu (0x%08lX) | %s",
             name[0] ? name : L"Unknown", processId, stage ? stage : "unknown",
             module ? module : "n/a", api ? api : "n/a", error, error,
             error ? (description[0] ? description : L"No system error description")
