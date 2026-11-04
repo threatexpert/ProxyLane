@@ -44,6 +44,10 @@ mt -nologo -manifest tests\loader-utf8.manifest -outputresource:"$work\utf8-$arc
             if ($LASTEXITCODE -ne 0) { throw "$arch actual injection into UTF-8 target failed" }
             & "$work\utf8-$arch.exe" --inject $hook "$work\test-$arch.exe"
             if ($LASTEXITCODE -ne 0) { throw "$arch actual injection from UTF-8 host failed" }
+            & "$work\test-$arch.exe" --inject-fail $hook "$work\utf8-$arch.exe"
+            if ($LASTEXITCODE -ne 0) { throw "$arch real loader failure in UTF-8 target failed" }
+            & "$work\utf8-$arch.exe" --inject-fail $hook "$work\test-$arch.exe"
+            if ($LASTEXITCODE -ne 0) { throw "$arch real loader failure from UTF-8 host failed" }
         }
     }
 } finally { Pop-Location }

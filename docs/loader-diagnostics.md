@@ -57,3 +57,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-loader-diagnost
 测试在新地址执行复制后的机器码，并验证真实跨进程调试输出、两种位数互收、
 非匹配消息过滤、通道冲突、队列上限、关闭/重开，以及 CP936/UTF-8 进程中的
 非 ASCII 路径加载（实际系统传统代码页由测试打印）。
+带 `-HookDirectory` 时，还会用真实 `AttachToI` 向挂起的测试进程注入，
+仅将远端参数中的 DLL 路径改为不存在的中文路径，保留实际注入器产生的
+API 地址和跳板，验证目标报告错误 126、PID 正确且继续到正常入口并退出。
+此用例覆盖 x86/x64，以及传统代码页与 UTF-8 的宿主/目标组合。

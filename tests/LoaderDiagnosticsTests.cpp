@@ -3,6 +3,7 @@
 #include "../src/ProxyLaneHook/HookFailureDiagnostics.h"
 #include <stdio.h>
 #include <wchar.h>
+#include <stddef.h>
 #ifdef _WIN64
 #include "../src/remotecode/remoteCode.x64.inc"
 #else
@@ -54,8 +55,117 @@ static DWORD Child(const wchar_t* executable, const wchar_t* arguments)
     return pid;
 }
 
+static void InjectedLoadFailure(const wchar_t* hookPath, const wchar_t* executable)
+{
+    HMODULE hook = LoadLibraryW(hookPath);
+    Check(hook != NULL, "load actual injector for failure test");
+    typedef DWORD (WINAPI *Attach)(DWORD, DWORD, LPCSTR);
+    Attach attach = reinterpret_cast<Attach>(GetProcAddress(hook, "AttachToI"));
+    Check(attach != NULL, "resolve actual injector for failure test");
+    LoaderDiagnosticCapture capture;
+    Check(capture.Start() == ERROR_SUCCESS, "capture real injection failure");
+
+    // Any assertion/timeout must also dispose of our suspended child.
+    HANDLE job = CreateJobObjectW(NULL, NULL);
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    Check(job && SetInformationJobObject(job, JobObjectExtendedLimitInformation,
+        &limits, sizeof(limits)), "failure test cleanup job");
+    wchar_t command[2048];
+    swprintf_s(command, L"\"%s\" --target-failed \"%s\"", executable, hookPath);
+    STARTUPINFOW startup = { sizeof(startup) };
+    PROCESS_INFORMATION process = {};
+    Check(CreateProcessW(NULL, command, NULL, NULL, FALSE, CREATE_SUSPENDED | CREATE_NO_WINDOW,
+        NULL, NULL, &startup, &process) != FALSE, "create failure target");
+    if (!AssignProcessToJobObject(job, process.hProcess)) {
+        TerminateProcess(process.hProcess, 1);
+        Check(false, "assign failure target to cleanup job");
+    }
+    Check(attach(process.dwProcessId, process.dwThreadId,
+        "\\\\.\\pipe\\ProxyLane.LoaderDiagnostics.NoServer") == 0xFF01,
+        "actual injector prepared failure target");
+
+    // Use the actual injector's trampoline and parameter block. Only replace
+    // the DLL path; all API pointers, including get_proc_address2 results,
+    // and the actual injected machine code remain untouched.
+    CONTEXT context = {};
+    context.ContextFlags = CONTEXT_CONTROL;
+    Check(GetThreadContext(process.hThread, &context) != FALSE, "read injected thread context");
+#ifdef _WIN64
+    const DWORD_PTR trampolineAddress = context.Rip;
+    const size_t trampolineSize = 80, parameterOffset = 26;
+#else
+    const DWORD_PTR trampolineAddress = context.Eip;
+    const size_t trampolineSize = 25, parameterOffset = 5;
+#endif
+    BYTE trampoline[80] = {};
+    SIZE_T transferred = 0;
+    Check(ReadProcessMemory(process.hProcess, reinterpret_cast<LPCVOID>(trampolineAddress),
+        trampoline, trampolineSize, &transferred) && transferred == trampolineSize,
+        "read actual injection trampoline");
+#ifdef _WIN64
+    Check(trampoline[24] == 0x48 && trampoline[25] == 0xB9, "x64 parameter instruction");
+#else
+    Check(trampoline[4] == 0x68, "x86 parameter instruction");
+#endif
+    DWORD_PTR parameterAddress = 0;
+    memcpy(&parameterAddress, trampoline + parameterOffset, sizeof(parameterAddress));
+    myapi parameters = {};
+    Check(ReadProcessMemory(process.hProcess, reinterpret_cast<LPCVOID>(parameterAddress),
+        &parameters, sizeof(parameters), &transferred) && transferred == sizeof(parameters),
+        "read actual injection parameters");
+    Check(!wcscmp(parameters.szMyDll, hookPath) && parameters.LoadLibraryW &&
+        parameters.GetLastError && parameters.FormatMessageA && parameters.OutputDebugStringA,
+        "actual injector supplied original path and diagnostic API pointers");
+    WCHAR missing[MAX_PATH] = {};
+    Check(swprintf_s(missing, L"%s.missing-%lu", hookPath, GetCurrentProcessId()) > 0,
+        "construct missing Unicode DLL path");
+    Check(GetFileAttributesW(missing) == INVALID_FILE_ATTRIBUTES && GetLastError() == ERROR_FILE_NOT_FOUND,
+        "failure fixture DLL does not exist");
+    Check(WriteProcessMemory(process.hProcess,
+        reinterpret_cast<LPVOID>(parameterAddress + offsetof(myapi, szMyDll)),
+        missing, sizeof(missing), &transferred) && transferred == sizeof(missing),
+        "replace only target DLL path");
+    Check(ResumeThread(process.hThread) != DWORD(-1), "resume failure target");
+    Check(WaitForSingleObject(process.hProcess, 10000) == WAIT_OBJECT_0,
+        "failed loader returned to target entry point without hanging");
+    DWORD exitCode = 1;
+    Check(GetExitCodeProcess(process.hProcess, &exitCode) && exitCode == 0,
+        "target survived real LoadLibraryW failure");
+
+    unsigned reports = 0;
+    for (unsigned attempt = 0; attempt < 100 && !reports; ++attempt) {
+        LoaderDiagnosticCapture::Record records[16];
+        unsigned dropped = 0;
+        unsigned count = capture.Drain(records, _countof(records), dropped);
+        Check(!dropped, "real failure capture did not overflow");
+        for (unsigned i = 0; i < count; ++i) {
+            if (records[i].processId != process.dwProcessId) continue;
+            Check(!records[i].hookFailure && records[i].error == ERROR_MOD_NOT_FOUND,
+                "real target emitted loader error 126 with its PID");
+            ++reports;
+        }
+        if (!reports) Sleep(10);
+    }
+    Check(reports == 1, "received real target LoadLibraryW failure report");
+    capture.Stop();
+    CloseHandle(process.hThread); CloseHandle(process.hProcess); CloseHandle(job);
+    FreeLibrary(hook);
+    printf("PASS: actual injector API pointers + remote LoadLibraryW failure, error=126, PID=%lu, target exit=0, host ACP=%u\n",
+        process.dwProcessId, GetACP());
+}
+
 int wmain(int argc, wchar_t** argv)
 {
+    if (argc > 2 && !wcscmp(argv[1], L"--target-failed")) {
+        Check(GetModuleHandleW(argv[2]) == NULL, "failed injection did not load Hook DLL");
+        printf("Failure target reached normal entry point; ACP=%u\n", GetACP());
+        return 0;
+    }
+    if (argc == 4 && !wcscmp(argv[1], L"--inject-fail")) {
+        InjectedLoadFailure(argv[2], argv[3]);
+        return 0;
+    }
     if (argc > 2 && !wcscmp(argv[1], L"--target")) {
         Check(GetModuleHandleW(argv[2]) != NULL, "real injected Hook loaded before entry point");
         return 0;
