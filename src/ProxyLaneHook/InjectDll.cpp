@@ -47,14 +47,14 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCWSTR lpMyDll, LPCSTR lpszPipeName
 	ZeroMemory(&param_myapi, sizeof(param_myapi));
 
 	HMODULE hKernel = GetModuleHandleA("kernel32.dll");
-	*(FARPROC*)&param_myapi.LoadLibraryW = GetProcAddress(hKernel, "LoadLibraryW");
+	*(FARPROC*)&param_myapi.LoadLibraryW = get_proc_address2(hKernel, "LoadLibraryW");
 	*(FARPROC*)&param_myapi.GetProcAddress = get_proc_address2(hKernel, "GetProcAddress");
 	*(FARPROC*)&param_myapi.Sleep = get_proc_address2(hKernel, "Sleep");
 	*(FARPROC*)&param_myapi.SetEvent = get_proc_address2(hKernel, "SetEvent");
 	*(FARPROC*)&param_myapi.CloseHandle = get_proc_address2(hKernel, "CloseHandle");
-	param_myapi.GetLastError = ::GetLastError;
-    param_myapi.FormatMessageA = ::FormatMessageA;
-    param_myapi.OutputDebugStringA = ::OutputDebugStringA;
+	*(FARPROC*)&param_myapi.GetLastError = get_proc_address2(hKernel, "GetLastError");
+	*(FARPROC*)&param_myapi.FormatMessageA = get_proc_address2(hKernel, "FormatMessageA");
+	*(FARPROC*)&param_myapi.OutputDebugStringA = get_proc_address2(hKernel, "OutputDebugStringA");
     strcpy_s(param_myapi.loadFailureFormat,
         "[ProxyLane.Loader.v1] stage=LoadLibraryW error=%1!08X!\n");
     if (!lpMyDll || wcslen(lpMyDll) >= _countof(param_myapi.szMyDll))
@@ -184,14 +184,14 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCWSTR lpMyDll, LPCSTR lpszPipeName
 	ZeroMemory(&param_myapi, sizeof(param_myapi));
 
 	HMODULE hKernel = GetModuleHandleA("kernel32.dll");
-	*(FARPROC*)&param_myapi.LoadLibraryW = GetProcAddress(hKernel, "LoadLibraryW");
+	*(FARPROC*)&param_myapi.LoadLibraryW = get_proc_address2(hKernel, "LoadLibraryW");
 	*(FARPROC*)&param_myapi.GetProcAddress = get_proc_address2(hKernel, "GetProcAddress");
 	*(FARPROC*)&param_myapi.Sleep = get_proc_address2(hKernel, "Sleep");
 	*(FARPROC*)&param_myapi.SetEvent = get_proc_address2(hKernel, "SetEvent");
 	*(FARPROC*)&param_myapi.CloseHandle = get_proc_address2(hKernel, "CloseHandle");
-	param_myapi.GetLastError = ::GetLastError;
-    param_myapi.FormatMessageA = ::FormatMessageA;
-    param_myapi.OutputDebugStringA = ::OutputDebugStringA;
+	*(FARPROC*)&param_myapi.GetLastError = get_proc_address2(hKernel, "GetLastError");
+	*(FARPROC*)&param_myapi.FormatMessageA = get_proc_address2(hKernel, "FormatMessageA");
+	*(FARPROC*)&param_myapi.OutputDebugStringA = get_proc_address2(hKernel, "OutputDebugStringA");
     strcpy_s(param_myapi.loadFailureFormat,
         "[ProxyLane.Loader.v1] stage=LoadLibraryW error=%1!08X!\n");
     if (!lpMyDll || wcslen(lpMyDll) >= _countof(param_myapi.szMyDll))
