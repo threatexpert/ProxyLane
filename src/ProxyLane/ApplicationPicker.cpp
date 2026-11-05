@@ -4,6 +4,7 @@
 #include "Localization.h"
 #include "ApplicationCatalogCache.h"
 #include "MainTab.h"
+#include "LaunchShortcut.h"
 #include <algorithm>
 
 static CString ApplicationSourceName(InstalledApplications::SourceKind kind)
@@ -726,6 +727,8 @@ void CApplicationPicker::ShowRecentMenu(size_t index, CPoint point)
 	menu.AppendMenu(MF_SEPARATOR);
 	menu.AppendMenu(MF_STRING, entry.pinned ? 5 : 1, Localization::Get(entry.pinned ? L"recent.unpin" : L"recent.pin"));
 	menu.AppendMenu(MF_STRING, 2, Localization::Get(L"recent.remove"));
+	menu.AppendMenu(MF_SEPARATOR);
+	menu.AppendMenu(MF_STRING | (entry.available ? 0 : MF_GRAYED), 6, Localization::Get(L"shortcut.create"));
 	const UINT command = menu.TrackPopupMenu(TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, this);
 	// Popup menus pump messages: use a stable identity, never a possibly moved row.
 	if (command && profileId == m_profileId) ChangeRecent(entry.id, command);
@@ -745,6 +748,24 @@ void CApplicationPicker::ChangeRecent(const CString& id, UINT command)
 	size_t index = 0;
 	while (index < m_recentEntries.size() && m_recentEntries[index].id != id) ++index;
 	if (index == m_recentEntries.size()) return;
+	if (command == 6)
+	{
+		// Modal dialogs can refresh the list. Keep owned values, not row references.
+		RecentApplications::Entry entry = m_recentEntries[index]; entry.app.icon = NULL;
+		const CString profile = m_profile, identity = m_profileId;
+		CPage1* settings = g_MainTab ? g_MainTab->GetPage1() : NULL;
+		if (settings && settings->GetSelectedProfileName() == profile && settings->HasUnsavedProfileChanges())
+		{
+			if (MessageBox(Localization::Get(L"shortcut.save_profile"), Localization::Get(L"shortcut.title"),
+				MB_OKCANCEL | MB_ICONQUESTION) != IDOK) return;
+			if (RefreshProfileContext() || profile != m_profile || identity != m_profileId ||
+				settings->GetSelectedProfileName() != profile || !settings->SavePendingProfile()) return;
+		}
+		if (LaunchShortcut::PromptCreate(this, profile, entry, [this, profile, identity]() -> BOOL {
+			return !RefreshProfileContext() && profile == m_profile && identity == m_profileId;
+		})) SetDlgItemText(IDC_APP_STATUS, Localization::Get(L"shortcut.created"));
+		return;
+	}
 	RecentApplications::Store store(m_profile, RecentApplications::DefaultPath(), m_profileId);
 	BOOL updated = FALSE;
 	if (command == 1 || command == 5) updated = store.SetPinned(id, command == 1);

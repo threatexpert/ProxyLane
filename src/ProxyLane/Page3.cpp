@@ -7,6 +7,7 @@
 #include "MainTab.h"
 #include "Page2.h"
 #include "AutomationOptions.h"
+#include "LaunchShortcut.h"
 #include "Localization.h"
 #include "..\ProxyLaneHook\token.h"
 #include "..\ProxyLaneHook\ElevatedLaunchProtocol.h"
@@ -1252,6 +1253,7 @@ BEGIN_MESSAGE_MAP(CPage3, CModernDialog)
 	ON_MESSAGE(WM_LAUNCH_PANEL_TILE, &CPage3::OnLaunchPanelTile)
 	ON_MESSAGE(WM_LAUNCH_PANEL_PROFILE, &CPage3::OnLaunchPanelProfile)
 	ON_MESSAGE(WM_LAUNCH_PANEL_EDIT, &CPage3::OnLaunchPanelEdit)
+	ON_MESSAGE(WM_LAUNCH_PANEL_SHORTCUT, &CPage3::OnLaunchPanelShortcut)
 	ON_BN_CLICKED(IDC_PROCESS_TOGGLE, &CPage3::OnBnClickedProcessToggle)
 	ON_BN_CLICKED(IDC_STOP_PROXY_APP, &CPage3::OnBnClickedStopProxy)
 	ON_MESSAGE(WM_RECENT_APPLICATIONS_CHANGED, &CPage3::OnRecentApplicationsChanged)
@@ -1536,6 +1538,7 @@ void CPage3::ReloadRecentApplications(BOOL force)
 		tile.tip = RecentApplications::Description(m_recentEntries[i]);
 		tile.elevated = m_recentEntries[i].elevated;
 		tile.pinned = m_recentEntries[i].pinned;
+		tile.available = m_recentEntries[i].available;
 		tiles.push_back(tile);
 	}
 	const int oldPanelHeight = m_launchPanel.PreferredHeight();
@@ -1564,6 +1567,38 @@ LRESULT CPage3::OnLaunchPanelEdit(WPARAM, LPARAM parameter)
 	ReloadRecentApplications(TRUE);
 	settings->PostMessage(WM_RECENT_APPLICATIONS_CHANGED);
 	return saved;
+}
+
+LRESULT CPage3::OnLaunchPanelShortcut(WPARAM, LPARAM parameter)
+{
+	const CString id = *reinterpret_cast<const CString*>(parameter);
+	CPage1* settings = g_MainTab ? g_MainTab->GetPage1() : NULL;
+	if (!settings || m_recentLaunching) return 0;
+	const BOOL running = g_MainTab->IsProxyRunning();
+	const CString profile = running ? g_MainTab->GetRunningProfileName() : settings->GetSelectedProfileName();
+	const CString identity = running ? g_MainTab->GetRunningRecentProfileId() : settings->GetSelectedRecentProfileId();
+	if (profile.IsEmpty() || identity.IsEmpty() || identity != m_recentProfileId) return 0;
+	size_t index = 0;
+	while (index < m_recentEntries.size() && m_recentEntries[index].id != id) ++index;
+	if (index == m_recentEntries.size()) return 0;
+	RecentApplications::Entry entry = m_recentEntries[index]; entry.app.icon = NULL;
+	m_recentLaunching = TRUE;
+	struct Reset { BOOL& value; ~Reset() { value = FALSE; } } reset = { m_recentLaunching };
+	auto stillCurrent = [this, settings, running, profile, identity]() -> BOOL {
+		if (running != g_MainTab->IsProxyRunning()) return FALSE;
+		return identity == m_recentProfileId && (running ?
+			(profile == g_MainTab->GetRunningProfileName() && identity == g_MainTab->GetRunningRecentProfileId()) :
+			(profile == settings->GetSelectedProfileName() && identity == settings->GetSelectedRecentProfileId()));
+	};
+	if (settings->GetSelectedProfileName() == profile && settings->HasUnsavedProfileChanges())
+	{
+		if (MessageBox(Localization::Get(L"shortcut.save_profile"), Localization::Get(L"shortcut.title"),
+			MB_OKCANCEL | MB_ICONQUESTION) != IDOK || !stillCurrent() ||
+			settings->GetSelectedProfileName() != profile || !settings->SavePendingProfile()) return 0;
+	}
+	if (LaunchShortcut::PromptCreate(this, profile, entry, stillCurrent))
+		g_MainTab->ShowTransientStatus(Localization::Get(L"shortcut.created"), CStatusLabel::TONE_SUCCESS);
+	return 0;
 }
 
 void CPage3::RefreshLaunchPanel()
@@ -1734,6 +1769,29 @@ AppLaunchResult CPage3::LaunchInteractiveApplication(const InstalledApplications
 		elevationMode == APP_LAUNCH_ELEVATION_FORCE_ADMIN);
 	InstalledApplications::Application resolved;
 	if (!RecentApplications::Resolve(entry, resolved)) return APP_LAUNCH_INVALID_TARGET;
+	AutomationOptions shortcutOptions;
+	InstalledApplications::Application original;
+	const LaunchShortcut::DecodeResult shortcutState = LaunchShortcut::Decode(resolved, original, shortcutOptions);
+	if (shortcutState == LaunchShortcut::Invalid) return APP_LAUNCH_SHORTCUT_INVALID;
+	if (shortcutState == LaunchShortcut::Decoded)
+	{
+		if (shortcutOptions.elevated) elevationMode = APP_LAUNCH_ELEVATION_FORCE_ADMIN;
+		shortcutOptions.elevated = elevationMode == APP_LAUNCH_ELEVATION_FORCE_ADMIN;
+		if (shortcutOptions.profileName.CompareNoCase(runningProfile) != 0)
+		{
+			const int answer = LaunchShortcut::ChooseProfile(GetSafeHwnd(), shortcutOptions.profileName, runningProfile);
+			if (answer == IDCANCEL) return APP_LAUNCH_CANCELLED;
+			if (answer == IDYES)
+			{
+				shortcutOptions.shortcut = TRUE;
+				return LaunchShortcut::Start(shortcutOptions) ? APP_LAUNCH_FORWARDED : APP_LAUNCH_CREATE_PROCESS_FAILED;
+			}
+			if (!g_MainTab->IsProxyRunning() || runningIdentity != g_MainTab->GetRunningRecentProfileId()) return APP_LAUNCH_CANCELLED;
+		}
+		resolved = original;
+		// Do not remember a wrapper or its source .lnk: future launches must target the app.
+		entry = RecentApplications::FromApplication(resolved, elevationMode == APP_LAUNCH_ELEVATION_FORCE_ADMIN);
+	}
 	const CString name = entry.app.name;
 	entry.app = resolved;
 	entry.app.icon = NULL;
@@ -1772,6 +1830,7 @@ void CPage3::LaunchRecentApplication(const RecentApplications::Entry& entry)
 
 void CPage3::ShowApplicationLaunchResult(const CString& name, AppLaunchResult result)
 {
+	if (result == APP_LAUNCH_CANCELLED || result == APP_LAUNCH_FORWARDED) return;
 	if (result == APP_LAUNCH_SUCCESS)
 	{
 		g_MainTab->ShowTransientStatus(Localization::Format(_T("dialog.started_proxy"),
@@ -1780,6 +1839,7 @@ void CPage3::ShowApplicationLaunchResult(const CString& name, AppLaunchResult re
 	}
 	LPCTSTR messageKey = _T("dialog.drop_launch_failed");
 	if (result == APP_LAUNCH_INVALID_TARGET) messageKey = _T("dialog.drop_invalid");
+	else if (result == APP_LAUNCH_SHORTCUT_INVALID) messageKey = L"shortcut.recursive";
 	else if (result == APP_LAUNCH_UAC_CANCELLED) messageKey = _T("dialog.drop_uac_cancelled");
 	else if (result == APP_LAUNCH_ELEVATED_HELPER_FAILED) messageKey = _T("dialog.drop_elevated_failed");
 	else if (result == APP_LAUNCH_INJECTION_FAILED)
@@ -3561,6 +3621,23 @@ void CPage3::OnDropAppFile(TCHAR *pFileName)
 	LaunchAndProxyApp(pFileName, noExtraArguments, FALSE);
 }
 
+AppLaunchResult CPage3::LaunchAutomationApplication(const AutomationOptions& options)
+{
+	if (options.packaged)
+	{
+		CString arguments = options.initialArguments;
+		for (size_t i = 0; i < options.targetArguments.size(); ++i)
+		{
+			if (!arguments.IsEmpty()) arguments += L" ";
+			arguments += QuoteCommandLineArgument(options.targetArguments[i]);
+		}
+		return LaunchPackagedAppById(options.targetPath, arguments);
+	}
+	return LaunchAndProxyApp(options.targetPath, options.targetArguments, TRUE,
+		options.elevated ? APP_LAUNCH_ELEVATION_FORCE_ADMIN : APP_LAUNCH_ELEVATION_AUTO,
+		options.initialArguments, options.workingDirectory);
+}
+
 AppLaunchResult CPage3::LaunchAndProxyApp(
 	LPCTSTR fileName,
 	const std::vector<CString>& extraArguments,
@@ -3624,6 +3701,12 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 		if (!szBaseDir[0]) GetAppFolderPath(szTargetPath, szBaseDir);
 	}
 
+	// Last line of defense for every launch entry point, including unattended CLI.
+	if (LaunchShortcut::IsProxyLaneExecutable(szTargetPath) || IsLnk(szTargetPath))
+	{
+		myWow64RevertWow64FsRedirection(WowRedirOldValue);
+		return APP_LAUNCH_INVALID_TARGET;
+	}
 	DWORD targetAttributes = GetFileAttributes(szTargetPath);
 	if (!szTargetPath[0] ||
 		targetAttributes == INVALID_FILE_ATTRIBUTES ||

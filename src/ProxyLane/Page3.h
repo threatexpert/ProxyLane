@@ -12,6 +12,7 @@
 #include <map>
 #include <set>
 #include <vector>
+struct AutomationOptions;
 
 #define WM_WINDOW_FINDER_BEGIN    (WM_APP + 201)
 #define WM_WINDOW_FINDER_UPDATE   (WM_APP + 202)
@@ -91,7 +92,10 @@ enum AppLaunchResult
 	APP_LAUNCH_INJECTION_FAILED,
 	APP_LAUNCH_UAC_CANCELLED,
 	APP_LAUNCH_ELEVATED_HELPER_FAILED,
-	APP_LAUNCH_PACKAGED_INJECTION_FAILED
+	APP_LAUNCH_PACKAGED_INJECTION_FAILED,
+	APP_LAUNCH_CANCELLED,
+	APP_LAUNCH_SHORTCUT_INVALID,
+	APP_LAUNCH_FORWARDED
 };
 
 enum AppLaunchElevationMode
@@ -259,6 +263,7 @@ public:
 	void ClearBrowserNotifications();
 
 	void OnDropAppFile(TCHAR *pFileName);
+	AppLaunchResult LaunchAutomationApplication(const AutomationOptions& options);
 	AppLaunchResult LaunchAndProxyApp(
 		LPCTSTR fileName,
 		const std::vector<CString>& extraArguments,
@@ -315,6 +320,7 @@ public:
 	afx_msg LRESULT OnLaunchPanelTile(WPARAM index, LPARAM);
 	afx_msg LRESULT OnLaunchPanelProfile(WPARAM, LPARAM);
 	afx_msg LRESULT OnLaunchPanelEdit(WPARAM, LPARAM);
+	afx_msg LRESULT OnLaunchPanelShortcut(WPARAM, LPARAM);
 	afx_msg void OnBnClickedProcessToggle();
 	afx_msg void OnBnClickedStopProxy();
 	afx_msg LRESULT OnRecentApplicationsChanged(WPARAM, LPARAM);

@@ -7,6 +7,7 @@
 #include "ProxyLaneDlg.h"
 #include "Page3.h"
 #include "AutomationOptions.h"
+#include "LaunchShortcut.h"
 #include "Localization.h"
 #include "AppVersion.h"
 #include "AppLauncher.h"
@@ -125,6 +126,7 @@ int CProxyLaneApp::ExitInstance()
 		m_configImport->FinishAfterShutdown();
 		m_configImport.reset();
 	}
+	LaunchShortcut::ReportFailure(m_automationOptions, m_automationExitCode);
 	CWinApp::ExitInstance();
 	return m_automationExitCode;
 }
@@ -265,6 +267,8 @@ BOOL CProxyLaneApp::InitInstance()
 		ShExecInfo.hInstApp = NULL;
 		if (ShellExecuteEx(&ShExecInfo))
 		{
+			// The child reports shortcut failures; do not show the same error twice.
+			m_automationOptions.shortcut = FALSE;
 			if (m_automationOptions.enabled)
 			{
 				HANDLE handles[] = { bootstrapEvent, ShExecInfo.hProcess };

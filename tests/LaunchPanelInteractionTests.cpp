@@ -27,11 +27,14 @@ class Host : public CWnd {
 public:
     Panel panel;
     int launches = 0, edits = 0, lastLaunch = -1;
+	int shortcuts = 0;
+	CString shortcutId;
     CLaunchPanel::Edit last;
     LRESULT WindowProc(UINT message, WPARAM wp, LPARAM lp) override {
 
         if (message == WM_LAUNCH_PANEL_TILE) { ++launches; lastLaunch = static_cast<int>(wp); return 0; }
         if (message == WM_LAUNCH_PANEL_EDIT) { ++edits; last = *reinterpret_cast<CLaunchPanel::Edit*>(lp); return TRUE; }
+		if (message == WM_LAUNCH_PANEL_SHORTCUT) { ++shortcuts; shortcutId = *reinterpret_cast<const CString*>(lp); return TRUE; }
         return CWnd::WindowProc(message, wp, lp);
     }
     int S(int n) { return UiTheme::ScaleForWindow(panel.m_hWnd, n); }
@@ -69,6 +72,13 @@ void TestLaunchPanelInteractions() {
     Check(!host.panel.IsInteracting() && host.panel.PreferredHeight() == normalHeight,
         "right click enters edit without capture or additional height");
     CheckTouchConfig(host.panel.m_hWnd, true);
+	host.Point(WM_LBUTTONDOWN, 24, 130); host.Point(WM_LBUTTONUP, 24, 130);
+	Check(host.shortcuts == 1 && host.shortcutId == L"0" && host.launches == 2 && host.edits == 0,
+		"top-left shortcut action preserves stable identity and never launches or deletes");
+	host.Point(WM_LBUTTONDOWN, 24, 130); host.Point(WM_LBUTTONUP, 60, 155);
+	Check(host.shortcuts == 1, "releasing outside shortcut action cancels");
+	host.Point(WM_LBUTTONDOWN, 24, 130); host.panel.SendMessage(WM_CAPTURECHANGED, 0, 0); host.Point(WM_LBUTTONUP, 24, 130);
+	Check(host.shortcuts == 1, "capture loss cancels shortcut action");
     host.Point(WM_LBUTTONDOWN, 60, 155); host.Point(WM_LBUTTONUP, 60, 155);
     Check(host.launches == 2 && host.edits == 0, "clicking an icon in edit mode never launches");
     host.Point(WM_LBUTTONDOWN, 60, 155); host.Point(WM_MOUSEMOVE, 265, 155);
@@ -105,6 +115,8 @@ void TestLaunchPanelInteractions() {
     const int compactHeight = host.panel.PreferredHeight();
     host.Point(WM_RBUTTONDOWN, 45, 78); host.Point(WM_RBUTTONUP, 45, 78);
     Check(host.panel.PreferredHeight() == compactHeight, "compact edit mode adds no height");
+	host.Point(WM_LBUTTONDOWN, 34, 66); host.Point(WM_LBUTTONUP, 34, 66);
+	Check(host.shortcuts == 2 && host.shortcutId == L"0", "compact row supports shortcut creation without touching delete");
     const int beforeCompact = host.edits;
     host.Point(WM_LBUTTONDOWN, 45, 78); host.Point(WM_MOUSEMOVE, 135, 78); host.Point(WM_LBUTTONUP, 135, 78);
     Check(host.edits == beforeCompact + 1 && !host.last.remove, "compact row supports reordering");
@@ -113,6 +125,8 @@ void TestLaunchPanelInteractions() {
     host.Point(WM_LBUTTONDOWN, 45, 78); host.Point(WM_MOUSEMOVE, 135, 78);
     host.panel.SetTiles(tiles); host.Point(WM_LBUTTONUP, 135, 78);
     Check(host.edits == beforeCompact + 2, "snapshot replacement cancels an in-flight edit");
+	host.Point(WM_LBUTTONDOWN, 34, 66); host.panel.Escape(); host.Point(WM_LBUTTONUP, 34, 66);
+	Check(host.shortcuts == 2, "Escape cancels shortcut creation");
     host.panel.FinishOrganizing();
     const int launchesBeforeRemote = host.launches;
     host.Point(WM_LBUTTONDOWN, 45, 78);

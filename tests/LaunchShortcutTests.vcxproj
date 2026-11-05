@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|Win32"><Configuration>Release</Configuration><Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals"><ProjectGuid>{C49ACF3D-CE2C-4E03-BC06-EC3DFA59E2B6}</ProjectGuid><Keyword>Win32Proj</Keyword><WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration"><ConfigurationType>Application</ConfigurationType><UseDebugLibraries>false</UseDebugLibraries><PlatformToolset>v142</PlatformToolset><CharacterSet>Unicode</CharacterSet><UseOfMfc>Static</UseOfMfc></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup><OutDir>$(ProjectDir)bin\$(Platform)\LaunchShortcut\</OutDir><IntDir>$(ProjectDir)obj\$(Platform)\LaunchShortcut\</IntDir></PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile><AdditionalIncludeDirectories>$(ProjectDir)..\src\ProxyLane;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories><RuntimeLibrary>MultiThreaded</RuntimeLibrary><WarningLevel>Level4</WarningLevel><PreprocessorDefinitions>_CONSOLE;WINVER=0x0601;_WIN32_WINNT=0x0601;%(PreprocessorDefinitions)</PreprocessorDefinitions><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions></ClCompile>
+    <Link><SubSystem>Console</SubSystem></Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="LaunchShortcutTests.cpp" />
+    <ClCompile Include="..\src\ProxyLane\LaunchShortcut.cpp" />
+    <ClCompile Include="..\src\ProxyLane\AutomationOptions.cpp" />
+    <ClCompile Include="..\src\ProxyLane\InstalledApplications.cpp" />
+    <ClCompile Include="..\src\ProxyLane\RecentApplications.cpp" />
+    <ClCompile Include="..\src\ProxyLane\RecentApplicationCache.cpp" />
+    <ClCompile Include="..\src\ProxyLane\ProxyProfileStore.cpp" />
+    <ClCompile Include="..\src\ProxyLane\IniFile.cpp" />
+    <ClCompile Include="..\src\ProxyLane\ConfigStorage.cpp" />
+    <ClCompile Include="..\src\ProxyLane\Base64.cpp" />
+    <ClCompile Include="..\src\ProxyLane\Localization.cpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

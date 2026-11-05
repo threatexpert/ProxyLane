@@ -44,6 +44,11 @@ BOOL ParseAutomationOptions(
 	for (int i = 1; i < argc; ++i)
 	{
 		CString argument(argv[i]);
+		argument.MakeLower();
+		if (argument == _T("--")) break;
+		// Values are opaque; an application's argument may itself be "--help".
+		if (argument == L"--profile" || argument == L"--run" || argument == L"--arguments" ||
+			argument == L"--working-directory" || argument == L"--app-name" || argument == L"--bootstrap-event") { ++i; continue; }
 		if (argument.CompareNoCase(_T("/?")) == 0 ||
 			argument.CompareNoCase(_T("-?")) == 0 ||
 			argument.CompareNoCase(_T("--help")) == 0)
@@ -57,6 +62,7 @@ BOOL ParseAutomationOptions(
 	BOOL seenProfile = FALSE;
 	BOOL seenRun = FALSE;
 	BOOL seenBootstrapEvent = FALSE;
+	BOOL seenArguments = FALSE, seenDirectory = FALSE, seenName = FALSE;
 	BOOL targetArguments = FALSE;
 	CString unknownOption;
 
@@ -68,6 +74,7 @@ BOOL ParseAutomationOptions(
 			options.targetArguments.push_back(argument);
 			continue;
 		}
+		argument.MakeLower();
 
 		if (argument == _T("--"))
 		{
@@ -108,6 +115,24 @@ BOOL ParseAutomationOptions(
 				return FALSE;
 			}
 			seenRun = TRUE;
+		}
+		else if (argument == L"--elevated" || argument == L"--packaged" || argument == L"--shortcut")
+		{
+			BOOL& flag = argument == L"--elevated" ? options.elevated :
+				(argument == L"--packaged" ? options.packaged : options.shortcut);
+			if (flag) { errorMessage = L"Duplicate option: " + argument; LocalFree(argv); return FALSE; }
+			flag = TRUE;
+		}
+		else if (argument == L"--arguments" || argument == L"--working-directory" || argument == L"--app-name")
+		{
+			BOOL& seen = argument == L"--arguments" ? seenArguments : (argument == L"--app-name" ? seenName : seenDirectory);
+			CString& value = argument == L"--arguments" ? options.initialArguments : (argument == L"--app-name" ? options.applicationName : options.workingDirectory);
+			if (seen || !ReadOptionValue(i, argc, argv, value, errorMessage, argument))
+			{
+				if (seen) errorMessage = L"Duplicate option: " + argument;
+				LocalFree(argv); return FALSE;
+			}
+			seen = TRUE;
 		}
 		else if (argument.CompareNoCase(_T("--bootstrap-event")) == 0)
 		{
@@ -203,6 +228,12 @@ CString BuildAutomationCommandLine(
 	commandLine += QuoteCommandLineArgument(options.profileName);
 	commandLine += _T(" --run ");
 	commandLine += QuoteCommandLineArgument(options.targetPath);
+	if (!options.applicationName.IsEmpty()) commandLine += L" --app-name " + QuoteCommandLineArgument(options.applicationName);
+	if (!options.initialArguments.IsEmpty()) commandLine += L" --arguments " + QuoteCommandLineArgument(options.initialArguments);
+	if (!options.workingDirectory.IsEmpty()) commandLine += L" --working-directory " + QuoteCommandLineArgument(options.workingDirectory);
+	if (options.elevated) commandLine += L" --elevated";
+	if (options.packaged) commandLine += L" --packaged";
+	if (options.shortcut) commandLine += L" --shortcut";
 
 	if (bootstrapEventName && bootstrapEventName[0])
 	{

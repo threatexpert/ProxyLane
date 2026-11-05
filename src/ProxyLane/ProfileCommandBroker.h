@@ -25,9 +25,7 @@ public:
 	LONG references;
 	LONG cancelled;
 	HANDLE completedEvent;
-	CString profileName;
-	CString targetPath;
-	std::vector<CString> targetArguments;
+	AutomationOptions options;
 	int exitCode;
 };
 

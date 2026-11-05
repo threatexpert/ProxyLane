@@ -33,6 +33,7 @@
     <ClCompile Include="AppVersion.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="LaunchShortcut.cpp"><Filter>源文件</Filter></ClCompile>
     <ClCompile Include="AutomationOptions.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -116,6 +117,7 @@
     <ClInclude Include="UpdateRelease.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="LaunchShortcut.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="AutomationOptions.h">
       <Filter>头文件</Filter>
     </ClInclude>

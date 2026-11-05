@@ -547,19 +547,26 @@ void CLaunchPanel::RebuildTooltips()
 	if (!m_tooltip.GetSafeHwnd() || IsInteracting() || m_animating || m_dragging || m_busyTile >= 0) return;
 	// Each visible tile is a distinct tool, with its own text and current bounds.
 	// No mouse-move activation race or zero-size creation rectangle is involved.
-	m_tipCount = VisibleTileCount();
-	for (int i = 0; i < m_tipCount; ++i)
+	const int count = VisibleTileCount();
+	for (int i = 0; i < count; ++i)
 	{
 		const int index = m_firstTile + i;
 		CRect rect = TileRect(index);
-		m_tooltip.AddTool(this, m_tiles[index].tip + L"\r\n" + Localization::Get(m_organizing ? L"launch.organize_active" : L"launch.organize_hint"), &rect, i + 1);
+		if (m_organizing)
+		{
+			CRect shortcut = ShortcutRect(index), remove = RemoveRect(index);
+			m_tooltip.AddTool(this, Localization::Get(m_tiles[index].available ? L"shortcut.create" : L"recent.unavailable"), &shortcut, ++m_tipCount);
+			m_tooltip.AddTool(this, Localization::Get(L"recent.remove"), &remove, ++m_tipCount);
+			rect.top = max(shortcut.bottom, remove.bottom);
+		}
+		m_tooltip.AddTool(this, m_tiles[index].tip + L"\r\n" + Localization::Get(m_organizing ? L"launch.organize_active" : L"launch.organize_hint"), &rect, ++m_tipCount);
 	}
 }
 
 void CLaunchPanel::StopMotion()
 {
 	CancelTileMove();
-	m_removePressed = -1;
+	m_removePressed = m_shortcutPressed = -1;
 	m_pointerDown = m_dragging = m_touchPanning = m_animating = FALSE;
 	m_hot = m_pressed = -1;
 	if (GetSafeHwnd())
@@ -727,7 +734,7 @@ void CLaunchPanel::EndDrag(CPoint point, BOOL allowClick)
 
 void CLaunchPanel::OnCaptureChanged(CWnd* window)
 {
-	m_removePressed = -1;
+	m_removePressed = m_shortcutPressed = -1;
 	if (m_pointerDown)
 	{
 		CancelTileMove();
@@ -741,7 +748,7 @@ CRect CLaunchPanel::RemoveRect(int index) const
 {
 	const CRect tile = TileRect(index);
 	// The hit target is larger than the painted cross, especially useful over RDP.
-	return CRect(tile.right - Scale(18), tile.top - Scale(4), tile.right + Scale(2), tile.top + Scale(16));
+	return CRect(max(tile.CenterPoint().x, tile.right - Scale(18)), tile.top - Scale(4), tile.right + Scale(2), tile.top + Scale(16));
 }
 
 int CLaunchPanel::HitTestRemove(CPoint point) const
@@ -749,6 +756,20 @@ int CLaunchPanel::HitTestRemove(CPoint point) const
 	if (!m_organizing || m_reordering || m_pointerDown || m_animating || m_busyTile >= 0) return -1;
 	for (int i = m_firstTile; i < m_firstTile + VisibleTileCount(); ++i)
 		if (RemoveRect(i).PtInRect(point)) return i;
+	return -1;
+}
+
+CRect CLaunchPanel::ShortcutRect(int index) const
+{
+	const CRect tile = TileRect(index);
+	return CRect(tile.left - Scale(2), tile.top - Scale(4), min(tile.CenterPoint().x, tile.left + Scale(18)), tile.top + Scale(16));
+}
+
+int CLaunchPanel::HitTestShortcut(CPoint point) const
+{
+	if (!m_organizing || m_reordering || m_pointerDown || m_animating || m_busyTile >= 0) return -1;
+	for (int i = m_firstTile; i < m_firstTile + VisibleTileCount(); ++i)
+		if (m_tiles[i].available && ShortcutRect(i).PtInRect(point)) return i;
 	return -1;
 }
 
@@ -1017,6 +1038,16 @@ void CLaunchPanel::OnPaint()
 			dc.MoveTo(cross.TopLeft()); dc.LineTo(cross.BottomRight());
 			dc.MoveTo(cross.right, cross.top); dc.LineTo(cross.left, cross.bottom);
 			dc.SelectObject(old);
+			CRect shortcut = ShortcutRect(i); shortcut.DeflateRect(Scale(2), Scale(2));
+			const BOOL pressed = m_shortcutPressed == i && ShortcutRect(i).PtInRect(m_editPoint);
+			const COLORREF accent = m_tiles[i].available ? UiTheme::Accent() : UiTheme::TextSecondary();
+			UiTheme::FillRoundRect(dc.m_hDC, shortcut, Scale(8), pressed ? accent : UiTheme::AccentSoft(), accent);
+			CRect arrow = shortcut; arrow.DeflateRect(Scale(4), Scale(4));
+			CPen arrowPen(PS_SOLID, max(1, Scale(1)), pressed ? RGB(255, 255, 255) : accent);
+			old = dc.SelectObject(&arrowPen);
+			dc.MoveTo(arrow.left, arrow.bottom); dc.LineTo(arrow.right, arrow.top);
+			dc.MoveTo(arrow.left, arrow.top); dc.LineTo(arrow.right, arrow.top); dc.LineTo(arrow.right, arrow.bottom);
+			dc.SelectObject(old);
 		}
 	}
 	if (m_reordering && m_editIndex >= 0) {
@@ -1036,7 +1067,7 @@ void CLaunchPanel::OnPaint()
 
 void CLaunchPanel::OnMouseMove(UINT flags, CPoint point)
 {
-	if (m_removePressed >= 0) { m_editPoint = point; Invalidate(FALSE); }
+	if (m_removePressed >= 0 || m_shortcutPressed >= 0) { m_editPoint = point; Invalidate(FALSE); }
 	if (!m_tracking)
 	{
 		TRACKMOUSEEVENT track = { sizeof(track), TME_LEAVE, m_hWnd, 0 };
@@ -1045,7 +1076,7 @@ void CLaunchPanel::OnMouseMove(UINT flags, CPoint point)
 	MoveDrag(point);
 	const int hit = m_busyTile < 0 ? HitTestTile(point) : -1;
 	SetHotTile(hit);
-	::SetCursor(::LoadCursor(NULL, hit >= 0 || HitTestRemove(point) >= 0 ? IDC_HAND : IDC_ARROW));
+	::SetCursor(::LoadCursor(NULL, hit >= 0 || HitTestRemove(point) >= 0 || HitTestShortcut(point) >= 0 ? IDC_HAND : IDC_ARROW));
 	CWnd::OnMouseMove(flags, point);
 }
 
@@ -1058,6 +1089,11 @@ LRESULT CLaunchPanel::OnMouseLeave(WPARAM, LPARAM)
 
 void CLaunchPanel::OnLButtonDown(UINT flags, CPoint point)
 {
+	const int shortcut = HitTestShortcut(point);
+	if (shortcut >= 0) {
+		SetFocus(); m_shortcutPressed = shortcut; m_editPoint = point;
+		ClearTooltips(); SetCapture(); Invalidate(FALSE); return;
+	}
 	const int remove = HitTestRemove(point);
 	if (remove >= 0) {
 		SetFocus(); m_removePressed = remove; m_editPoint = point;
@@ -1076,6 +1112,15 @@ void CLaunchPanel::OnLButtonDown(UINT flags, CPoint point)
 
 void CLaunchPanel::OnLButtonUp(UINT flags, CPoint point)
 {
+	if (m_shortcutPressed >= 0) {
+		const int index = m_shortcutPressed;
+		const BOOL create = HitTestShortcut(point) == index;
+		const CString id = m_tiles[index].id;
+		m_shortcutPressed = -1;
+		if (GetCapture() == this) ReleaseCapture();
+		if (create) if (CWnd* parent = GetParent()) parent->SendMessage(WM_LAUNCH_PANEL_SHORTCUT, 0, reinterpret_cast<LPARAM>(&id));
+		RebuildTooltips(); Invalidate(FALSE); return;
+	}
 	if (m_removePressed >= 0) {
 		const int index = m_removePressed;
 		const BOOL remove = HitTestRemove(point) == index;

@@ -525,6 +525,7 @@ BEGIN_MESSAGE_MAP(CProxyLaneDlg, CModernDialog)
 	ON_MESSAGE(WM_SHELLICON_NOTIFY, OnShellIconNotify)
 	ON_REGISTERED_MESSAGE(s_uTaskbarRestart, OnTaskbarRestartNotify)
 	ON_MESSAGE(WM_AUTOMATION_START, OnAutomationStart)
+	ON_WM_WINDOWPOSCHANGING()
 	ON_MESSAGE(WM_PRELOAD_APPLICATIONS, OnPreloadApplications)
 	ON_MESSAGE(WM_PROXY_STATUS_CHANGED, OnProxyStatusChanged)
 	ON_MESSAGE(WM_PROFILE_COMMAND_REQUEST, OnProfileCommandRequest)
@@ -549,6 +550,7 @@ LRESULT CProxyLaneDlg::OnPreloadApplications(WPARAM, LPARAM)
 
 BOOL CProxyLaneDlg::OnInitDialog()
 {
+	m_stayInTray = theApp.GetAutomationOptions().enabled;
 	CModernDialog::OnInitDialog();
 	// Do not expose a half-initialized child-dialog tree. On a busy machine
 	// Windows can otherwise compose individual controls before page creation,
@@ -774,10 +776,7 @@ LRESULT CProxyLaneDlg::OnAutomationStart(WPARAM wParam, LPARAM lParam)
 		return 0;
 	}
 
-	AppLaunchResult launchResult = page3->LaunchAndProxyApp(
-		options.targetPath,
-		options.targetArguments,
-		TRUE);
+	AppLaunchResult launchResult = page3->LaunchAutomationApplication(options);
 	if (launchResult != APP_LAUNCH_SUCCESS)
 	{
 		int exitCode = AUTOMATION_EXIT_TARGET_INVALID;
@@ -793,6 +792,7 @@ LRESULT CProxyLaneDlg::OnAutomationStart(WPARAM wParam, LPARAM lParam)
 		return 0;
 	}
 
+	if (options.shortcut) NotifyShortcutLaunch(options);
 	theApp.SignalAutomationReady();
 	return 0;
 }
@@ -870,20 +870,18 @@ LRESULT CProxyLaneDlg::OnProfileCommandRequest(WPARAM, LPARAM lParam)
 	int exitCode = AUTOMATION_EXIT_COMMAND_FORWARD_FAILED;
 	if (!InterlockedCompareExchange(&request->cancelled, FALSE, FALSE) &&
 		m_MainTab.IsProxyRunning() &&
-		m_MainTab.GetRunningProfileName().CompareNoCase(request->profileName) == 0 &&
-		theApp.IsProfileCommandServerActive(request->profileName))
+		m_MainTab.GetRunningProfileName().CompareNoCase(request->options.profileName) == 0 &&
+		theApp.IsProfileCommandServerActive(request->options.profileName))
 	{
 		CPage3* page3 = m_MainTab.GetPage3();
 		if (page3)
 		{
-			AppLaunchResult result = page3->LaunchAndProxyApp(
-				request->targetPath,
-				request->targetArguments,
-				TRUE);
+			AppLaunchResult result = page3->LaunchAutomationApplication(request->options);
 			switch (result)
 			{
 			case APP_LAUNCH_SUCCESS:
 				exitCode = AUTOMATION_EXIT_SUCCESS;
+				if (request->options.shortcut) NotifyShortcutLaunch(request->options);
 				break;
 			case APP_LAUNCH_INVALID_TARGET:
 				exitCode = AUTOMATION_EXIT_TARGET_INVALID;
@@ -995,8 +993,11 @@ CProxyLaneDlg::OnTaskbarRestartNotify(
 							   LPARAM lParam
 							   )
 {
+	m_trayNoticeKind = TRAY_NOTICE_NONE;
+	m_pendingBrowserNotice.Empty();
 	m_MainTab.GetPage3()->ClearBrowserNotifications();
 	AddTaskbarIcons();
+	ShowNextTrayNotification();
 	return 0;
 }
 
@@ -1011,24 +1012,29 @@ CProxyLaneDlg::OnShellIconNotify(
 		switch(lParam)
 		{
 		case NIN_BALLOONSHOW:
-			if (m_MainTab.GetPage3()->HasBrowserNotification())
+			if (m_trayNoticeKind == TRAY_NOTICE_BROWSER && m_MainTab.GetPage3()->HasBrowserNotification())
 				m_MainTab.AddLogText(0, Localization::Get(_T("browser_reuse.log_shown")));
 			break;
 		case NIN_BALLOONUSERCLICK:
-			if (m_MainTab.GetPage3()->HasBrowserNotification() && IsWindowEnabled())
 			{
-				// Activation follows the user's click, never the detection itself.
-				ShowAndActivate();
-				m_MainTab.GetPage3()->OpenBrowserNotification();
+				const TrayNoticeKind kind = m_trayNoticeKind;
+				m_trayNoticeKind = TRAY_NOTICE_NONE;
+				if (kind != TRAY_NOTICE_NONE && IsWindowEnabled()) ShowAndActivate();
+				if (kind == TRAY_NOTICE_BROWSER)
+				{
+					if (IsWindowEnabled()) m_MainTab.GetPage3()->OpenBrowserNotification();
+					else m_MainTab.GetPage3()->DismissBrowserNotification();
+				}
+				ShowNextTrayNotification();
 			}
-			else m_MainTab.GetPage3()->DismissBrowserNotification();
 			break;
 		case NIN_BALLOONHIDE:
 		case NIN_BALLOONTIMEOUT:
-			if (m_MainTab.GetPage3()->HasBrowserNotification())
 			{
-				m_MainTab.GetPage3()->DismissBrowserNotification();
-				HideBrowserNotification();
+				const TrayNoticeKind kind = m_trayNoticeKind;
+				m_trayNoticeKind = TRAY_NOTICE_NONE;
+				if (kind == TRAY_NOTICE_BROWSER) m_MainTab.GetPage3()->DismissBrowserNotification();
+				ShowNextTrayNotification();
 			}
 			break;
 		case WM_LBUTTONDBLCLK:
@@ -1047,30 +1053,79 @@ CProxyLaneDlg::OnShellIconNotify(
 
 BOOL CProxyLaneDlg::ShowBrowserNotification(const CString& name)
 {
+	m_pendingBrowserNotice = Localization::Format(_T("browser_reuse.notification"), (LPCTSTR)name);
+	ShowNextTrayNotification();
+	return TRUE;
+}
+
+void CProxyLaneDlg::NotifyShortcutLaunch(const AutomationOptions& options)
+{
+	// Launching an application must not change the user's window visibility or focus.
+	UpdateTaskbarIcon();
+	CString name = options.applicationName;
+	if (name.IsEmpty()) name = options.packaged ? options.targetPath : CString(PathFindFileName(options.targetPath));
+	name.Replace(L'\r', L' '); name.Replace(L'\n', L' ');
+	CString profile = options.profileName;
+	profile.Replace(L'\r', L' '); profile.Replace(L'\n', L' ');
+	m_MainTab.AddLogText(0, Localization::Format(L"shortcut.started_log", (LPCTSTR)name, (LPCTSTR)profile));
+	if (IsWindowVisible())
+	{
+		m_MainTab.ShowTransientStatus(Localization::Format(L"dialog.started_proxy", (LPCTSTR)name), CStatusLabel::TONE_SUCCESS);
+		return;
+	}
+	// Leave room for both fields in the Shell's fixed-size balloon text.
+	const CString body = Localization::Format(L"shortcut.started_notification", (LPCTSTR)name.Left(100), (LPCTSTR)profile.Left(80));
+	if (m_pendingLaunchNotices.size() >= 16) m_pendingLaunchNotices.pop_front();
+	m_pendingLaunchNotices.push_back(body);
+	ShowNextTrayNotification();
+}
+
+void CProxyLaneDlg::ShowNextTrayNotification()
+{
+	// The tray callback has no per-balloon identity. Submit only one at a time
+	// so an informational launch click cannot act on a queued browser warning.
+	if (m_trayNoticeKind != TRAY_NOTICE_NONE) return;
+	CString body;
+	if (!m_pendingBrowserNotice.IsEmpty())
+	{
+		m_trayNoticeKind = TRAY_NOTICE_BROWSER; body = m_pendingBrowserNotice; m_pendingBrowserNotice.Empty();
+	}
+	else if (!m_pendingLaunchNotices.empty())
+	{
+		m_trayNoticeKind = TRAY_NOTICE_LAUNCH; body = m_pendingLaunchNotices.front(); m_pendingLaunchNotices.pop_front();
+	}
+	else return;
 	NOTIFYICONDATA data = TrayIconData();
 	data.hWnd = m_hWnd;
 	data.uID = IDD;
 	data.uFlags = NIF_INFO;
 	// NIIF_RESPECT_QUIET_TIME is Windows 7+, and hidden by the XP SDK headers.
 	const DWORD respectQuietTime = 0x80;
-	data.dwInfoFlags = NIIF_WARNING;
+	data.dwInfoFlags = m_trayNoticeKind == TRAY_NOTICE_BROWSER ? NIIF_WARNING : NIIF_INFO;
 	if (SupportsNotificationQuietTime()) data.dwInfoFlags |= respectQuietTime;
 	data.uTimeout = 15000; // XP uses this; Vista+ uses the system accessibility setting.
-	const CString title = Localization::Get(_T("browser_reuse.title"));
-	const CString body = Localization::Format(_T("browser_reuse.notification"), (LPCTSTR)name);
+	const CString title = m_trayNoticeKind == TRAY_NOTICE_BROWSER ? Localization::Get(_T("browser_reuse.title")) : CString(L"ProxyLane");
 	_tcsncpy_s(data.szInfoTitle, _countof(data.szInfoTitle), title, _TRUNCATE);
 	_tcsncpy_s(data.szInfo, _countof(data.szInfo), body, _TRUNCATE);
 	// Modify the existing icon; no attention badge, menu item or taskbar flash.
 	const BOOL sent = Shell_NotifyIcon(NIM_MODIFY, &data);
 	// Shell_NotifyIcon does not promise a meaningful GetLastError value.
 	// Acceptance is distinct from the later NIN_BALLOONSHOW callback.
-	m_MainTab.AddLogText(0, Localization::Get(sent ?
-		_T("browser_reuse.log_sent") : _T("browser_reuse.log_failed")));
-	return sent;
+	if (m_trayNoticeKind == TRAY_NOTICE_BROWSER)
+		m_MainTab.AddLogText(0, Localization::Get(sent ? _T("browser_reuse.log_sent") : _T("browser_reuse.log_failed")));
+	if (!sent)
+	{
+		const TrayNoticeKind kind = m_trayNoticeKind; m_trayNoticeKind = TRAY_NOTICE_NONE;
+		if (kind == TRAY_NOTICE_BROWSER) m_MainTab.GetPage3()->DismissBrowserNotification();
+		else m_MainTab.AddLogText(0, Localization::Get(L"shortcut.notification_failed"));
+		ShowNextTrayNotification();
+	}
 }
 
 void CProxyLaneDlg::HideBrowserNotification()
 {
+	m_pendingBrowserNotice.Empty();
+	if (m_trayNoticeKind != TRAY_NOTICE_BROWSER) return;
 	NOTIFYICONDATA data = TrayIconData();
 	data.hWnd = m_hWnd;
 	data.uID = IDD;
@@ -1191,6 +1246,10 @@ void CProxyLaneDlg::StartProxyFromTaskbarProfile(LPCTSTR profileName)
 
 void CProxyLaneDlg::ShowAndActivate()
 {
+	m_stayInTray = FALSE;
+	// Background launch notices queued before the user opened the window are
+	// no longer useful as system popups. Browser warnings retain their own flow.
+	m_pendingLaunchNotices.clear();
 	ShowWindow(IsIconic() ? SW_RESTORE : SW_SHOW);
 
 	// Raise the window without leaving it permanently topmost.
@@ -1201,6 +1260,18 @@ void CProxyLaneDlg::ShowAndActivate()
 	BringWindowToTop();
 	SetForegroundWindow();
 	SetActiveWindow();
+}
+
+void CProxyLaneDlg::OnWindowPosChanging(WINDOWPOS* position)
+{
+	CModernDialog::OnWindowPosChanging(position);
+	// MFC's modal loop can show an initially hidden dialog again on its first
+	// idle cycle. Stay hidden until an explicit tray/notification Open action.
+	if (m_stayInTray && (position->flags & SWP_SHOWWINDOW))
+	{
+		position->flags &= ~SWP_SHOWWINDOW;
+		position->flags |= SWP_NOACTIVATE;
+	}
 }
 
 void CProxyLaneDlg::OnSize(UINT nType, int cx, int cy)
@@ -1415,6 +1486,7 @@ void CProxyLaneDlg::LaunchDroppedApplication(const InstalledApplications::Applic
 		return;
 	}
 	const AppLaunchResult result = page3->LaunchInteractiveApplication(app, elevationMode);
+	if (result == APP_LAUNCH_CANCELLED || result == APP_LAUNCH_FORWARDED) return;
 	if (result == APP_LAUNCH_SUCCESS)
 	{
 		m_MainTab.ShowTransientStatus(Localization::Format(
@@ -1426,6 +1498,8 @@ void CProxyLaneDlg::LaunchDroppedApplication(const InstalledApplications::Applic
 	CString message;
 	if (result == APP_LAUNCH_INVALID_TARGET)
 		message = Localization::Get(_T("dialog.drop_invalid"));
+	else if (result == APP_LAUNCH_SHORTCUT_INVALID)
+		message = Localization::Get(L"shortcut.recursive");
 	else if (result == APP_LAUNCH_UAC_CANCELLED)
 		message = Localization::Get(_T("dialog.drop_uac_cancelled"));
 	else if (result == APP_LAUNCH_INJECTION_FAILED)

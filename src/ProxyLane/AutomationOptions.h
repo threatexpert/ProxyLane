@@ -20,6 +20,7 @@ struct AutomationOptions
 	AutomationOptions()
 		: enabled(FALSE)
 		, showHelp(FALSE)
+		, elevated(FALSE), packaged(FALSE), shortcut(FALSE)
 	{
 	}
 
@@ -27,6 +28,12 @@ struct AutomationOptions
 	BOOL showHelp;
 	CString profileName;
 	CString targetPath;
+	CString applicationName;
+	CString initialArguments;
+	CString workingDirectory;
+	BOOL elevated;
+	BOOL packaged;
+	BOOL shortcut; // User-created link: report failures visibly, unlike unattended CLI calls.
 	std::vector<CString> targetArguments;
 	CString bootstrapEventName;
 };

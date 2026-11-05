@@ -8,6 +8,7 @@
 #define WM_LAUNCH_PANEL_TILE (WM_APP + 321)
 #define WM_LAUNCH_PANEL_PROFILE (WM_APP + 322)
 #define WM_LAUNCH_PANEL_EDIT (WM_APP + 323)
+#define WM_LAUNCH_PANEL_SHORTCUT (WM_APP + 324)
 
 // A native, keyboard-accessible button painted as a quiet text link.
 class CLaunchProfileLink : public CButton
@@ -44,6 +45,7 @@ public:
 		BOOL lightIcon; // white-on-transparent icon (Store apps); drawn on a dark plate
 		BOOL elevated;
 		BOOL pinned;
+		BOOL available = TRUE;
 		Tile() : icon(NULL), lightIcon(FALSE), elevated(FALSE), pinned(FALSE) {}
 	};
 	struct Edit { CString id, targetId; BOOL remove; };
@@ -60,7 +62,7 @@ public:
 	void SetBusyTile(int index);
 	void SetCompact(BOOL compact);
 	void SetProfileSummary(const CString& summary);
-	BOOL IsInteracting() const { return m_pointerDown || m_removePressed >= 0; }
+	BOOL IsInteracting() const { return m_pointerDown || m_removePressed >= 0 || m_shortcutPressed >= 0; }
 	void FinishOrganizing();
 
 	int PreferredHeight(int width = -1) const;
@@ -126,6 +128,8 @@ private:
 	void ConfigureTouch();
 	CRect RemoveRect(int index) const;
 	int HitTestRemove(CPoint point) const;
+	CRect ShortcutRect(int index) const;
+	int HitTestShortcut(CPoint point) const;
 
 	std::vector<Tile> m_tiles;
 	CString m_title;
@@ -166,6 +170,7 @@ private:
 	DWORD m_animationStart;
 	BOOL m_organizing = FALSE, m_reordering = FALSE;
 	int m_removePressed = -1;
+	int m_shortcutPressed = -1;
 	int m_editIndex = -1, m_edgeDirection = 0;
 	DWORD m_edgeSince = 0;
 	CPoint m_editPoint;
