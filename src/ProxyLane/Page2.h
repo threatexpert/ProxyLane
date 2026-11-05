@@ -49,7 +49,7 @@ public:
 	void LogProcessEvent(DWORD processId, LPCTSTR processPath, LPCTSTR messageKey);
 
 public:
-	CEdit m_Edit;
+	CSoftEdit m_Edit;
 	CModernButton m_btnCopy;
 	CModernButton m_btnClear;
 

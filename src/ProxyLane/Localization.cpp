@@ -1,19 +1,11 @@
 #include "stdafx.h"
 #include "ProxyLane.h"
 #include "Localization.h"
+#include "ConfigStorage.h"
 #include "resource.h"
 #include <stdarg.h>
 
-CString Localization::SettingsPath()
-	{
-		TCHAR path[MAX_PATH] = { 0 };
-		GetModuleFileName(NULL, path, _countof(path));
-		CString result(path);
-		if (result.Right(6).CompareNoCase(_T("64.exe")) == 0)
-			return result.Left(result.GetLength() - 6) + _T(".ini");
-		int dot = result.ReverseFind(_T('.'));
-		return (dot >= 0 ? result.Left(dot) : result) + _T(".ini");
-	}
+CString Localization::SettingsPath() { return ConfigStorage::Path(); }
 
 namespace
 {
@@ -206,8 +198,9 @@ BOOL Localization::SetPreferredLanguage(LPCTSTR language)
 {
 	if (!language)
 		return FALSE;
+	if (!ConfigStorage::WriteValue(_T("options"), _T("language"), language, SettingsPath())) return FALSE;
 	g_preferredLanguage = language;
-	return WritePrivateProfileString(_T("options"), _T("language"), language, SettingsPath());
+	return TRUE;
 }
 
 void Localization::ApplyDialog(CWnd* dialog, UINT dialogId)
@@ -243,7 +236,7 @@ void Localization::ApplyDialog(CWnd* dialog, UINT dialogId)
 	};
 	static const ControlTranslation page3[] = {
 		{ IDC_STATIC_PAGE_TITLE, _T("page3.title") }, { IDC_STATIC_PAGE_SUBTITLE, _T("page3.subtitle") },
-		{ IDC_REFRESH, _T("action.refresh") }, { IDC_INJECTDLL, _T("action.proxy_selected") },
+		{ IDC_INJECTDLL, _T("action.proxy_selected") },
 		{ IDC_SELECT_APP, _T("apps.select") }, { IDC_TERMINATE_PROCESS, _T("action.end_process") }
 	};
 	static const ControlTranslation page4[] = {

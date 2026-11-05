@@ -2,6 +2,7 @@
 #include "RecentApplications.h"
 #include "Localization.h"
 #include "IniFile.h"
+#include "ConfigStorage.h"
 #include "Base64.h"
 #include <errno.h>
 #include <shlwapi.h>
@@ -180,12 +181,7 @@ namespace
 
 CString RecentApplications::DefaultPath()
 {
-	CIniFile ini; ini.SetIniFileName(L"");
-	CString path = ini.GetIniFileName();
-#ifdef _WIN64
-	if (path.Right(6).CompareNoCase(L"64.ini") == 0) path = path.Left(path.GetLength() - 6) + L".ini";
-#endif
-	return path;
+	return Localization::SettingsPath();
 }
 
 RecentApplications::Entry RecentApplications::FromApplication(const InstalledApplications::Application& app, BOOL elevated)
@@ -254,22 +250,21 @@ BOOL RecentApplications::EnsureProfileId(const CString& profile, CString& id, co
 
 BOOL RecentApplications::DeleteProfile(const CString& profile, const CString& path)
 {
-	HistoryLock lock(path);
-	if (!lock.Valid()) return FALSE;
-	CIniFile ini; ini.SetIniFileName(path);
-	CString id;
-	if (!BindProfile(ini, profile, id, FALSE)) return FALSE;
-	if (!id.IsEmpty())
-	{
-		std::list<CString> sections;
-		if (ini.GetSectionList(sections) < 0) return FALSE;
-		const CString prefix = Prefix(id);
-		for (std::list<CString>::const_iterator i = sections.begin(); i != sections.end(); ++i)
-			if (i->Left(prefix.GetLength()).CompareNoCase(prefix) == 0 && !ini.DeleteSection(*i)) return FALSE;
-	}
-	if (!ini.DeleteSection(L"proxy_" + profile)) return FALSE;
-	InvalidateCache(path, id, TRUE);
-	return TRUE;
+ HistoryLock lock(path); if (!lock.Valid()) return FALSE;
+ CString id;
+ bool saved = ConfigStorage::Update(path, [&](const CString& stage) {
+  CIniFile ini; ini.SetIniFileName(stage); ini.staging = true;
+  if (!BindProfile(ini, profile, id, FALSE)) return false;
+  if (!id.IsEmpty()) {
+   std::list<CString> sections; if (ini.GetSectionList(sections) < 0) return false;
+   const CString prefix = Prefix(id);
+   for (const auto& section : sections)
+    if (section.Left(prefix.GetLength()).CompareNoCase(prefix) == 0 && !ini.DeleteSection(section)) return false;
+  }
+  return ini.DeleteSection(L"proxy_" + profile) != FALSE;
+ });
+ if (saved) InvalidateCache(path, id, TRUE);
+ return saved;
 }
 
 BOOL RecentApplications::Store::ReadBound(std::vector<Entry>& entries, CString& identity, BOOL create) const

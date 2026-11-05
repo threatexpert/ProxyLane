@@ -250,6 +250,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     <ClCompile Include="AutomationOptions.cpp" />
     <ClCompile Include="Base64.cpp" />
     <ClCompile Include="IniFile.cpp" />
+    <ClCompile Include="ConfigStorage.cpp" />
     <ClCompile Include="Localization.cpp" />
     <ClCompile Include="ListCtrlEx.cpp" />
     <ClCompile Include="ProcessListAccessibility.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
@@ -293,6 +294,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     <ClInclude Include="Base64.h" />
     <ClInclude Include="BoundedLogQueue.h" />
     <ClInclude Include="IniFile.h" />
+    <ClInclude Include="ConfigStorage.h" />
     <ClInclude Include="Localization.h" />
     <ClInclude Include="ListCtrlEx.h" />
     <ClInclude Include="ProcessListAccessibility.h" />
@@ -318,6 +320,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     <ClInclude Include="AsyncSnapshot.h" />
     <ClInclude Include="LaunchPanelPaging.h" />
     <ClInclude Include="Page5.h" />
+    <ClInclude Include="UpdateRelease.h" />
 	<ClInclude Include="ProfileCommandBroker.h" />
 	<ClInclude Include="ExitProcessesDialog.h" />
 	<ClInclude Include="ExitProcessCleanup.h" />

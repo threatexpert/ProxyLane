@@ -29,6 +29,7 @@ def run(binary_dir, bits, language):
         shutil.copy2(binary_dir / name, directory / name)
     platform = 'x64' if bits == 64 else 'Win32'
     shutil.copy2(root / 'tests/bin' / platform / 'Release/ProxyLaneTests.exe', directory / 'UdpLogProbe.exe')
+    (directory / 'portable.flag').touch()
     (directory / 'ProxyLane.ini').write_text(f'''[options]
 language={language}
 lastselected=UdpBlock

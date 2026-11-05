@@ -31,6 +31,7 @@ def run():
     shutil.copy2(binary, directory / 'ProxyLane64.exe')
     for name in ('ProxyLaneHook64.dll', 'ProxyLaneHook32.dll'):
         shutil.copy2(Path('bin') / name, directory / name)
+    (directory / 'portable.flag').touch()
     (directory / 'ProxyLane.ini').write_text(
         '[options]\nlanguage=en-US\nlastselected=Colors\n[proxy_Colors]\n'
         'Type=SOCKS5\nHost=127.0.0.1\nPort=9\nTransport=PLAIN\n'

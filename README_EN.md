@@ -96,7 +96,7 @@ The code includes current unsaved edits, username, **password and PSK**, network
 
 ### Import All Settings
 
-Choose **Actions ▾ → Import all settings from file…** to import a `ProxyLane.ini` from another directory or version, including all profiles and recent application records stored in it.
+Choose **Settings & About → Import all…** to import a `ProxyLane.ini` from another directory or version, including all profiles and recent application records stored in it.
 
 First stop the proxy, tests and monitoring, and close applications hooked by this instance. After confirmation, ProxyLane backs up the current configuration, replaces the entire INI and restarts. Unsaved edits are lost. External files such as certificates and recordings must be moved separately.
 
@@ -176,7 +176,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 
 The script checks that the application and Hook DLL versions match, creates `dist/ProxyLane-version-Windows.zip`, and reports its SHA-256. Use `-OutputDirectory D:\releases` to choose another output directory.
 
-The package includes both application architectures and Hook DLLs, the 64-bit secure-transport and MITM DLLs, both README files, and a `LICENSE` containing third-party notices. The configuration comes from `examples/ProxyLane.ini`, not your local `bin/ProxyLane.ini`. Test executables and command-line helpers are excluded.
+The package includes both application architectures and Hook DLLs, the 64-bit secure-transport and MITM DLLs, both README files, and a `LICENSE` containing third-party notices. No active INI is shipped. Test and Direct defaults are created on first launch, so extracting an upgrade does not overwrite user settings. Test executables and command-line helpers are excluded.
 
 ## Project Structure
 
@@ -189,3 +189,12 @@ The package includes both application architectures and Hook DLLs, the 64-bit se
 | `tests` | Automated tests and test tools |
 | `examples` | Sample configuration |
 | `scripts` | Build, validation and packaging scripts |
+
+
+### Configuration storage and filtering
+
+Use **New profile** in the profile menu to create a separate draft. **Authentication & encryption (optional)** shares one disclosure button and expands automatically when authentication or encryption is configured; collapsing it does not disable features or erase credentials. The process search matches names, PIDs and paths, and **Hooked only** limits the view to managed processes. Filtering uses the existing snapshot instead of scanning the system for every keystroke.
+
+Configuration location depends only on the `portable.flag` file beside the EXE; an empty file is sufficient. With the flag, settings use the adjacent `ProxyLane.ini`; without it, they use `%LOCALAPPDATA%\ProxyLane\ProxyLane.ini`. No registry preference is read or written. An adjacent INI alone does not enable portable mode; users upgrading from older versions must create `portable.flag` to keep using it. **Settings & About** shows the active path and offers “Switch to app-folder settings” or “Switch to user-folder settings”, plus import and export. Switching only creates or removes the marker and restarts the app; it does not copy, move or overwrite existing INI files. First-run defaults are created if the selected location has no INI. Import other settings yourself if needed. Use a separate directory with `portable.flag` for isolated test builds.
+
+Routine automatic backups and the separate restore UI are not provided. Full configuration import retains its original protection: a timestamped backup beside the current INI before replacement, and recovery if importing or restarting fails. Configuration saves validate a temporary file before replacement; failed writes keep the original configuration and unsaved edits. Exports contain passwords and PSKs, but not referenced external files. Manual update checks query https://10000.download/api/tools/proxylane/release in the background (the download service caches releases for ten minutes). New releases open the download site for the user to choose a package; nothing is installed automatically and the client does not need direct access to GitHub. Settings & About also links to the download site.

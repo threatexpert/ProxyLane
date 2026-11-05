@@ -176,6 +176,7 @@ def run(language):
         source = Path('bin') / name
         if source.exists():
             shutil.copy2(source, directory / name)
+    (directory / 'portable.flag').touch()
     ini = directory / 'ProxyLane.ini'
     ini.write_text('''[options]
 language=%s

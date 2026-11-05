@@ -19,6 +19,7 @@ def run(root, decrypt, missing_module):
         shutil.copy2(root/'bin'/name, work/name)
     ini = (root/'examples/ProxyLane.ini').read_text(encoding='utf-8')
     ini = ini.replace('[options]', '[options]\nlanguage=zh-CN\nDecryptHTTPS='+str(int(decrypt)))
+    (work / 'portable.flag').touch()
     (work/'ProxyLane.ini').write_text(ini, encoding='utf-8')
     env = dict(os.environ, PROXYLANE_MITM='0', PROXYLANE_MITM_HOME=str(work/'pki'),
                PROXYLANE_PROTOCOL_CACHE_ROOT=str(work/'cache'))

@@ -25,6 +25,7 @@ def main():
     work.mkdir()
     for name in ('ProxyLane.exe', 'ProxyLaneHook32.dll'):
         shutil.copy2(args.binary_directory/name, work/name)
+    (work / 'portable.flag').touch()
     ini = work/'ProxyLane.ini'
     ini.write_text('''[options]
 language=en-US

@@ -5,6 +5,7 @@ int Socks5UdpCodecTestsMain();
 int BoundedLogQueueTestsMain();
 int MonitorLogFormatTestsMain();
 int ProfileShareCodecTestsMain();
+int UpdateReleaseTestsMain();
 int UdpAssociationPolicyTestsMain();
 int UdpPayloadPolicyTestsMain();
 int DnsRedirectPolicyTestsMain();
@@ -33,6 +34,9 @@ int DetourHooksTestCase(const char* name);
 
 int main(int argc, char** argv)
 {
+    if (argc == 2 && std::strcmp(argv[1], "--update-release") == 0)
+        return UpdateReleaseTestsMain();
+    if (UpdateReleaseTestsMain() != 0) return 1;
     if (ProfileShareCodecTestsMain() != 0) return 1;
 	if (argc == 3 && std::strcmp(argv[1], "--udp-block-probe") == 0)
 		return UdpBlockLogProbe(argv[2]);

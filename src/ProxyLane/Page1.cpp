@@ -2,6 +2,7 @@
 //
 
 #include "stdafx.h"
+#include "ConfigStorage.h"
 #include "ProxyLane.h"
 #include "Page1.h"
 #include "MainTab.h"
@@ -148,6 +149,8 @@ void CPage1::DoDataExchange(CDataExchange* pDX)
 
 
 BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
+ ON_COMMAND(0x2401, &CPage1::OnNewProfile)
+ ON_BN_CLICKED(0x2402, &CPage1::OnToggleAdvanced)
 
 	ON_WM_SIZE()
 	ON_WM_VSCROLL()
@@ -198,6 +201,12 @@ BOOL CPage1::OnInitDialog()
 {
 	CModernDialog::OnInitDialog();
 
+ m_btnAdvanced.Create(L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, CRect(), this, 0x2402);
+ m_btnAdvanced.SetFont(&m_uiFont);
+ m_btnAdvanced.SetWindowPos(&m_edit_Port, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+ m_btnAdvanced.SetBackdropColor(UiTheme::PageBackground());
+ m_btnAdvanced.SetVisualStyle(CModernButton::STYLE_GHOST);
+ UpdateAdvancedCaption();
 	m_OK.SetVisualStyle(CModernButton::STYLE_PRIMARY);
 	m_Cancel.SetVisualStyle(CModernButton::STYLE_DANGER);
 	m_btnTest.SetVisualStyle(CModernButton::STYLE_SECONDARY);
@@ -217,16 +226,6 @@ BOOL CPage1::OnInitDialog()
 	UpdateTransportEnable();
 
 	g_ini.SetIniFileName(_T(""));
-#ifdef _WIN64
-	{
-		CString strIniPath = g_ini.GetIniFileName();
-		if (strIniPath.Right(6).CompareNoCase(_T("64.ini")) == 0)
-		{
-			strIniPath = strIniPath.Left(strIniPath.GetLength() - 6) + _T(".ini");
-			g_ini.SetIniFileName(strIniPath);
-		}
-	}
-#endif
 
 	list<CfgProxyItem> cfgls;
 	CString lastSelectedName;
@@ -307,7 +306,7 @@ void CPage1::UpdateWorkflowCard()
 
 void CPage1::LayoutSettingsPage()
 {
-	if (!GetSafeHwnd() || !m_cfgls.GetSafeHwnd() || !m_OK.GetSafeHwnd() || m_inLayout)
+	if (!GetSafeHwnd() || !m_cfgls.GetSafeHwnd() || !m_OK.GetSafeHwnd() || !m_btnAdvanced.GetSafeHwnd() || m_inLayout)
 		return;
 	CRect client;
 	GetClientRect(&client);
@@ -427,22 +426,34 @@ void CPage1::LayoutSettingsPage()
 		place(IDC_STATIC_PORT_LABEL, innerX + typeW + hostW + gapX * 2, row, portW, labelH);
 		place(IDC_EDIT_PORT, innerX + typeW + hostW + gapX * 2, row + labelH + S(2), portW, fieldH);
 
+		// Combined optional section follows lijing6006/ProxyLane PR #3.
 		row += rowStep;
-		const int half = (innerW - gapX) / 2;
-		place(IDC_STATIC_USER_LABEL, innerX, row, half, labelH);
-		place(IDC_EDIT_USER, innerX, row + labelH + S(2), half, fieldH);
-		place(IDC_STATIC_PASSWORD_LABEL, innerX + half + gapX, row, half, labelH);
-		place(IDC_EDIT_PASS, innerX + half + gapX, row + labelH + S(2), half, fieldH);
+		place(0x2402, innerX - S(4), row, min(innerW, max(S(180), textWidth(0x2402) + S(12))), S(26));
+		row += S(30);
+		const UINT advancedIds[] = { IDC_STATIC_USER_LABEL, IDC_EDIT_USER, IDC_STATIC_PASSWORD_LABEL, IDC_EDIT_PASS,
+			IDC_STATIC_TRANSPORT_LABEL, IDC_COMBO_TRANSPORT, IDC_STATIC_PSK_LABEL, IDC_EDIT_TRANSPORT_PSK };
+		for (int i = 0; i < _countof(advancedIds); ++i)
+			if (CWnd* control = GetDlgItem(advancedIds[i]))
+				control->ShowWindow(m_advancedOpen ? SW_SHOW : SW_HIDE);
+		if (m_advancedOpen)
+		{
+			const int half = (innerW - gapX) / 2;
+			place(IDC_STATIC_USER_LABEL, innerX, row, half, labelH);
+			place(IDC_EDIT_USER, innerX, row + labelH + S(2), half, fieldH);
+			place(IDC_STATIC_PASSWORD_LABEL, innerX + half + gapX, row, half, labelH);
+			place(IDC_EDIT_PASS, innerX + half + gapX, row + labelH + S(2), half, fieldH);
 
-		row += rowStep;
-		const int transportW = S(200);
-		const int pskW = innerW - transportW - gapX;
-		place(IDC_STATIC_TRANSPORT_LABEL, innerX, row, transportW, labelH);
-		place(IDC_COMBO_TRANSPORT, innerX, row + labelH + S(2), transportW, S(260));
-		place(IDC_STATIC_PSK_LABEL, innerX + transportW + gapX, row, pskW, labelH);
-		place(IDC_EDIT_TRANSPORT_PSK, innerX + transportW + gapX, row + labelH + S(2), pskW, fieldH);
+			row += rowStep;
+			const int transportW = S(200);
+			const int pskW = innerW - transportW - gapX;
+			place(IDC_STATIC_TRANSPORT_LABEL, innerX, row, transportW, labelH);
+			place(IDC_COMBO_TRANSPORT, innerX, row + labelH + S(2), transportW, S(260));
+			place(IDC_STATIC_PSK_LABEL, innerX + transportW + gapX, row, pskW, labelH);
+			place(IDC_EDIT_TRANSPORT_PSK, innerX + transportW + gapX, row + labelH + S(2), pskW, fieldH);
+			row += rowStep;
+		}
 
-		row += rowStep + S(2);
+		row += S(2);
 		const int buttonH = S(30);
 		const int testW = max(S(110), textWidth(IDC_TestProxy) + S(24));
 		const int startW = max(S(88), textWidth(IDOK) + S(24));
@@ -487,32 +498,38 @@ void CPage1::LayoutSettingsPage()
 		const int top = y;
 		const int rowH = S(29);
 		const int checkH = S(24);
-		int height;
-		if (m_activeTab == 0)
-			height = S(34) + rowH * 4 + S(6);
-		else
-			height = max(S(220), client.Height() - margin - top);
-		const CRect frame(x0, top, x0 + contentW, top + height);
-		place(IDC_STATIC_GROUP_OTHER, frame.left, frame.top, frame.Width(), frame.Height());
-		place(IDC_STATIC_CHILDFILTER_GROUP, frame.left, frame.top, frame.Width(), frame.Height());
-		place(IDC_STATIC_TARGETFILTER_GROUP, frame.left, frame.top, frame.Width(), frame.Height());
-
-		// Basic options.
-		const int column = innerW / 3;
 		int row = top + S(34);
-		place(IDC_CHECK_HOOKTCP, innerX, row, column - S(8), checkH);
-		place(IDC_CHECK_HOOK_UDP, innerX + column, row, column - S(8), checkH);
-		place(IDC_CHECK_HOOKCHILDPROCESS, innerX + column * 2, row, column, checkH);
-		row += rowH;
-		place(IDC_CHECK_BLOCKUDP, innerX, row, column * 2 - S(8), checkH);
-		place(IDC_CHECK_BLOCK_IPV6, innerX + column * 2, row, column, checkH);
-		row += rowH;
-		place(IDC_STATIC_DNS_LABEL, innerX, row + S(4), column - S(8), labelH);
-		place(IDC_RADIO_DNSLOCAL, innerX + column, row, column - S(8), checkH);
-		place(IDC_RADIO_DNSREMOTE, innerX + column * 2, row, column, checkH);
-		row += rowH;
-		place(IDC_CHECK_REDIRECT_PRIVATE_DNS, innerX, row, column * 2 - S(8), checkH);
-		place(IDC_EDIT_REDIRECT_DNS, innerX + column * 2, row - (fieldH - checkH) / 2, column, fieldH);
+        // Size switches by their label plus the track; wrap whole controls on
+        // narrow windows rather than losing the end of a setting's name.
+        auto flow = [&](std::initializer_list<UINT> ids, int extra, int start) {
+            int left = start;
+            for (UINT id : ids) {
+                const int w = min(innerW, textWidth(id) + S(extra));
+                if (left > innerX && left + w > innerX + innerW) { row += rowH; left = innerX; }
+                place(id, left, row, w, checkH); left += w + S(12);
+            }
+            row += rowH;
+        };
+        flow({IDC_CHECK_HOOKTCP, IDC_CHECK_HOOK_UDP, IDC_CHECK_HOOKCHILDPROCESS}, 44, innerX);
+        flow({IDC_CHECK_BLOCKUDP, IDC_CHECK_BLOCK_IPV6}, 44, innerX);
+        const int dnsLabelW = textWidth(IDC_STATIC_DNS_LABEL) + S(12);
+        place(IDC_STATIC_DNS_LABEL, innerX, row + S(4), dnsLabelW, labelH);
+        flow({IDC_RADIO_DNSLOCAL, IDC_RADIO_DNSREMOTE}, 24, innerX + dnsLabelW);
+        const int redirectW = min(innerW, textWidth(IDC_CHECK_REDIRECT_PRIVATE_DNS) + S(44));
+        place(IDC_CHECK_REDIRECT_PRIVATE_DNS, innerX, row, redirectW, checkH);
+        if (innerW - redirectW - S(12) < S(120)) {
+            row += rowH;
+            place(IDC_EDIT_REDIRECT_DNS, innerX, row, innerW, fieldH);
+        } else {
+            place(IDC_EDIT_REDIRECT_DNS, innerX + redirectW + S(12), row - (fieldH - checkH) / 2,
+                innerW - redirectW - S(12), fieldH);
+        }
+        const int height = m_activeTab == 0 ? row + max(fieldH, checkH) + S(10) - top
+            : max(S(220), client.Height() - margin - top);
+        const CRect frame(x0, top, x0 + contentW, top + height);
+        place(IDC_STATIC_GROUP_OTHER, frame.left, frame.top, frame.Width(), frame.Height());
+        place(IDC_STATIC_CHILDFILTER_GROUP, frame.left, frame.top, frame.Width(), frame.Height());
+        place(IDC_STATIC_TARGETFILTER_GROUP, frame.left, frame.top, frame.Width(), frame.Height());
 
 		// Child process and target filters share the same arrangement.
 		const int filterRadioTop = top + S(34);
@@ -1008,9 +1025,14 @@ BOOL CPage1::SaveCurrentProfile(LPCTSTR profileName)
 	if (!ValidateDnsRedirectSettings(TRUE))
 		return FALSE;
 
-	m_profileStore.SetLastSelected(item.strName);
 	UIGetCfg(&item);
-	m_profileStore.Save(item);
+	if (!m_profileStore.Save(item))
+	{
+		const CString reason = ConfigStorage::ErrorText(GetLastError());
+		MessageBox(Localization::Format(L"storage.save_failed", (LPCTSTR)reason, (LPCTSTR)Localization::SettingsPath()),
+			Localization::Get(L"profile.save_failed_title"), MB_ICONERROR);
+		return FALSE;
+	}
 
 	int index = m_cfgls.FindStringExact(-1, item.strName);
 	if (index == CB_ERR)
@@ -1056,8 +1078,8 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 	if (m_proxyController.IsRunning())
 		return TRUE;
 
-	// The proxy always runs a saved profile; on first use ask to save it now.
-	if (m_cfgls.GetCount() == 0)
+	// A newly created draft needs a saved identity before it can run.
+	if (m_cfgls.FindStringExact(-1, GetCurrentProfileName()) == CB_ERR)
 	{
 		if (!showErrors)
 			return FALSE;
@@ -1878,6 +1900,7 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_radioTargetFilterBypass.SetCheck(bTgtProxy ? BST_UNCHECKED : BST_CHECKED);
 		UpdateChildFilterEnable();
 	}
+	ExpandConfiguredOptions();
 	UpdateDnsRedirectEnable();
 	UpdateTransportEnable();
 	SetTimer(0x311, 300, NULL); // Debounce profile selection; no Shell work on the UI thread.
@@ -1887,6 +1910,7 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 	SetProfileDirty(FALSE);
 	if (m_proxyController.IsRunning())
 		SetRuntimeDirty(TRUE);
+	LayoutSettingsPage();
 }
 
 void CPage1::UIGetCfg( CfgProxyItem *item )
@@ -2119,4 +2143,33 @@ void CPage1::UpdateProxyStateUi()
 			? (m_profileDirty || m_runtimeDirty) : m_profileDirty);
 	}
 	UpdateWorkflowCard();
+}
+
+BOOL CPage1::SavePendingProfile() { return !m_profileDirty || SaveCurrentProfile(m_draftProfileName); }
+void CPage1::ExpandConfiguredOptions()
+{
+ CString user, pass; m_edit_User.GetWindowText(user); m_edit_Pass.GetWindowText(pass);
+ m_advancedOpen = !user.IsEmpty() || !pass.IsEmpty() || m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK;
+ UpdateAdvancedCaption();
+}
+void CPage1::OnToggleAdvanced()
+{
+ m_advancedOpen = !m_advancedOpen; UpdateAdvancedCaption(); LayoutSettingsPage();
+}
+void CPage1::OnNewProfile()
+{
+ if (m_bIsTesting || !ConfirmDiscardUnsavedChanges() || !RefreshProfileNames()) return;
+ CString base = Localization::Get(L"profile.new_name"), name = base;
+ for (int i = 2; m_cfgls.FindStringExact(-1, name) != CB_ERR; ++i) name.Format(L"%s %d", (LPCWSTR)base, i);
+ UILoadCfg(NULL);
+ m_loadingProfile = TRUE; m_cfgls.SetCurSel(-1); m_cfgls.SetWindowText(name); m_loadingProfile = FALSE;
+ m_draftProfileName = name; SetProfileDirty(TRUE); SetRuntimeDirty(TRUE);
+ m_scrollY = 0; LayoutSettingsPage(); m_cfgls.SetFocus(); m_cfgls.SetEditSel(0, -1);
+ UpdateProxyTestStatus();
+}
+
+void CPage1::UpdateAdvancedCaption()
+{
+ if (m_btnAdvanced.GetSafeHwnd())
+  m_btnAdvanced.SetWindowText(Localization::Get(m_advancedOpen ? L"profile.advanced_hide" : L"profile.advanced_show"));
 }

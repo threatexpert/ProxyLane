@@ -80,6 +80,7 @@ def run():
     for name in ('ProxyLane64.exe', 'ProxyLaneHook64.dll', 'ProxyLaneHook32.dll'):
         source = Path(sys.argv[1]) if name == 'ProxyLane64.exe' and len(sys.argv) > 1 else Path('bin') / name
         shutil.copy2(source, directory / name)
+    (directory / 'portable.flag').touch()
     (directory / 'ProxyLane.ini').write_text('[options]\nlanguage=zh-CN\nlastselected=ProcessTest\n[proxy_ProcessTest]\nType=SOCKS5\nHost=127.0.0.1\nPort=9\nTransport=PLAIN\n', encoding='utf-8')
     owner = child = None
     handle = memory = None

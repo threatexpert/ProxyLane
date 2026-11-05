@@ -170,7 +170,7 @@ void CPage2::OnSize(UINT nType, int cx, int cy)
 		CFont* font = capture->GetFont();
 		CFont* oldFont = font ? dc.SelectObject(font) : NULL;
 		const int width = max(UiTheme::ScaleForWindow(m_hWnd, 110),
-			dc.GetTextExtent(label).cx + UiTheme::ScaleForWindow(m_hWnd, 26));
+			dc.GetTextExtent(label).cx + UiTheme::ScaleForWindow(m_hWnd, 46));
 		if (oldFont) dc.SelectObject(oldFont);
 		toolbarLeft = copyLeft - gap - width;
 		capture->MoveWindow(toolbarLeft, buttonTop, width, buttonHeight);

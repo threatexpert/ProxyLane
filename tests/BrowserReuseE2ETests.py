@@ -42,6 +42,7 @@ def run(probe, browser, language, actions=False):
         shutil.copy2(Path('bin') / name, directory / name)
     executable = directory / browser
     shutil.copy2(probe, executable)
+    (directory / 'portable.flag').touch()
     (directory / 'ProxyLane.ini').write_text(f'''[options]
 lastselected=BrowserTest
 language={language}

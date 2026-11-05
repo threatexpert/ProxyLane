@@ -122,7 +122,6 @@ public:
 
 	CListCtrlEx m_ListCtrl;
 	CWindowFinderButton m_btnWindowFinder;
-	CModernButton m_btnRefresh;
 	CModernButton m_btnInject;
 	CModernButton m_btnSelectApp;
 	CModernButton m_btnTerminate;
@@ -155,7 +154,14 @@ private:
 	HWND m_pendingFinderTarget = NULL;
 	DWORD m_pendingFinderPid = 0;
 	ULONGLONG m_pendingFinderTime = 0;
-	void PollProcessList();
+	CSoftEdit m_processSearch;
+ CToggleButton m_onlyHooked;
+ CStatic m_filterEmpty;
+ CString m_filterText;
+ bool m_filterHooked = false;
+ afx_msg void OnProcessFilterChanged();
+ void BeginFilteredUpdate();
+ void PollProcessList();
 	void ApplyProcessBatch();
 	void CancelProcessRefresh();
 	void SortDisplayedProcesses();
@@ -301,7 +307,6 @@ public:
 
 	afx_msg void OnBnClickedOk();
 	afx_msg void OnBnClickedCancel();
-	afx_msg void OnBnClickedRefresh();
 	afx_msg void OnBnClickedInjectdll();
 	afx_msg void OnBnClickedSelectApp();
 	afx_msg void OnBnClickedTerminateProcess();

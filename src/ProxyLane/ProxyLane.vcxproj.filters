@@ -59,6 +59,7 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="ConfigImport.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="ConfigStorage.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="ProfileSharing.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -112,6 +113,9 @@
     <ClInclude Include="AppVersion.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="UpdateRelease.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="AutomationOptions.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -141,6 +145,7 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ConfigImport.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="ConfigStorage.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="ProfileShareCodec.h">
       <Filter>头文件</Filter>
     </ClInclude>

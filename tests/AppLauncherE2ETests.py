@@ -214,6 +214,7 @@ def main():
             listener.bind(('127.0.0.1', 0))
             listener.listen()
             threading.Thread(target=serve, args=(listener, observations), daemon=True).start()
+            (root / 'portable.flag').touch()
             (root / 'ProxyLane.ini').write_text('''[options]
 lastselected=AppsFolderTest
 language=%s

@@ -37,6 +37,8 @@ public:
 	BOOL	SetDWORD(CString AppName, CString KeyName, unsigned long Data);
 private:
 	CString IniFileName;
+public:
+	bool staging = false; // Private transaction copy; never exposed to the UI.
 };
 
 #endif // !defined(AFX_INIFILE_H__D5A2B7FC_6022_4EA2_9E54_91C4E7B31B8E__INCLUDED_)

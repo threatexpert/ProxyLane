@@ -42,6 +42,7 @@ def main():
         for source in (root/'bin').glob(pattern): shutil.copy2(source,work/source.name)
     profile='Reconnect'+uuid.uuid4().hex[:8]
     config=(root/'examples/ProxyLane.ini').read_text().replace('Test',profile).replace('Port=1080','Port='+str(relay.server_address[1]))
+    (work / 'portable.flag').touch()
     (work/'ProxyLane.ini').write_text(config.replace('[options]','[options]\nlanguage=zh-CN'))
     ca=Path(os.environ['LOCALAPPDATA'])/'ProxyLane'
     ca_snapshot=(ca/'ca.json').read_bytes()

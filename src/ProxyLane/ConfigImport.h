@@ -7,13 +7,14 @@
 namespace ConfigImport
 {
 // Owns only its uniquely named staging file and its prepared restart process.
-// The source and backup are never deleted or modified by this object.
+// Imports leave their source untouched. Storage switches change only the flag.
 class Pending
 {
 public:
     Pending() = default;
     ~Pending();
     bool Prepare(const CString& source, CString& error);
+    bool PrepareStorageSwitch(bool portable, CString& error);
     bool ArmRestart(CString& error);
     void FinishAfterShutdown();
     CString source, destination, backup;
@@ -24,10 +25,12 @@ private:
     CString staged, token, executable, readyName;
     std::vector<BYTE> contents, previous;
     bool hadPrevious = false;
+    bool switchStorage = false, usePortable = false;
     PROCESS_INFORMATION child = {};
     HANDLE ready = NULL;
-    bool Restore();
     bool Launch(bool suspended);
+    bool Restore();
+    void FinishStorageSwitch();
 };
 CString ErrorText(DWORD error);
 }

@@ -126,6 +126,7 @@ def run(binary_dir, bits, language):
                 endpoint = Endpoint(protocol=protocol, outcome=outcome)
             port = endpoint.port if endpoint else 0
             address = 'invalid-address' if outcome == 'invalid' else '::1'
+            (directory / 'portable.flag').touch()
             (directory / 'ProxyLane.ini').write_text(f'''[options]
 language={language}
 lastselected=Probe

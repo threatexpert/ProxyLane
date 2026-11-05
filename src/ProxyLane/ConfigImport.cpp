@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "ConfigImport.h"
+#include "ConfigStorage.h"
 #include "Localization.h"
 #include "AutomationOptions.h"
 #include "ProxyProfileStore.h"
@@ -132,9 +133,9 @@ UINT Validate(const CString& text, const CString& path)
     if (!invalid.IsEmpty()) throw Localization::Format(L"import.invalid_profiles", (LPCTSTR)invalid);
     return count;
 }
-void Report(const CString& text)
+void Report(const CString& text, LPCTSTR titleKey = L"import.title")
 {
-    ::MessageBox(NULL, text, Localization::Get(L"import.title"), MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+    ::MessageBox(NULL, text, Localization::Get(titleKey), MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
 }
 }
 
@@ -159,6 +160,7 @@ bool ConfigImport::Pending::Prepare(const CString& path, CString& error)
     try
     {
         source = path; destination = Localization::SettingsPath();
+        if (!ConfigStorage::EnsureDirectory(ConfigStorage::Directory(destination))) throw GetLastError();
         hadPrevious = Exists(destination);
         if (hadPrevious && SameFile(source, destination)) throw Localization::Get(L"import.same_file");
         contents = Read(source);
@@ -181,6 +183,16 @@ bool ConfigImport::Pending::Prepare(const CString& path, CString& error)
     catch (...) { error = Localization::Get(L"import.failed"); }
     return false;
 }
+bool ConfigImport::Pending::PrepareStorageSwitch(bool portable, CString& error)
+{
+    switchStorage = true; usePortable = portable;
+    destination = portable ? ConfigStorage::PortablePath() : ConfigStorage::UserPath();
+    if (destination.IsEmpty()) { error = ErrorText(ERROR_PATH_NOT_FOUND); return false; }
+    GUID guid;
+    if (CoCreateGuid(&guid) != S_OK) { error = ErrorText(ERROR_GEN_FAILURE); return false; }
+    wchar_t id[64]; StringFromGUID2(guid, id, _countof(id)); token = id;
+    return true;
+}
 bool ConfigImport::Pending::Launch(bool suspended)
 {
     CString command = QuoteCommandLineArgument(executable);
@@ -200,13 +212,15 @@ bool ConfigImport::Pending::ArmRestart(CString& error)
 {
     try
     {
-        if (Exists(destination) != hadPrevious) throw DWORD(ERROR_RETRY);
-        if (hadPrevious)
-        {
-            if (GetFileAttributes(destination) & FILE_ATTRIBUTE_READONLY) throw DWORD(ERROR_ACCESS_DENIED);
-            previous = Read(destination);
-            WriteNew(backup, previous);
-            if (Read(backup) != previous) throw DWORD(ERROR_WRITE_FAULT);
+        if (!switchStorage) {
+            ConfigStorage::Lock lock(destination); if (!lock.Valid()) throw GetLastError();
+            if (Exists(destination) != hadPrevious) throw DWORD(ERROR_RETRY);
+            if (hadPrevious) {
+                if (GetFileAttributes(destination) & FILE_ATTRIBUTE_READONLY) throw DWORD(ERROR_ACCESS_DENIED);
+                previous = Read(destination);
+                WriteNew(backup, previous);
+                if (Read(backup) != previous) throw DWORD(ERROR_WRITE_FAULT);
+            }
         }
         wchar_t path[MAX_PATH]; DWORD length = GetModuleFileName(NULL, path, _countof(path));
         if (!length || length >= _countof(path)) throw DWORD(ERROR_FILENAME_EXCED_RANGE);
@@ -225,6 +239,7 @@ bool ConfigImport::Pending::Restore()
 {
     try
     {
+        ConfigStorage::Lock lock(destination); if (!lock.Valid()) return false;
         if (!hadPrevious) return !Exists(destination) || DeleteFile(destination) != FALSE;
         if (Exists(destination) && Read(destination) == previous) return true;
         const CString restore = destination + L".restore-" + token + L".tmp";
@@ -237,6 +252,7 @@ bool ConfigImport::Pending::Restore()
 }
 void ConfigImport::Pending::FinishAfterShutdown()
 {
+    if (switchStorage) { FinishStorageSwitch(); return; }
     // Destroying MFC's main window posts WM_QUIT. A pending quit makes a
     // Win32 MessageBox return immediately, hiding import/recovery errors.
     // InitInstance already returned FALSE; no application message loop will
@@ -247,6 +263,7 @@ void ConfigImport::Pending::FinishAfterShutdown()
     CString error;
     try
     {
+        ConfigStorage::Lock lock(destination); if (!lock.Valid()) throw GetLastError();
         // All old dialogs and their workers have shut down. Never overwrite a
         // configuration changed by another writer since the confirmed backup.
         if (Exists(destination) != hadPrevious || (hadPrevious && Read(destination) != previous))
@@ -296,4 +313,34 @@ void ConfigImport::Pending::FinishAfterShutdown()
     }
     Report(Localization::Get(L"import.restart_restored"));
     if (!Launch(false)) Report(Localization::Format(L"import.kept_original", (LPCTSTR)ErrorText(GetLastError())));
+}
+
+void ConfigImport::Pending::FinishStorageSwitch()
+{
+    // Clear the main window's WM_QUIT so shutdown-time error dialogs can appear.
+    MSG quit;
+    while (PeekMessage(&quit, NULL, WM_QUIT, WM_QUIT, PM_REMOVE)) {}
+    CString error;
+    try
+    {
+        // No INI reads, copies, moves or overwrites during a location switch.
+        if (!ConfigStorage::SetPortable(usePortable)) throw GetLastError();
+    }
+    catch (DWORD code) { error = ErrorText(code); }
+    catch (...) { error = Localization::Get(L"import.failed"); }
+    if (!error.IsEmpty())
+        Report(Localization::Format(L"settings.switch_failed", (LPCTSTR)error), L"settings.data");
+    if (ResumeThread(child.hThread) != DWORD(-1))
+    {
+        CloseHandle(child.hThread); child.hThread = NULL;
+        HANDLE handles[] = {ready, child.hProcess};
+        if (WaitForMultipleObjects(2, handles, FALSE, 30000) == WAIT_OBJECT_0) return;
+    }
+    // Only stop the replacement GUI created by this operation, never user apps.
+    if (WaitForSingleObject(child.hProcess, 0) != WAIT_OBJECT_0)
+    {
+        TerminateProcess(child.hProcess, ERROR_PROCESS_ABORTED);
+        WaitForSingleObject(child.hProcess, 5000);
+    }
+    Report(Localization::Get(L"settings.restart_manual"), L"settings.data");
 }

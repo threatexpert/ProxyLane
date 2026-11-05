@@ -277,11 +277,45 @@ BOOL CModernDialog::OnInitDialog()
 
 	m_backgroundBrush.DeleteObject();
 	m_backgroundBrush.CreateSolidBrush(UiTheme::PageBackground());
+	m_fieldBrush.CreateSolidBrush(RGB(255, 255, 255));
+	m_disabledFieldBrush.CreateSolidBrush(UiTheme::Surface());
 	UiTheme::CreateUiFont(m_uiFont, m_hWnd, 9, FW_NORMAL);
 	UiTheme::CreateUiFont(m_titleFont, m_hWnd, 16, FW_SEMIBOLD);
 	SetFont(&m_uiFont, FALSE);
 	UiTheme::ApplyFontToChildren(this, &m_uiFont);
 	Localization::ApplyDialog(this, m_templateId);
+
+	// Resource-only fields/checks in secondary dialogs use the same controls as
+	// the main pages. DDX-bound and dynamically created controls own their wrappers.
+	for (HWND child = ::GetWindow(m_hWnd, GW_CHILD); child; child = ::GetWindow(child, GW_HWNDNEXT))
+	{
+		CWnd* control = CWnd::FromHandlePermanent(child);
+		if (!control)
+		{
+			TCHAR name[32] = {};
+			::GetClassName(child, name, _countof(name));
+			if (_tcsicmp(name, _T("Edit")) == 0)
+			{
+				CSoftEdit* field = new CSoftEdit;
+				field->m_autoDelete = true;
+				if (!field->SubclassWindow(child)) delete field;
+			}
+			else if (_tcsicmp(name, _T("Button")) == 0)
+			{
+				const DWORD type = ::GetWindowLong(child, GWL_STYLE) & BS_TYPEMASK;
+				if (type == BS_CHECKBOX || type == BS_AUTOCHECKBOX || type == BS_RADIOBUTTON || type == BS_AUTORADIOBUTTON)
+				{
+					CToggleButton* toggle = new CToggleButton;
+					toggle->m_autoDelete = TRUE;
+					if (!toggle->SubclassWindow(child)) delete toggle;
+				}
+			}
+			control = CWnd::FromHandlePermanent(child);
+		}
+		// Subclassing is now complete, so our non-client padding participates.
+		if (control && control->IsKindOf(RUNTIME_CLASS(CSoftEdit)))
+			control->SetWindowPos(NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+	}
 
 	CWnd* title = GetDlgItem(IDC_STATIC_PAGE_TITLE);
 	if (title)
@@ -360,6 +394,13 @@ BOOL CModernDialog::UsesSecondaryText(UINT controlId) const
 
 HBRUSH CModernDialog::OnCtlColor(CDC* dc, CWnd* wnd, UINT ctlColor)
 {
+	if (wnd && wnd->IsKindOf(RUNTIME_CLASS(CSoftEdit)))
+	{
+		const BOOL enabled = wnd->IsWindowEnabled();
+		dc->SetTextColor(enabled ? UiTheme::TextPrimary() : RGB(160, 166, 177));
+		dc->SetBkColor(enabled ? RGB(255, 255, 255) : UiTheme::Surface());
+		return (HBRUSH)(enabled ? m_fieldBrush.GetSafeHandle() : m_disabledFieldBrush.GetSafeHandle());
+	}
 	if (ctlColor == CTLCOLOR_STATIC || ctlColor == CTLCOLOR_BTN || ctlColor == CTLCOLOR_DLG)
 	{
 		dc->SetBkMode(TRANSPARENT);
@@ -467,6 +508,12 @@ void CModernButton::DrawItem(LPDRAWITEMSTRUCT info)
 		text = UiTheme::Accent();
 	}
 
+	if (m_visualStyle == STYLE_GHOST)
+	{
+		fill = pressed || m_hot ? UiTheme::AccentSoft() : m_backdrop;
+		border = CLR_NONE;
+		text = pressed || m_hot ? UiTheme::TextPrimary() : UiTheme::TextSecondary();
+	}
 	if (disabled)
 	{
 		fill = RGB(244, 245, 247);
@@ -480,7 +527,7 @@ void CModernButton::DrawItem(LPDRAWITEMSTRUCT info)
 	CBrush brush(fill);
 	CPen* oldPen = dc.SelectObject(&pen);
 	CBrush* oldBrush = dc.SelectObject(&brush);
-	UiTheme::FillRoundRect(dc.m_hDC, rect, UiTheme::ScaleForWindow(m_hWnd, 6), fill, border);
+	UiTheme::FillRoundRect(dc.m_hDC, rect, m_visualStyle == STYLE_GHOST ? rect.Height() : UiTheme::ScaleForWindow(m_hWnd, 6), fill, border);
 	dc.SelectObject(oldBrush);
 	dc.SelectObject(oldPen);
 
@@ -490,7 +537,9 @@ void CModernButton::DrawItem(LPDRAWITEMSTRUCT info)
 	dc.SetTextColor(text);
 	CFont* font = GetFont();
 	CFont* oldFont = font ? dc.SelectObject(font) : NULL;
-	dc.DrawText(caption, rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+	CRect textRect = rect;
+	dc.DrawText(caption, textRect, DT_CENTER |
+		DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 	if (oldFont)
 		dc.SelectObject(oldFont);
 
@@ -514,6 +563,213 @@ void CModernButton::DrawItem(LPDRAWITEMSTRUCT info)
 	}
 
 	target.BitBlt(0, 0, clientRect.Width(), clientRect.Height(), &dc, 0, 0, SRCCOPY);
+	dc.SelectObject(oldBuffer);
+	target.Detach();
+}
+
+// Switch drawing and interaction adapted from lijing6006/ProxyLane PR #3.
+IMPLEMENT_DYNAMIC(CToggleButton, CButton)
+
+BEGIN_MESSAGE_MAP(CToggleButton, CButton)
+	ON_MESSAGE(BM_GETCHECK, OnGetCheck)
+	ON_MESSAGE(BM_SETCHECK, OnSetCheck)
+	ON_WM_GETDLGCODE()
+	ON_CONTROL_REFLECT_EX(BN_CLICKED, OnClicked)
+	ON_WM_LBUTTONDBLCLK()
+	ON_WM_MOUSEMOVE()
+	ON_MESSAGE(WM_MOUSELEAVE, OnMouseLeave)
+	ON_WM_TIMER()
+END_MESSAGE_MAP()
+
+CToggleButton::CToggleButton()
+	: m_radio(FALSE), m_automatic(TRUE), m_autoDelete(FALSE), m_check(BST_UNCHECKED), m_hot(FALSE)
+	, m_knob(0), m_animStart(0)
+{
+}
+
+void CToggleButton::OnTimer(UINT_PTR timer)
+{
+	if (timer != 0x51)
+	{
+		CButton::OnTimer(timer);
+		return;
+	}
+	const float target = m_check == BST_CHECKED ? 1.0f : 0.0f;
+	const float progress = min(1.0f, static_cast<float>(GetTickCount() - m_animStart) / 140);
+	// Ease out: quick start, gentle stop.
+	const float eased = 1.0f - (1.0f - progress) * (1.0f - progress);
+	m_knob = target > 0.5f ? eased : 1.0f - eased;
+	if (progress >= 1.0f)
+	{
+		m_knob = target;
+		KillTimer(0x51);
+	}
+	Invalidate(FALSE);
+}
+
+void CToggleButton::PreSubclassWindow()
+{
+	const DWORD type = GetStyle() & BS_TYPEMASK;
+	m_radio = type == BS_RADIOBUTTON || type == BS_AUTORADIOBUTTON;
+	m_automatic = type == BS_AUTOCHECKBOX || type == BS_AUTORADIOBUTTON;
+	// Not subclassed yet, so this still reaches the native button's state.
+	m_check = static_cast<int>(::SendMessage(m_hWnd, BM_GETCHECK, 0, 0));
+	m_knob = m_check == BST_CHECKED ? 1.0f : 0.0f;
+	ModifyStyle(BS_TYPEMASK, BS_OWNERDRAW);
+	CButton::PreSubclassWindow();
+}
+
+void CToggleButton::PostNcDestroy()
+{
+	CButton::PostNcDestroy();
+	if (m_autoDelete) delete this;
+}
+
+LRESULT CToggleButton::OnGetCheck(WPARAM, LPARAM)
+{
+	return m_check;
+}
+
+LRESULT CToggleButton::OnSetCheck(WPARAM state, LPARAM)
+{
+	if (m_radio)
+		ModifyStyle(state == BST_CHECKED ? 0 : WS_TABSTOP, state == BST_CHECKED ? WS_TABSTOP : 0);
+	if (m_check != static_cast<int>(state))
+	{
+		m_check = static_cast<int>(state);
+		if (!m_radio && IsWindowVisible())
+		{
+			m_animStart = GetTickCount();
+			SetTimer(0x51, 15, NULL);
+		}
+		else
+		{
+			m_knob = m_check == BST_CHECKED ? 1.0f : 0.0f;
+		}
+		Invalidate(FALSE);
+	}
+	return 0;
+}
+
+UINT CToggleButton::OnGetDlgCode()
+{
+	return DLGC_BUTTON | (m_radio ? DLGC_RADIOBUTTON : 0);
+}
+
+BOOL CToggleButton::OnClicked()
+{
+	if (m_automatic)
+	{
+		if (m_radio)
+		{
+			CWnd* parent = GetParent();
+			for (HWND other = ::GetNextDlgGroupItem(parent->m_hWnd, m_hWnd, TRUE);
+				other && other != m_hWnd; other = ::GetNextDlgGroupItem(parent->m_hWnd, other, TRUE))
+			{
+				if (::SendMessage(other, WM_GETDLGCODE, 0, 0) & DLGC_RADIOBUTTON)
+					::SendMessage(other, BM_SETCHECK, BST_UNCHECKED, 0);
+			}
+			SetCheck(BST_CHECKED);
+		}
+		else
+		{
+			SetCheck(m_check == BST_CHECKED ? BST_UNCHECKED : BST_CHECKED);
+		}
+	}
+	return FALSE; // the parent still receives BN_CLICKED
+}
+
+void CToggleButton::OnLButtonDblClk(UINT flags, CPoint point)
+{
+	// A quick second click should toggle again, not turn into BN_DOUBLECLICKED.
+	SendMessage(WM_LBUTTONDOWN, flags, MAKELPARAM(point.x, point.y));
+}
+
+void CToggleButton::OnMouseMove(UINT flags, CPoint point)
+{
+	if (!m_hot)
+	{
+		m_hot = TRUE;
+		TRACKMOUSEEVENT track = { sizeof(track), TME_LEAVE, m_hWnd, 0 };
+		_TrackMouseEvent(&track);
+		Invalidate(FALSE);
+	}
+	CButton::OnMouseMove(flags, point);
+}
+
+LRESULT CToggleButton::OnMouseLeave(WPARAM, LPARAM)
+{
+	m_hot = FALSE;
+	Invalidate(FALSE);
+	return 0;
+}
+
+void CToggleButton::DrawItem(LPDRAWITEMSTRUCT info)
+{
+	CDC target;
+	target.Attach(info->hDC);
+	CRect rect;
+	GetClientRect(&rect);
+	CDC dc;
+	CBitmap buffer;
+	dc.CreateCompatibleDC(&target);
+	buffer.CreateCompatibleBitmap(&target, max(1, rect.Width()), max(1, rect.Height()));
+	CBitmap* oldBuffer = dc.SelectObject(&buffer);
+	const COLORREF backdrop = UiTheme::PageBackground();
+	dc.FillSolidRect(rect, backdrop);
+
+	const BOOL disabled = (info->itemState & ODS_DISABLED) != 0;
+	const BOOL checked = m_check == BST_CHECKED;
+	const BOOL focused = (info->itemState & ODS_FOCUS) && !(info->itemState & ODS_NOFOCUSRECT);
+	CString caption;
+	GetWindowText(caption);
+	dc.SetBkMode(TRANSPARENT);
+	CFont* font = GetFont();
+	CFont* oldFont = font ? dc.SelectObject(font) : NULL;
+
+	if (m_radio)
+	{
+		const COLORREF fill = checked ? (disabled ? UiTheme::Border() : UiTheme::Accent())
+			: (m_hot && !disabled ? UiTheme::AccentSoft() : UiTheme::Surface());
+		UiTheme::FillRoundRect(dc.m_hDC, rect, rect.Height(), fill, CLR_NONE);
+		dc.SetTextColor(checked ? RGB(255, 255, 255) : (disabled ? RGB(160, 166, 177) : UiTheme::TextSecondary()));
+		dc.DrawText(caption, rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+		if (focused)
+		{
+			CRect ring = rect;
+			ring.DeflateRect(1, 1);
+			UiTheme::FillRoundRect(dc.m_hDC, ring, ring.Height(), CLR_NONE, checked ? RGB(255, 255, 255) : UiTheme::Accent());
+		}
+	}
+	else
+	{
+		const int trackHeight = UiTheme::ScaleForWindow(m_hWnd, 18);
+		const int trackWidth = UiTheme::ScaleForWindow(m_hWnd, 32);
+		const int knob = trackHeight - UiTheme::ScaleForWindow(m_hWnd, 6);
+		const int inset = (trackHeight - knob) / 2;
+		const int top = rect.CenterPoint().y - trackHeight / 2;
+		CRect track(rect.left, top, rect.left + trackWidth, top + trackHeight);
+		const COLORREF on = disabled ? UiTheme::Border() : UiTheme::Accent();
+		const COLORREF off = disabled ? UiTheme::Surface() : UiTheme::Border();
+		auto mix = [this](COLORREF a, COLORREF b) {
+			return RGB(GetRValue(a) + (GetRValue(b) - GetRValue(a)) * m_knob,
+				GetGValue(a) + (GetGValue(b) - GetGValue(a)) * m_knob,
+				GetBValue(a) + (GetBValue(b) - GetBValue(a)) * m_knob);
+		};
+		UiTheme::FillRoundRect(dc.m_hDC, track, trackHeight, mix(off, on), CLR_NONE);
+		const int travel = track.Width() - inset * 2 - knob;
+		const int knobLeft = track.left + inset + static_cast<int>(travel * m_knob + 0.5f);
+		UiTheme::FillRoundRect(dc.m_hDC, CRect(knobLeft, top + inset, knobLeft + knob, top + inset + knob), knob,
+			disabled ? RGB(160, 166, 177) : RGB(255, 255, 255), CLR_NONE);
+		if (focused)
+			UiTheme::FillRoundRect(dc.m_hDC, track, trackHeight, CLR_NONE, UiTheme::Accent());
+		CRect label = rect;
+		label.left = track.right + UiTheme::ScaleForWindow(m_hWnd, 8);
+		dc.SetTextColor(disabled ? RGB(160, 166, 177) : UiTheme::TextPrimary());
+		dc.DrawText(caption, label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+	}
+	if (oldFont) dc.SelectObject(oldFont);
+	target.BitBlt(0, 0, rect.Width(), rect.Height(), &dc, 0, 0, SRCCOPY);
 	dc.SelectObject(oldBuffer);
 	target.Detach();
 }
@@ -900,6 +1156,12 @@ void CSoftEdit::PreSubclassWindow()
 	CEdit::PreSubclassWindow();
 }
 
+void CSoftEdit::PostNcDestroy()
+{
+	CEdit::PostNcDestroy();
+	if (m_autoDelete) delete this;
+}
+
 void CSoftEdit::OnNcCalcSize(BOOL calcValidRects, NCCALCSIZE_PARAMS* params)
 {
 	CEdit::OnNcCalcSize(calcValidRects, params);
@@ -934,8 +1196,12 @@ void CSoftEdit::OnNcCalcSize(BOOL calcValidRects, NCCALCSIZE_PARAMS* params)
 
 void CSoftEdit::OnNcPaint()
 {
+	// Let Windows draw the native scroll bars first, then draw our frame last.
+	// Otherwise themed EDIT painting can replace the rounded outline.
+	Default();
 	CRect window;
 	GetWindowRect(&window);
+	const CPoint origin = window.TopLeft();
 	CRect client;
 	GetClientRect(&client);
 	ClientToScreen(&client);
@@ -944,14 +1210,21 @@ void CSoftEdit::OnNcPaint()
 
 	CWindowDC dc(this);
 	dc.ExcludeClipRect(&client);
+	for (LONG object : { OBJID_VSCROLL, OBJID_HSCROLL })
+	{
+		SCROLLBARINFO bar = { sizeof(bar) };
+		if (::GetScrollBarInfo(m_hWnd, object, &bar) && !(bar.rgstate[0] & STATE_SYSTEM_INVISIBLE))
+		{
+			CRect scroll(bar.rcScrollBar); scroll.OffsetRect(-origin.x, -origin.y);
+			dc.ExcludeClipRect(scroll);
+		}
+	}
 	dc.FillSolidRect(window, UiTheme::PageBackground());
 	const BOOL enabled = IsWindowEnabled();
 	const BOOL focused = ::GetFocus() == m_hWnd;
 	COLORREF border = focused ? UiTheme::Accent() : (enabled ? RGB(208, 214, 223) : UiTheme::BorderSoft());
 	UiTheme::FillRoundRect(dc.m_hDC, window, UiTheme::ScaleForWindow(m_hWnd, 8),
-		RGB(255, 255, 255), border);
-	// Scroll bars of multi-line edits are painted by the default handler.
-	Default();
+		enabled ? RGB(255, 255, 255) : UiTheme::Surface(), border);
 }
 
 void CSoftEdit::OnSetFocus(CWnd* oldWindow)

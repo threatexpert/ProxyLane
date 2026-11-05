@@ -807,7 +807,6 @@ void CPage3::DoDataExchange(CDataExchange* pDX)
 	CDialog::DoDataExchange(pDX);
 	DDX_Control(pDX, IDC_PSLIST, m_ListCtrl);
 	DDX_Control(pDX, IDC_WINDOW_FINDER, m_btnWindowFinder);
-	DDX_Control(pDX, IDC_REFRESH, m_btnRefresh);
 	DDX_Control(pDX, IDC_INJECTDLL, m_btnInject);
 	DDX_Control(pDX, IDC_SELECT_APP, m_btnSelectApp);
 	DDX_Control(pDX, IDC_TERMINATE_PROCESS, m_btnTerminate);
@@ -830,7 +829,6 @@ BOOL CPage3::OnInitDialog()
 	DragAcceptFiles(FALSE);
 	m_ListCtrl.DragAcceptFiles(FALSE);
 	m_btnWindowFinder.SetVisualStyle(CModernButton::STYLE_SECONDARY);
-	m_btnRefresh.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	m_btnSelectApp.SetVisualStyle(CModernButton::STYLE_PRIMARY);
 	m_btnSelectApp.SetBackdropColor(UiTheme::Surface());
 	m_btnInject.SetVisualStyle(CModernButton::STYLE_SECONDARY);
@@ -856,6 +854,13 @@ BOOL CPage3::OnInitDialog()
 		m_launchPanel.SetWindowPos(&wndBottom, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 	SetTimer(TIMER_LAUNCH_PANEL, 500, NULL);
 	RefreshLaunchPanel();
+ m_processSearch.Create(WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, CRect(), this, 0x2410);
+ m_processSearch.SetFont(&m_uiFont);
+ m_processSearch.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)(LPCWSTR)Localization::Get(L"process.filter_short"));
+ m_onlyHooked.Create(Localization::Get(L"process.only_hooked"), WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, CRect(), this, 0x2411);
+ m_onlyHooked.SetFont(&m_uiFont);
+ m_filterEmpty.Create(Localization::Get(L"process.no_match"), WS_CHILD | SS_CENTER, CRect(), this, 0x2413);
+ m_filterEmpty.SetFont(&m_uiFont);
 	SetProcessesExpanded(FALSE);
 	if (m_windowFinderToolTip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX))
 	{
@@ -863,6 +868,7 @@ BOOL CPage3::OnInitDialog()
 			&m_btnWindowFinder,
 			Localization::Get(_T("page3.finder_tip")));
 		m_windowFinderToolTip.SetMaxTipWidth(UiTheme::ScaleForWindow(m_hWnd, 320));
+		m_windowFinderToolTip.AddTool(&m_processSearch, Localization::Get(L"process.filter"));
 	}
 	// 资源模板为兼容旧版本仍可能带有单选样式，初始化时统一启用多选。
 	m_ListCtrl.ModifyStyle(LVS_SINGLESEL, 0);
@@ -1227,13 +1233,14 @@ BOOL CPage3::SelectFirstProcessByNamePrefix(const CString& prefix)
 }
 
 BEGIN_MESSAGE_MAP(CPage3, CModernDialog)
+ ON_EN_CHANGE(0x2410, &CPage3::OnProcessFilterChanged)
+ ON_BN_CLICKED(0x2411, &CPage3::OnProcessFilterChanged)
 	ON_WM_SHOWWINDOW()
 	ON_WM_DESTROY()
 	ON_MESSAGE(WM_PROCESS_LIST_REQUEST, &CPage3::OnProcessListRequest)
 	ON_MESSAGE(ProcessListAccessibility::ChangedMessage, &CPage3::OnProcessAccessibilityChanged)
 	ON_MESSAGE(ProcessListAccessibility::RequestMessage, &CPage3::OnProcessAccessibilityRequest)
 	ON_WM_SIZE()
-	ON_BN_CLICKED(IDC_REFRESH, &CPage3::OnBnClickedRefresh)
 	ON_BN_CLICKED(IDC_INJECTDLL, &CPage3::OnBnClickedInjectdll)
 	ON_BN_CLICKED(IDC_SELECT_APP, &CPage3::OnBnClickedSelectApp)
 	ON_BN_CLICKED(IDC_TERMINATE_PROCESS, &CPage3::OnBnClickedTerminateProcess)
@@ -1313,24 +1320,49 @@ void CPage3::LayoutProcessPage()
 	}
 
 	// Process section: heading on the left, tools on the right.
+	auto compactWidth = [this](CWnd& control, int padding, int minimum) {
+		if (!control.GetSafeHwnd()) return UiTheme::ScaleForWindow(m_hWnd, max(padding, minimum));
+		CString label; control.GetWindowText(label);
+		CClientDC dc(&control);
+		CFont* font = control.GetFont();
+		CFont* old = font ? dc.SelectObject(font) : NULL;
+		const int width = max(UiTheme::ScaleForWindow(m_hWnd, minimum),
+			dc.GetTextExtent(label).cx + UiTheme::ScaleForWindow(m_hWnd, padding));
+		if (old) dc.SelectObject(old);
+		return width;
+	};
 	const int finderWidth = UiTheme::ScaleForWindow(m_hWnd, 30);
-	const int refreshWidth = textWidth(m_btnRefresh, 70);
-	const int injectWidth = textWidth(m_btnInject, 96);
-	const int terminateWidth = textWidth(m_btnTerminate, 90);
-	const int toolbarWidth = finderWidth + refreshWidth + injectWidth + terminateWidth + gap * 3;
-	const int headingWidth = textWidth(m_processToggle, 150);
-	const BOOL separateRow = rcClient.Width() - margin * 2 < toolbarWidth + headingWidth + gap;
+	const int injectWidth = compactWidth(m_btnInject, 20, 72);
+	const int terminateWidth = compactWidth(m_btnTerminate, 20, 72);
+	const int toolbarWidth = finderWidth + injectWidth + terminateWidth + gap * 2;
+	const int headingWidth = compactWidth(m_processToggle, 20, 0);
+	const int onlyWidth = compactWidth(m_onlyHooked, 44, 0);
+	const int preferredSearchWidth = UiTheme::ScaleForWindow(m_hWnd, 120);
+	const int minimumSearchWidth = UiTheme::ScaleForWindow(m_hWnd, 80);
+	const int availableSearchWidth = rcClient.Width() - margin * 2 - toolbarWidth - headingWidth - onlyWidth - gap * 3;
+	// Shrink the search field before moving the action buttons to another row.
+	const BOOL separateRow = availableSearchWidth < minimumSearchWidth;
+	const int firstRowSpace = rcClient.Width() - margin * 2 - headingWidth - onlyWidth - gap * 2;
+	const int searchWidth = separateRow ? min(preferredSearchWidth, max(minimumSearchWidth, firstRowSpace))
+		: min(preferredSearchWidth, availableSearchWidth);
 
 	if (m_processToggle.GetSafeHwnd())
 		m_processToggle.MoveWindow(margin, top, headingWidth, buttonHeight);
+	if (m_processSearch.GetSafeHwnd())
+	{
+		m_processSearch.ShowWindow(m_processesExpanded ? SW_SHOW : SW_HIDE);
+		m_onlyHooked.ShowWindow(m_processesExpanded ? SW_SHOW : SW_HIDE);
+		m_processSearch.MoveWindow(margin + headingWidth + gap, top, searchWidth, buttonHeight);
+		m_onlyHooked.MoveWindow(margin + headingWidth + gap * 2 + searchWidth, top, onlyWidth, buttonHeight);
+	}
 	if (!m_processesExpanded)
 		return;
 	int left = separateRow ? margin : rcClient.right - margin - toolbarWidth;
 	int toolbarTop = top;
 	if (separateRow)
 		toolbarTop = top + buttonHeight + gap;
-	CWnd* buttons[] = { &m_btnWindowFinder, &m_btnRefresh, &m_btnInject, &m_btnTerminate };
-	const int widths[] = { finderWidth, refreshWidth, injectWidth, terminateWidth };
+	CWnd* buttons[] = { &m_btnWindowFinder, &m_btnInject, &m_btnTerminate };
+	const int widths[] = { finderWidth, injectWidth, terminateWidth };
 	for (int i = 0; i < _countof(buttons); ++i)
 	{
 		if (separateRow && left > margin && left + widths[i] > rcClient.right - margin)
@@ -1342,6 +1374,9 @@ void CPage3::LayoutProcessPage()
 		left += widths[i] + gap;
 	}
 	const int listTop = toolbarTop + buttonHeight + gap + UiTheme::ScaleForWindow(m_hWnd, 2);
+
+ if (m_filterEmpty.GetSafeHwnd()) m_filterEmpty.SetWindowPos(&wndTop, margin + gap, listTop + buttonHeight + gap,
+  max(0, rcClient.Width() - margin * 2 - gap * 2), buttonHeight, SWP_NOACTIVATE);
 
 	if (m_ListCtrl.GetSafeHwnd())
 	{
@@ -1556,6 +1591,10 @@ void CPage3::OnBnClickedProcessToggle()
 void CPage3::SetProcessesExpanded(BOOL expanded)
 {
 	m_processesExpanded = expanded;
+	if (expanded && m_processSearch.GetSafeHwnd()) {
+		m_processSearch.GetWindowText(m_filterText); m_filterText.Trim(); m_filterText.MakeLower();
+		m_filterHooked = m_onlyHooked.GetCheck() == BST_CHECKED;
+	}
 	// Prepare geometry and rows while hidden. Showing the template rectangle
 	// first briefly covers the recent-app tiles on the first expansion.
 	const BOOL freezeRedraw = IsWindowVisible();
@@ -1568,9 +1607,10 @@ void CPage3::SetProcessesExpanded(BOOL expanded)
 	const int show = expanded ? SW_SHOWNA : SW_HIDE;
 	m_ListCtrl.ShowWindow(show);
 	m_btnWindowFinder.ShowWindow(show);
-	m_btnRefresh.ShowWindow(show);
 	m_btnInject.ShowWindow(show);
 	m_btnTerminate.ShowWindow(show);
+	m_processSearch.ShowWindow(show); m_onlyHooked.ShowWindow(show);
+	m_filterEmpty.ShowWindow(SW_HIDE);
 	if (freezeRedraw)
 	{
 		SetRedraw(TRUE);
@@ -2472,7 +2512,6 @@ int CPage3::UpdatePslist(BOOL bRefresh)
 		{
 			SetDlgItemText(IDC_STATIC_PAGE_SUBTITLE, Localization::Get(L"page3.loading_processes"));
 			m_processStatusShown = TRUE;
-			m_btnRefresh.EnableWindow(FALSE);
 		}
 	}
 	// Also poll a previous in-flight query after collapse/reopen. Never create a second worker.
@@ -2501,6 +2540,7 @@ LRESULT CPage3::OnProcessListRequest(WPARAM, LPARAM)
 
 void CPage3::CancelProcessRefresh()
 {
+	KillTimer(0x2410);
 	KillTimer(TIMER_PROCESS_RESULT);
 	m_pollingProcesses = FALSE;
 	m_processQuery.Cancel();
@@ -2515,7 +2555,6 @@ void CPage3::CancelProcessRefresh()
 		m_processTreePrefixes.clear();
 	}
 	m_applyingProcesses = FALSE;
-	if (m_btnRefresh.GetSafeHwnd()) m_btnRefresh.EnableWindow(TRUE);
 	if (m_btnInject.GetSafeHwnd()) m_btnInject.EnableWindow(TRUE);
 	if (m_btnWindowFinder.GetSafeHwnd()) m_btnWindowFinder.EnableWindow(TRUE);
 	if (m_btnTerminate.GetSafeHwnd()) m_btnTerminate.EnableWindow(!m_terminating && m_ListCtrl.GetSelectedCount() > 0);
@@ -2552,7 +2591,6 @@ void CPage3::PollProcessList()
 		}
 		KillTimer(TIMER_PROCESS_RESULT);
 		m_pollingProcesses = FALSE;
-		m_btnRefresh.EnableWindow(TRUE);
 		// This can be an invalidated result after reopening. Schedule a fresh scan.
 		UpdatePslist(FALSE);
 		return;
@@ -2562,19 +2600,14 @@ void CPage3::PollProcessList()
 		KillTimer(TIMER_PROCESS_RESULT);
 		m_pollingProcesses = FALSE;
 		m_pendingFinderTarget = NULL;
-		m_btnRefresh.EnableWindow(TRUE);
 		SetDlgItemText(IDC_STATIC_PAGE_SUBTITLE, Localization::Get(L"page3.process_read_failed"));
 		m_processStatusShown = TRUE;
 		return;
 	}
-	m_applyingProcesses = TRUE;
-	m_processApplyIndex = 0;
 	m_processSortData.clear();
 	for (const auto& row : result->value) m_processSortData[row.pid] = row;
 	BuildProcessTree();
-	m_pendingProcessRows = m_processSortData;
-	SetTimer(TIMER_PROCESS_RESULT, 16, NULL);
-	ApplyProcessBatch();
+	BeginFilteredUpdate();
 }
 
 void CPage3::ApplyProcessBatch()
@@ -2651,7 +2684,6 @@ void CPage3::ApplyProcessBatch()
 	m_applyingProcesses = FALSE;
 	KillTimer(TIMER_PROCESS_RESULT);
 	m_pollingProcesses = FALSE;
-	if (!m_btnRefresh.IsWindowEnabled()) m_btnRefresh.EnableWindow(TRUE);
 	if (!m_btnInject.IsWindowEnabled()) m_btnInject.EnableWindow(TRUE);
 	if (!m_btnWindowFinder.IsWindowEnabled()) m_btnWindowFinder.EnableWindow(TRUE);
 	m_btnTerminate.EnableWindow(!m_terminating && m_ListCtrl.GetSelectedCount() > 0);
@@ -2667,6 +2699,9 @@ void CPage3::ApplyProcessBatch()
 		m_pendingFinderTarget = NULL;
 		FinishWindowFinder(target, m_pendingFinderPid, m_pendingFinderTime);
 	}
+ m_filterEmpty.ShowWindow(m_displayedProcesses.empty() && (!m_filterText.IsEmpty() || m_filterHooked) ? SW_SHOWNA : SW_HIDE);
+ // Filtering a snapshot must not lose a system query that was already in flight.
+ if (m_processQuery.Busy()) m_pollingProcesses = SetTimer(TIMER_PROCESS_RESULT, 100, NULL) != 0;
 	PublishProcessAccessibility(true);
 	if (m_ListCtrl.AccessibilityBridge()) PostMessage(ProcessListAccessibility::RequestMessage);
 }
@@ -3192,12 +3227,6 @@ void CPage3::OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result)
 	*result = CDRF_DODEFAULT;
 }
 
-void CPage3::OnBnClickedRefresh()
-{
-	// TODO: 在此添加控件通知处理程序代码
-	UpdatePslist(TRUE);
-}
-
 void CPage3::OnBnClickedInjectdll()
 {
 	if (m_applyingProcesses) return;
@@ -3334,7 +3363,14 @@ void CPage3::OnBnClickedInjectdll()
 
 void CPage3::OnTimer(UINT_PTR nIDEvent)
 {
-	if (nIDEvent == TIMER_PROCESS_RESULT) { PollProcessList(); return; }
+	if (nIDEvent == 0x2410) {
+  if (m_btnWindowFinder.IsTracking() || m_terminating) return;
+  KillTimer(0x2410);
+  m_processSearch.GetWindowText(m_filterText); m_filterText.Trim(); m_filterText.MakeLower();
+  m_filterHooked = m_onlyHooked.GetCheck() == BST_CHECKED;
+  BeginFilteredUpdate(); return;
+ }
+ if (nIDEvent == TIMER_PROCESS_RESULT) { PollProcessList(); return; }
 	if (nIDEvent == TIMER_BROWSER_LAUNCH) { CheckBrowserLaunches(); return; }
 	if (nIDEvent == TIMER_LAUNCH_PANEL)
 	{
@@ -3927,4 +3963,38 @@ BOOL CPage3::LaunchAppFromShell(const AppLauncherRequest& request, AppLauncherRe
     }
     if(g_GlobalProxy) g_GlobalProxy->GetLogInstance()->LogText(message);
     return TRUE;
+}
+
+void CPage3::OnProcessFilterChanged()
+{
+ if (!m_processesExpanded || !m_onlyHooked.GetSafeHwnd()) return;
+ SetTimer(0x2410, 150, NULL);
+}
+void CPage3::BeginFilteredUpdate()
+{
+ if (!m_processesExpanded || !IsWindowVisible()) return;
+ m_filterEmpty.ShowWindow(SW_HIDE);
+ std::set<std::pair<DWORD, ULONGLONG>> hooked;
+ if (m_filterHooked && m_processRegistry) {
+  std::vector<HookProcessIdentityInfo> identities(64);
+  for (int attempt = 0; attempt < 8; ++attempt) {
+   DWORD count = m_processRegistry->SnapshotHooked(identities.data(), (DWORD)identities.size());
+   if (count > identities.size()) { identities.resize(count + 64); continue; }
+   for (DWORD i = 0; i < count; ++i) hooked.insert(std::make_pair(identities[i].dwProcessId, identities[i].processCreateTime));
+   break;
+  }
+ }
+ m_pendingProcessRows.clear();
+ for (const auto& pair : m_processSortData) {
+  const auto& info = pair.second;
+  if (m_filterHooked && !hooked.count(std::make_pair(info.pid, info.startTimeValue))) continue;
+  if (!m_filterText.IsEmpty()) {
+   CString text; text.Format(L"%lu %s %s", info.pid, info.proname, info.propath); text.MakeLower();
+   if (text.Find(m_filterText) < 0) continue;
+  }
+  m_pendingProcessRows.insert(pair);
+ }
+ m_applyingProcesses = TRUE; m_processApplyIndex = 0;
+ m_pollingProcesses = SetTimer(TIMER_PROCESS_RESULT, 16, NULL) != 0;
+ ApplyProcessBatch();
 }

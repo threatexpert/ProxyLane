@@ -116,11 +116,11 @@ void CPage1::OnProfileMenu()
 {
     CMenu menu;
     if (!menu.CreatePopupMenu()) return;
+    menu.AppendMenu(MF_STRING | (m_bIsTesting ? MF_GRAYED : 0), 0x2401, Localization::Get(L"profile.new"));
+    menu.AppendMenu(MF_SEPARATOR);
     menu.AppendMenu(MF_STRING, IDC_BUTTON_COPY_PROFILE, Localization::Get(_T("share.copy")));
     menu.AppendMenu(MF_STRING | (m_bIsTesting ? MF_GRAYED : 0), IDC_BUTTON_PASTE_PROFILE,
         Localization::Get(_T("share.paste")));
-    menu.AppendMenu(MF_SEPARATOR);
-    menu.AppendMenu(MF_STRING, IDC_BUTTON_IMPORT_CONFIG, Localization::Get(_T("import.action")));
     menu.AppendMenu(MF_SEPARATOR);
     menu.AppendMenu(MF_STRING | (m_cfgls.GetCurSel() == CB_ERR ? MF_GRAYED : 0),
         IDC_BUTTON_DELETE_PROFILE, Localization::Get(_T("profile.delete_action")));
@@ -189,9 +189,15 @@ void CPage1::OnImportAllConfig()
     const CString title = Localization::Get(L"import.action");
     picker.m_ofn.lpstrTitle = title;
     if (picker.DoModal() != IDOK) return;
+    ImportConfigFile(picker.GetPathName());
+}
+
+void CPage1::ImportConfigFile(const CString& path)
+{
+    if (theApp.HasPendingConfigImport() || !CanImportAllConfig()) return;
     std::unique_ptr<ConfigImport::Pending> pending(new ConfigImport::Pending);
     CString error;
-    if (!pending->Prepare(picker.GetPathName(), error))
+    if (!pending->Prepare(path, error))
     {
         MessageBox(error, Localization::Get(L"import.title"), MB_OK | MB_ICONERROR);
         return;
@@ -339,6 +345,8 @@ void CPage1::OnPasteProfile()
         m_loadedProfileName.Empty();
         m_draftProfileName = name;
         m_loadingProfile = FALSE;
+        ExpandConfiguredOptions();
+        LayoutSettingsPage();
         SetProfileDirty(TRUE);
         SetRuntimeDirty(TRUE);
         ShowProfileNotice(Localization::Get(_T("share.pasted")),

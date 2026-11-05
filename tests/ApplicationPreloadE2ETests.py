@@ -152,6 +152,7 @@ def main():
     for name in ('ProxyLane64.exe', 'ProxyLaneHook64.dll', 'ProxyLaneHook32.dll'):
         source = Path(sys.argv[1]) if name == 'ProxyLane64.exe' and len(sys.argv) > 1 else Path('bin') / name
         shutil.copy2(source, directory / name)
+    (directory / 'portable.flag').touch()
     ini = directory / 'ProxyLane.ini'
     ini.write_text(fixture_ini(), encoding='utf-8')
     owner = subprocess.Popen([str(directory / 'ProxyLane64.exe')], cwd=directory,

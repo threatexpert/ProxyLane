@@ -163,10 +163,10 @@ void CPage4::LayoutProtocolView(int x, int y, int width, int height) {
     auto s = [this](int v) { return UiTheme::ScaleForWindow(m_hWnd, v); };
     const bool offline=IsViewingRecording();
     m_follow.ShowWindow(offline?SW_HIDE:SW_SHOW);
-    m_filter.MoveWindow(x, y, max(0,width-s(offline?120:232)), s(24));
-    m_follow.MoveWindow(x+max(0,width-s(224)), y, s(104), s(24));
+    m_filter.MoveWindow(x, y, max(0,width-s(offline?120:256)), s(28));
+    m_follow.MoveWindow(x+max(0,width-s(248)), y, s(128), s(28));
     m_protocolFilter.MoveWindow(x+max(0,width-s(112)), y, s(112), s(200));
-    y += s(30); height = max(0, height - s(30));
+    y += s(34); height = max(0, height - s(34));
     m_protocolRect.SetRect(x,y,x+width,y+height);
     int available = max(0, height - s(88));
     int minimum = min(s(70), available / 2);

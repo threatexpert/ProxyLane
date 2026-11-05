@@ -173,6 +173,7 @@ def main():
     if args.ca_guidance:
         shutil.copy2(root/'build/tools/ProxyLaneMitm64.exe', work/'ProxyLaneMitm64.exe')
     config = (root/'examples/ProxyLane.ini').read_text().replace('[options]', '[options]\nlanguage=' + args.language)
+    (work / 'portable.flag').touch()
     (work/'ProxyLane.ini').write_text(config)
     with socket.socket() as reservation:
         reservation.bind(('127.0.0.1',0)); port = reservation.getsockname()[1]

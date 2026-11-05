@@ -60,6 +60,7 @@ def run(bin_dir, scenario, language):
     directory.mkdir(parents=True)
     for name in ('ProxyLane64.exe', 'ProxyLaneHook64.dll', 'ProxyLaneHook32.dll'):
         shutil.copy2(bin_dir / name, directory / name)
+    (directory / 'portable.flag').touch()
     destination = directory / 'ProxyLane.ini'
     destination.write_text('[options]\nlanguage=' + language + '\nlastselected=Before\n'
                            '[proxy_Before]\nType=NOPROXY\nHost=\nPort=0\n', encoding='utf-16')

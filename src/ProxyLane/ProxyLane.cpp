@@ -2,6 +2,7 @@
 //
 
 #include "stdafx.h"
+#include "ConfigStorage.h"
 #include "ProxyLane.h"
 #include "ProxyLaneDlg.h"
 #include "Page3.h"
@@ -156,18 +157,17 @@ BOOL CProxyLaneApp::InitInstance()
 	InitCommonControlsEx(&InitCtrls);
 
 	CWinApp::InitInstance();
+	const bool storageReady = ConfigStorage::Initialize();
+	const DWORD storageError = GetLastError();
 	Localization::Initialize();
+	if (!storageReady)
+	{
+		CString error = ConfigStorage::ErrorText(storageError);
+		AfxMessageBox(Localization::Format(L"storage.save_failed", (LPCTSTR)error, (LPCTSTR)ConfigStorage::Path()), MB_ICONERROR);
+		return FALSE;
+	}
 
 	AfxEnableControlContainer();
-
-	// 标准初始化
-	// 如果未使用这些功能并希望减小
-	// 最终可执行文件的大小，则应移除下列
-	// 不需要的特定初始化例程
-	// 更改用于存储设置的注册表项
-	// TODO: 应适当修改该字符串，
-	// 例如修改为公司或组织名
-	SetRegistryKey(_T("ProxyLane"));
 
 	// OLE drag-and-drop requires the UI thread to remain in the STA selected by
 	// AfxOleInit.  A second MTA initialization only fails with

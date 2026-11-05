@@ -157,6 +157,7 @@ def run(binary_directory, bits, language, capture=False, exit_action='keep', chi
         source = binary_directory / name
         if source.exists():
             shutil.copy2(source, directory / name)
+    (directory / 'portable.flag').touch()
     (directory / 'ProxyLane.ini').write_text('''[options]
 lastselected=ExitTest
 language=%s

@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "ConfigStorage.h"
 #include "ProxyLane.h"
 #include "Page4.h"
 #include "Localization.h"
@@ -118,10 +119,10 @@ class CMitmCaDialog : public CModernDialog {
     CModernButton m_buttons[4], m_advanced, m_save, m_defaults;
     CStatic m_labels[9],m_effective,m_enableHint,m_quicHint,m_quicUdpHint;
     CString m_quicUdpWarning;
-    CButton m_quic; bool m_savedQuic=false; UINT m_pendingEnableId=IDC_MITM_ENABLE;
+    CToggleButton m_quic; bool m_savedQuic=false; UINT m_pendingEnableId=IDC_MITM_ENABLE;
     CMitmSectionHeader m_caTitle,m_settingsTitle;
     CFont m_sectionFont;
-    CEdit m_values[9];
+    CSoftEdit m_values[9];
     bool m_expanded=false, m_defaultsPending=false, m_savedSkip=false;
     bool m_savedDecrypt=false, m_enablePending=false, m_saveAfterTrust=false, m_monitoring=false;
     bool m_enableHintRequested=false;
@@ -137,7 +138,7 @@ class CMitmCaDialog : public CModernDialog {
         const int line=metrics.tmHeight, margin=scale(12), gap=scale(6);
         CRect client;GetClientRect(client);
         const int width=client.Width()-2*margin;
-        const int editHeight=line+scale(4), buttonHeight=line+scale(8), rowHeight=editHeight+gap;
+        const int editHeight=max(scale(28),line+scale(10)), buttonHeight=line+scale(8), rowHeight=editHeight+gap;
         auto measureText=[&](CString text) {
             CRect bounds(0,0,width,0);
             dc.DrawText(text,bounds,DT_CALCRECT|DT_WORDBREAK|DT_NOPREFIX);return bounds.Height();
@@ -250,14 +251,14 @@ class CMitmCaDialog : public CModernDialog {
         request["skip_upstream_verify"]=skip;
         if(m_tls->QueryProtocol(request.dump().c_str(),response,sizeof(response))<0) {MessageBox(Utf8(response),Localization::Get(L"mitm.ca"),MB_ICONERROR);return;}
         if(!MitmSettings::Save(values)) {MessageBox(Localization::Get(L"mitm.save_failed"),Localization::Get(L"mitm.ca"),MB_ICONERROR);return;}
-        if(!WritePrivateProfileString(L"options",L"MitmSkipUpstreamVerify",skip ? L"1":L"0",Localization::SettingsPath())) {
+        if(!ConfigStorage::WriteValue(L"options",L"MitmSkipUpstreamVerify",skip ? L"1":L"0",Localization::SettingsPath())) {
             MitmSettings::Save(m_saved);
             MessageBox(Localization::Get(L"mitm.save_failed"),Localization::Get(L"mitm.ca"),MB_ICONERROR);return;
         }
         if(!MitmSettings::SaveDecryptHTTPS(decrypt) || !MitmSettings::SaveDecryptQUIC(quic)) {
             MitmSettings::SaveDecryptHTTPS(m_savedDecrypt);MitmSettings::SaveDecryptQUIC(m_savedQuic);
             MitmSettings::Save(m_saved);
-            WritePrivateProfileString(L"options",L"MitmSkipUpstreamVerify",m_savedSkip ? L"1":L"0",Localization::SettingsPath());
+            ConfigStorage::WriteValue(L"options",L"MitmSkipUpstreamVerify",m_savedSkip ? L"1":L"0",Localization::SettingsPath());
             MessageBox(Localization::Get(L"mitm.save_failed"),Localization::Get(L"mitm.ca"),MB_ICONERROR);return;
         }
         request["validate_only"]=false;
@@ -265,7 +266,7 @@ class CMitmCaDialog : public CModernDialog {
             bool restored=MitmSettings::Save(m_saved);
             restored=MitmSettings::SaveDecryptHTTPS(m_savedDecrypt) && restored;
             restored=MitmSettings::SaveDecryptQUIC(m_savedQuic) && restored;
-            restored=WritePrivateProfileString(L"options",L"MitmSkipUpstreamVerify",m_savedSkip ? L"1":L"0",Localization::SettingsPath()) && restored;
+            restored=ConfigStorage::WriteValue(L"options",L"MitmSkipUpstreamVerify",m_savedSkip ? L"1":L"0",Localization::SettingsPath()) && restored;
             CString error=Utf8(response);if(!restored) error+=L"\r\n"+Localization::Get(L"mitm.save_failed");
             MessageBox(error,Localization::Get(L"mitm.ca"),MB_ICONERROR);return;
         }
@@ -501,7 +502,7 @@ void CPage4::LayoutControls(int cx, int cy)
         control->ShowWindow(offline?SW_HIDE:SW_SHOW);
     m_openRecording.ShowWindow(offline?SW_SHOW:SW_HIDE);
     m_recordingViewStatus.ShowWindow(offline || m_stopJob?SW_SHOW:SW_HIDE);
-    int monitorWidth=labelWidth(m_monitor,20),caWidth=labelWidth(m_options,16);
+    int monitorWidth=labelWidth(m_monitor,46),caWidth=labelWidth(m_options,16);
     int clearWidth=max(s(48),labelWidth(m_clear,16)),gap=s(10);
     m_monitor.MoveWindow(s(8), top, monitorWidth, h);
     m_clear.MoveWindow(cx - s(8) - clearWidth, top, clearWidth, h);
@@ -706,7 +707,7 @@ void CPage4::OnTimer(UINT_PTR id)
                 if(value.is_object() && value.value("enabled",false)) {
                     m_retainedRecording=true;
                     CString directory=Utf8(value.value("directory",std::string()).c_str());
-                    WritePrivateProfileStringW(L"recording",L"LastDirectory",directory,Localization::SettingsPath());
+                    ConfigStorage::WriteValue(L"recording",L"LastDirectory",directory,Localization::SettingsPath());
                     m_recordStatus.SetWindowText(Localization::Get(L"recording.active"));
                 }
             }

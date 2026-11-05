@@ -69,6 +69,7 @@ protected:
 	virtual BOOL UsesSecondaryText(UINT controlId) const;
 
 	CBrush m_backgroundBrush;
+	CBrush m_fieldBrush, m_disabledFieldBrush;
 	CFont m_uiFont;
 	CFont m_titleFont;
 	UINT m_templateId;
@@ -85,7 +86,8 @@ public:
 	{
 		STYLE_SECONDARY,
 		STYLE_PRIMARY,
-		STYLE_DANGER
+		STYLE_DANGER,
+		STYLE_GHOST
 	};
 
 	CModernButton();
@@ -102,6 +104,42 @@ protected:
 	VisualStyle m_visualStyle;
 	COLORREF m_backdrop;
 	BOOL m_hot;
+
+	DECLARE_MESSAGE_MAP()
+};
+
+// Switch control adapted from lijing6006/ProxyLane PR #3.
+// Check boxes draw as switches and radio buttons as segmented pills. The check
+// state stays behind BM_GETCHECK/BM_SETCHECK, so callers keep using CButton's API.
+class CToggleButton : public CButton
+{
+	DECLARE_DYNAMIC(CToggleButton)
+
+public:
+	CToggleButton();
+
+protected:
+	virtual void PreSubclassWindow();
+	virtual void PostNcDestroy();
+	virtual void DrawItem(LPDRAWITEMSTRUCT drawItemStruct);
+	afx_msg LRESULT OnGetCheck(WPARAM, LPARAM);
+	afx_msg LRESULT OnSetCheck(WPARAM state, LPARAM);
+	afx_msg UINT OnGetDlgCode();
+	afx_msg BOOL OnClicked();
+	afx_msg void OnLButtonDblClk(UINT flags, CPoint point);
+	afx_msg void OnMouseMove(UINT flags, CPoint point);
+	afx_msg LRESULT OnMouseLeave(WPARAM, LPARAM);
+	afx_msg void OnTimer(UINT_PTR timer);
+
+	BOOL m_radio;
+	float m_knob;      // 0 = off, 1 = on; slides between the two.
+	DWORD m_animStart;
+	BOOL m_automatic;
+	BOOL m_autoDelete;
+	int m_check;
+	BOOL m_hot;
+
+	friend class CModernDialog;
 
 	DECLARE_MESSAGE_MAP()
 };
@@ -173,6 +211,9 @@ class CSoftEdit : public CEdit
 	DECLARE_DYNAMIC(CSoftEdit)
 
 protected:
+	bool m_autoDelete = false;
+	friend class CModernDialog;
+	virtual void PostNcDestroy();
 	virtual void PreSubclassWindow();
 	afx_msg void OnNcCalcSize(BOOL calcValidRects, NCCALCSIZE_PARAMS* params);
 	afx_msg void OnNcPaint();

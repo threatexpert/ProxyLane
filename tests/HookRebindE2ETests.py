@@ -220,6 +220,7 @@ def main():
         target = direct.getsockname()
         for listener, proxied in ((direct, False), (socks, True)):
             threading.Thread(target=serve, args=(listener, proxied, observations, target), daemon=True).start()
+        (directory / 'portable.flag').touch()
         (directory / 'ProxyLane.ini').write_text('''[options]
 lastselected=Rebind
 language=en-US

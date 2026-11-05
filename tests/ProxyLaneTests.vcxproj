@@ -40,6 +40,7 @@
     <ClCompile Include="DirectIpv6RouteTests.cpp" />
     <ClCompile Include="MonitorLogFormatTests.cpp" />
     <ClCompile Include="ProfileShareCodecTests.cpp"><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions></ClCompile>
+    <ClCompile Include="UpdateReleaseTests.cpp" />
     <ClCompile Include="DetourHooksTests.cpp" />
     <ClCompile Include="..\src\ProxyLaneHook\DetourHooks.cpp" />
     <ClCompile Include="TrafficStatisticsTests.cpp" />

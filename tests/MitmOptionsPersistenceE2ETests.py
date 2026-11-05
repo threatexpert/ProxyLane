@@ -29,6 +29,7 @@ def main():
     u.SetProcessDPIAware()
     for pattern in ('ProxyLane*.exe','ProxyLane*.dll'):
         for source in (root/'bin').glob(pattern):shutil.copy2(source,work/source.name)
+    (work / 'portable.flag').touch()
     ini=work/'ProxyLane.ini';ini.write_text((root/'examples/ProxyLane.ini').read_text().replace('DecryptHTTPS=1','DecryptHTTPS=0').replace('DecryptQUIC=1','DecryptQUIC=0').replace('[options]', '[options]\nlanguage='+args.language),encoding='utf-8')
     config=configparser.ConfigParser();config.read(ini,encoding='utf-8-sig')
     if not config.has_section('mitm'):config.add_section('mitm')

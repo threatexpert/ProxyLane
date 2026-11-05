@@ -66,6 +66,7 @@ def main():
         listener.bind(("127.0.0.1", 0))
         listener.listen()
         threading.Thread(target=serve, args=(listener, observations), daemon=True).start()
+        (directory / 'portable.flag').touch()
         (directory / "ProxyLane.ini").write_text("""[options]
 lastselected=ManagedStartup
 language=en-US

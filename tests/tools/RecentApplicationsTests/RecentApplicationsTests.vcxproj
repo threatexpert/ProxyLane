@@ -15,10 +15,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="RecentApplicationsTests.cpp" />
+    <ClCompile Include="..\..\..\src\ProxyLane\ProxyProfileStore.cpp" />
     <ClCompile Include="..\..\..\src\ProxyLane\InstalledApplications.cpp" />
     <ClCompile Include="..\..\..\src\ProxyLane\RecentApplications.cpp" />
     <ClCompile Include="..\..\..\src\ProxyLane\RecentApplicationCache.cpp" />
     <ClCompile Include="..\..\..\src\ProxyLane\IniFile.cpp" />
+    <ClCompile Include="..\..\..\src\ProxyLane\ConfigStorage.cpp" />
     <ClCompile Include="..\..\..\src\ProxyLane\Base64.cpp" />
     <ClCompile Include="..\..\..\src\ProxyLane\Localization.cpp" />
   </ItemGroup>

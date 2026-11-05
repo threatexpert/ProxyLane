@@ -158,6 +158,8 @@ Pass=
 Transport={'PLAIN' if args.plain else 'GONC_TLS_PSK'}
 PSK={' ' if args.plain else '123'}
 """
+        with open(os.path.join(temp, "portable.flag"), "a"):
+            pass
         with open(os.path.join(temp, "ProxyLane.ini"), "w", encoding="utf-8") as profile:
             profile.write(ini)
         result_path = os.path.join(temp, "client-result.txt")

@@ -146,6 +146,7 @@ def main():
         config = config.replace('Port='+str(relay_port), 'Port=')
         config = config.replace('[options]', '[options]\nHookLanIP=1')
         config = config.replace('dnsOpt=1', 'dnsOpt=0\nRedirectPrivateDNS=0')
+    (work / 'portable.flag').touch()
     (work/'ProxyLane.ini').write_text(config)
     env = dict(os.environ, PROXYLANE_MITM='0', PROXYLANE_MITM_HOME=str(work/'pki'), PROXYLANE_PROTOCOL_CACHE_ROOT=str(work/'cache'),
         PROXYLANE_PROTOCOL_ENTRY_BYTES=str(1024*1024), PROXYLANE_PROTOCOL_TOTAL_BYTES=str(2*1024*1024))

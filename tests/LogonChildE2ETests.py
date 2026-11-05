@@ -244,6 +244,7 @@ def main():
     listener.listen()
     observations = []
     threading.Thread(target=serve, args=(listener, observations), daemon=True).start()
+    (directory / 'portable.flag').touch()
     (directory / "ProxyLane.ini").write_text(f"""[options]
 lastselected=LogonTest
 language=en-US

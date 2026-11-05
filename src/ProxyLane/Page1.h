@@ -39,6 +39,13 @@ public:
 	CModernButton m_Cancel;
 	CModernButton m_btnSaveProfile;
 	CModernButton m_btnProfileMenu;
+ CModernButton m_btnAdvanced;
+ bool m_advancedOpen = false;
+ afx_msg void OnNewProfile();
+ afx_msg void OnToggleAdvanced();
+ void ExpandConfiguredOptions();
+ void UpdateAdvancedCaption();
+ BOOL SavePendingProfile();
 
 private:
 	enum ProxyTestPhase
@@ -150,24 +157,24 @@ public:
 	afx_msg void OnDestroy();
 	CModernButton m_btnTest;
 	afx_msg void OnBnClickedTestproxy();
-	CButton m_btnHookTCP;
-	CButton m_btnHookUDP;
-	CButton m_btnBlockUDP;
-	CButton m_btnBlockIPv6;
-	CButton m_btnDNSLocal;
-	CButton m_btnDNSRemote;
-	CButton m_btnRedirectPrivateDNS;
+	CToggleButton m_btnHookTCP;
+	CToggleButton m_btnHookUDP;
+	CToggleButton m_btnBlockUDP;
+	CToggleButton m_btnBlockIPv6;
+	CToggleButton m_btnDNSLocal;
+	CToggleButton m_btnDNSRemote;
+	CToggleButton m_btnRedirectPrivateDNS;
 	CSoftEdit   m_editRedirectDNS;
-	CButton m_btnHookChildProcess;
+	CToggleButton m_btnHookChildProcess;
 	CSoftEdit   m_editChildFilter;
-	CButton m_radioChildFilterExclude;
-	CButton m_radioChildFilterInclude;
+	CToggleButton m_radioChildFilterExclude;
+	CToggleButton m_radioChildFilterInclude;
 	CSoftEdit   m_editTargetFilter;
-	CButton m_radioTargetFilterBypass;
-	CButton m_radioTargetFilterProxy;
-	CButton m_radioTabBasic;
-	CButton m_radioTabChild;
-	CButton m_radioTabTarget;
+	CToggleButton m_radioTargetFilterBypass;
+	CToggleButton m_radioTargetFilterProxy;
+	CToggleButton m_radioTabBasic;
+	CToggleButton m_radioTabChild;
+	CToggleButton m_radioTabTarget;
 	CStatusLabel m_staticTestProxy;
 	afx_msg void OnEnChangeEditAddr();
 	afx_msg void OnProfileFieldChanged();
@@ -178,6 +185,7 @@ public:
 	afx_msg void OnCfgoptDelete();
 	afx_msg void OnProfileMenu();
 	afx_msg void OnImportAllConfig();
+ void ImportConfigFile(const CString& path);
 	BOOL CanImportAllConfig();
 	afx_msg void OnCopyProfile();
 	afx_msg void OnPasteProfile();

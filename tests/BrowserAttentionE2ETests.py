@@ -34,6 +34,7 @@ def run(binary_directory, scenario):
     probe = Path('build/tools/browser-launch-probe/x64/BrowserLaunchProbe.exe')
     for name in ('msedge.exe', 'unrelated.exe'):
         shutil.copy2(probe, folder / name)
+    (folder / 'portable.flag').touch()
     (folder / 'ProxyLane.ini').write_text('''[options]
 lastselected=BrowserTest
 language=en-US
