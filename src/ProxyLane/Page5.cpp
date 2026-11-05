@@ -84,7 +84,7 @@ BOOL CPage5::OnInitDialog()
  CString mode = Localization::Get(ConfigStorage::Path().CompareNoCase(ConfigStorage::PortablePath()) == 0 ? L"settings.portable_short" : L"settings.user_short");
  m_storageMode.Create(Localization::Get(L"settings.location") + L" · " + mode, child | SS_NOPREFIX, CRect(), this, 0x2521);
  m_storagePath.Create(ConfigStorage::Path(), child | SS_NOPREFIX | SS_PATHELLIPSIS, CRect(), this, 0x2522);
- m_updateInfo.Create(L"", child, CRect(), this, 0x2524);
+ m_updateInfo.Create(L"", child | LWS_RIGHT, CRect(), this, 0x2524);
  m_updateInfo.SetFont(&m_uiFont);
  m_transferTitle.Create(Localization::Get(L"settings.transfer"), child | SS_NOPREFIX, CRect(), this, 0x2526);
  m_transferInfo.Create(Localization::Get(L"settings.transfer_detail"), child | SS_NOPREFIX, CRect(), this, 0x2527);
