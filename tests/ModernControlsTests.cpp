@@ -9,6 +9,7 @@ void ApplyDialog(CWnd*, UINT) {}
 CString Get(LPCTSTR key) { return key; }
 }
 CWinApp application;
+void TestLaunchPanelInteractions();
 static void Check(bool ok, const char* name) {
     if (!ok) throw std::runtime_error(name);
     std::cout << "PASS: " << name << '\n';
@@ -76,6 +77,7 @@ int wmain() {
         Check(resourceDialog.IsDlgButtonChecked(4002) == BST_CHECKED, "resource switch remains compatible with dialog check APIs");
         resourceDialog.DestroyWindow();
         std::cout << "PASS: resource wrappers destroyed with their windows\n";
+        TestLaunchPanelInteractions();
     } catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }
     return 0;
 }

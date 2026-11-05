@@ -11,6 +11,7 @@ namespace
 	const int kHeaderHeight = 88;
 	const int kActionsHeight = 88;
 	const UINT_PTR kSnapTimer = 1;
+	const UINT_PTR kEdgeTimer = 3;
 	// Win7 gestures are resolved dynamically to preserve the XP build target.
 	struct PanInfo {
 		UINT cbSize; DWORD flags; DWORD id; HWND target; POINTS point;
@@ -173,6 +174,8 @@ BEGIN_MESSAGE_MAP(CLaunchPanel, CWnd)
 	ON_MESSAGE(WM_MOUSELEAVE, OnMouseLeave)
 	ON_WM_LBUTTONDOWN()
 	ON_WM_LBUTTONUP()
+	ON_WM_RBUTTONDOWN()
+	ON_WM_CONTEXTMENU()
 	ON_WM_KEYDOWN()
 	ON_WM_MOUSEWHEEL()
 	ON_WM_TIMER()
@@ -229,12 +232,7 @@ BOOL CLaunchPanel::Create(CWnd* parent, UINT id)
 	if (!m_profileLink.Create(L"", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
 		CRect(0, 0, 0, 0), parent, IDC_LAUNCH_PROFILE)) return FALSE;
 	m_profileLink.SetFont(&m_bodyFont);
-	ConfigurePan configure = reinterpret_cast<ConfigurePan>(::GetProcAddress(::GetModuleHandle(L"user32.dll"), "SetGestureConfig"));
-	if (configure)
-	{
-		PanConfig pan = { 4, 0x1 | 0x4 | 0x8, 0x2 | 0x10 }; // horizontal pan, gutter, own snap animation
-		configure(m_hWnd, 0, 1, &pan, sizeof(pan));
-	}
+	ConfigureTouch();
 	if (m_tooltip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX))
 	{
 		m_tooltip.SetMaxTipWidth(Scale(480));
@@ -338,13 +336,17 @@ void CLaunchPanel::SetEnabledState(BOOL enabled)
 
 void CLaunchPanel::SetTiles(const std::vector<Tile>& tiles)
 {
+	CancelTileMove();
 	CString anchor, focus;
 	if (m_firstTile < static_cast<int>(m_tiles.size())) anchor = m_tiles[m_firstTile].id;
 	if (m_focusTile < static_cast<int>(m_tiles.size())) focus = m_tiles[m_focusTile].id;
+	if (m_organizing && !focus.IsEmpty()) anchor = focus;
 	StopMotion();
 	ClearTooltips();
 	m_tiles = tiles;
-	m_firstTile = m_focusTile = 0;
+	if (m_tiles.empty()) { m_organizing = FALSE; ConfigureTouch(); }
+	m_firstTile = min(m_firstTile, max(0, static_cast<int>(m_tiles.size()) - 1));
+	m_focusTile = min(m_focusTile, max(0, static_cast<int>(m_tiles.size()) - 1));
 	for (size_t i = 0; i < m_tiles.size(); ++i)
 	{
 		m_tiles[i].lightIcon = IsLightIcon(m_tiles[i].icon);
@@ -513,7 +515,7 @@ void CLaunchPanel::SetHotTile(int index)
 
 void CLaunchPanel::ActivateTile(int index)
 {
-	if (m_busyTile >= 0 || m_animating || m_dragging || index < m_firstTile || index >= m_firstTile + VisibleTileCount()) return;
+	if (m_organizing || m_busyTile >= 0 || m_animating || m_dragging || index < m_firstTile || index >= m_firstTile + VisibleTileCount()) return;
 	if (CWnd* parent = GetParent())
 		parent->SendMessage(WM_LAUNCH_PANEL_TILE, static_cast<WPARAM>(index), 0);
 }
@@ -542,7 +544,7 @@ void CLaunchPanel::ClearTooltips()
 void CLaunchPanel::RebuildTooltips()
 {
 	ClearTooltips();
-	if (!m_tooltip.GetSafeHwnd() || m_animating || m_dragging || m_busyTile >= 0) return;
+	if (!m_tooltip.GetSafeHwnd() || IsInteracting() || m_animating || m_dragging || m_busyTile >= 0) return;
 	// Each visible tile is a distinct tool, with its own text and current bounds.
 	// No mouse-move activation race or zero-size creation rectangle is involved.
 	m_tipCount = VisibleTileCount();
@@ -550,12 +552,14 @@ void CLaunchPanel::RebuildTooltips()
 	{
 		const int index = m_firstTile + i;
 		CRect rect = TileRect(index);
-		m_tooltip.AddTool(this, m_tiles[index].tip, &rect, i + 1);
+		m_tooltip.AddTool(this, m_tiles[index].tip + L"\r\n" + Localization::Get(m_organizing ? L"launch.organize_active" : L"launch.organize_hint"), &rect, i + 1);
 	}
 }
 
 void CLaunchPanel::StopMotion()
 {
+	CancelTileMove();
+	m_removePressed = -1;
 	m_pointerDown = m_dragging = m_touchPanning = m_animating = FALSE;
 	m_hot = m_pressed = -1;
 	if (GetSafeHwnd())
@@ -600,6 +604,17 @@ void CLaunchPanel::AnimateToPage(int page)
 
 void CLaunchPanel::OnTimer(UINT_PTR eventId)
 {
+	if (eventId == kEdgeTimer) {
+		if (m_reordering && m_edgeDirection && GetTickCount() - m_edgeSince >= 650) {
+			const int page = LaunchPanelPaging::ClampPage(m_firstTile / TileCapacity() + m_edgeDirection, PageCount());
+			m_firstTile = page * TileCapacity();
+			m_scrollOffset = static_cast<double>(page * PageWidth());
+			m_edgeSince = GetTickCount();
+			MoveOrganizedTile(m_editPoint);
+			Invalidate(FALSE);
+		}
+		return;
+	}
 	if (eventId != kSnapTimer) { CWnd::OnTimer(eventId); return; }
 	const double progress = (GetTickCount() - m_animationStart) / 180.0;
 	m_scrollOffset = m_animationFrom + (m_animationTo - m_animationFrom) * LaunchPanelPaging::Ease(progress);
@@ -642,14 +657,23 @@ void CLaunchPanel::BeginDrag(CPoint point)
 	m_dragPage = m_firstTile / TileCapacity();
 	m_pressed = wasAnimating ? -1 : HitTestTile(point);
 	if (m_pressed >= 0) m_focusTile = m_pressed;
+	if (m_pressed >= 0 && m_organizing) { m_editIndex = m_pressed; m_beforeMove = m_tiles; }
 }
 
 void CLaunchPanel::MoveDrag(CPoint point)
 {
 	if (!m_pointerDown) return;
 	const int dx = point.x - m_dragOrigin.x, dy = point.y - m_dragOrigin.y;
-	if (!m_dragging && abs(dy) > Scale(6)) m_pressed = -1;
-	if (!m_dragging && abs(dx) >= Scale(6) && abs(dx) > abs(dy))
+	if (m_organizing && m_editIndex >= 0) {
+		if (!m_reordering && (abs(dx) >= Scale(6) || abs(dy) >= Scale(6))) {
+			m_reordering = TRUE; ClearTooltips(); SetTimer(kEdgeTimer, 50, NULL);
+		}
+		if (m_reordering) MoveOrganizedTile(point);
+		return;
+	}
+	const int panSlop = Scale(10);
+	if (!m_dragging && abs(dy) >= panSlop) m_pressed = -1;
+	if (!m_dragging && abs(dx) >= panSlop && abs(dx) > abs(dy))
 	{
 		m_dragging = TRUE;
 		m_pressed = m_hot = -1;
@@ -667,6 +691,24 @@ void CLaunchPanel::EndDrag(CPoint point, BOOL allowClick)
 {
 	if (!m_pointerDown) return;
 	MoveDrag(point);
+	if (m_organizing && m_editIndex >= 0) {
+		Edit edit;
+		edit.remove = FALSE;
+		const BOOL save = m_reordering && TileViewport().PtInRect(point);
+		edit.id = m_tiles[m_editIndex].id;
+		edit.targetId = m_beforeMove[m_editIndex].id;
+		m_pointerDown = m_touchPanning = FALSE;
+		CancelTileMove();
+		for (size_t i = 0; i < m_tiles.size(); ++i)
+			if (m_tiles[i].id == edit.id) m_focusTile = static_cast<int>(i);
+		m_pressed = -1;
+		if (GetCapture() == this) ReleaseCapture();
+		if (save && edit.id != edit.targetId)
+			if (CWnd* parent = GetParent()) parent->SendMessage(WM_LAUNCH_PANEL_EDIT, 0, reinterpret_cast<LPARAM>(&edit));
+		RebuildTooltips();
+		Invalidate(FALSE);
+		return;
+	}
 	const int pressed = m_pressed;
 	const BOOL dragged = m_dragging;
 	m_pointerDown = m_dragging = m_touchPanning = FALSE;
@@ -685,12 +727,95 @@ void CLaunchPanel::EndDrag(CPoint point, BOOL allowClick)
 
 void CLaunchPanel::OnCaptureChanged(CWnd* window)
 {
+	m_removePressed = -1;
 	if (m_pointerDown)
 	{
+		CancelTileMove();
 		m_pointerDown = m_dragging = m_touchPanning = FALSE;
 		AnimateToPage(m_firstTile / TileCapacity());
 	}
 	CWnd::OnCaptureChanged(window);
+}
+
+CRect CLaunchPanel::RemoveRect(int index) const
+{
+	const CRect tile = TileRect(index);
+	// The hit target is larger than the painted cross, especially useful over RDP.
+	return CRect(tile.right - Scale(18), tile.top - Scale(4), tile.right + Scale(2), tile.top + Scale(16));
+}
+
+int CLaunchPanel::HitTestRemove(CPoint point) const
+{
+	if (!m_organizing || m_reordering || m_pointerDown || m_animating || m_busyTile >= 0) return -1;
+	for (int i = m_firstTile; i < m_firstTile + VisibleTileCount(); ++i)
+		if (RemoveRect(i).PtInRect(point)) return i;
+	return -1;
+}
+
+void CLaunchPanel::StartOrganizing()
+{
+	const int pressed = m_pressed;
+	StopMotion();
+	m_organizing = TRUE;
+	ConfigureTouch();
+	m_focusTile = pressed;
+	RebuildTooltips();
+	Invalidate(FALSE);
+}
+
+void CLaunchPanel::CancelTileMove()
+{
+	if (!m_beforeMove.empty()) m_tiles.swap(m_beforeMove);
+	m_beforeMove.clear();
+	m_editIndex = -1; m_reordering = FALSE; m_edgeDirection = 0;
+	if (GetSafeHwnd()) KillTimer(kEdgeTimer);
+}
+
+void CLaunchPanel::FinishOrganizing()
+{
+	if (!m_organizing) return;
+	StopMotion(); m_organizing = FALSE;
+	ConfigureTouch();
+	RebuildTooltips(); Invalidate(FALSE);
+}
+
+void CLaunchPanel::ConfigureTouch()
+{
+	ConfigurePan configure = reinterpret_cast<ConfigurePan>(::GetProcAddress(::GetModuleHandle(L"user32.dll"), "SetGestureConfig"));
+	if (!configure) return;
+	// Browsing uses a horizontal gutter; arranging lets the icon follow both
+	// axes without inertia or Windows locking a diagonal drag to one direction.
+	const DWORD want = m_organizing ? 0x1 | 0x2 | 0x4 : 0x1 | 0x4 | 0x8;
+	const DWORD block = m_organizing ? 0x8 | 0x10 : 0x2 | 0x10;
+	PanConfig pan = { 4, want, block };
+	configure(m_hWnd, 0, 1, &pan, sizeof(pan));
+}
+
+void CLaunchPanel::MoveOrganizedTile(CPoint point)
+{
+	m_editPoint = point;
+	const CRect viewport = TileViewport();
+	int edge = 0;
+	if (point.y >= viewport.top && point.y < viewport.bottom &&
+		point.x >= viewport.left - Scale(12) && point.x <= viewport.right + Scale(12)) {
+		if (point.x < viewport.left + Scale(18)) edge = -1;
+		else if (point.x >= viewport.right - Scale(18)) edge = 1;
+	}
+	if (edge != m_edgeDirection) { m_edgeDirection = edge; m_edgeSince = GetTickCount(); }
+	if (viewport.PtInRect(point)) {
+		int target = min(static_cast<int>(m_tiles.size()) - 1,
+			m_firstTile + min(TileCapacity() - 1, max(0, (point.x - viewport.left) / Scale(TileWidth() + kTileGap))));
+		// Preserve the picker's existing pinned/ordinary groups.
+		while (target != m_editIndex && m_tiles[target].pinned != m_tiles[m_editIndex].pinned)
+			target += target < m_editIndex ? 1 : -1;
+		if (target != m_editIndex) {
+			const Tile moving = m_tiles[m_editIndex];
+			m_tiles.erase(m_tiles.begin() + m_editIndex);
+			m_tiles.insert(m_tiles.begin() + target, moving);
+			m_editIndex = target;
+		}
+	}
+	Invalidate(FALSE);
 }
 
 LRESULT CLaunchPanel::OnGesture(WPARAM wParam, LPARAM lParam)
@@ -703,7 +828,7 @@ LRESULT CLaunchPanel::OnGesture(WPARAM wParam, LPARAM lParam)
 	if (info.id == 4) // GID_PAN
 	{
 		CPoint point(info.point.x, info.point.y); ScreenToClient(&point);
-		if (info.flags & 1) { BeginDrag(point); m_touchPanning = m_pointerDown; }
+		if (info.flags & 1) { if (!m_pointerDown) BeginDrag(point); m_touchPanning = m_pointerDown; }
 		if (m_touchPanning)
 		{
 			MoveDrag(point);
@@ -714,6 +839,7 @@ LRESULT CLaunchPanel::OnGesture(WPARAM wParam, LPARAM lParam)
 	}
 	if (info.id == 2 && m_touchPanning) // GID_END also covers an interrupted pan.
 	{
+		CancelTileMove();
 		m_pointerDown = m_dragging = m_touchPanning = FALSE;
 		AnimateToPage(m_firstTile / TileCapacity());
 	}
@@ -829,11 +955,16 @@ void CLaunchPanel::OnPaint()
 		{
 			CRect tile = TileRect(i);
 			if (tile.right <= viewport.left || tile.left >= viewport.right) continue;
+			if (m_organizing) tile.DeflateRect(Scale(2), Scale(2));
+			if (m_reordering && i == m_editIndex) {
+				UiTheme::FillRoundRect(dc.m_hDC, tile, Scale(10), UiTheme::AccentSoft(), UiTheme::AccentSoftBorder());
+				continue;
+			}
 			const BOOL hot = m_busyTile < 0 && i == m_hot;
 			const BOOL down = hot && i == m_pressed;
 			UiTheme::FillRoundRect(dc.m_hDC, tile, Scale(10),
 				down ? UiTheme::AccentSoft() : (hot ? RGB(243, 247, 254) : RGB(255, 255, 255)),
-				hot ? UiTheme::AccentSoftBorder() : UiTheme::BorderSoft());
+				(hot || m_organizing) ? UiTheme::AccentSoftBorder() : UiTheme::BorderSoft());
 
 			// Draw the shell's large icon at its own size; scaling makes it blurry.
 			const int iconSize = m_compact ? Scale(20) : max(Scale(kTileIcon), min(::GetSystemMetrics(SM_CXICON), Scale(32)));
@@ -875,6 +1006,29 @@ void CLaunchPanel::OnPaint()
 		dc.RestoreDC(savedDc);
 		dc.SelectObject(oldFont);
 	}
+	if (m_organizing && !m_reordering && !m_animating && !m_dragging) {
+		for (int i = m_firstTile; i < m_firstTile + VisibleTileCount(); ++i) {
+			CRect badge = RemoveRect(i); badge.DeflateRect(Scale(2), Scale(2));
+			const BOOL down = m_removePressed == i && RemoveRect(i).PtInRect(m_editPoint);
+			UiTheme::FillRoundRect(dc.m_hDC, badge, Scale(8), down ? UiTheme::Danger() : UiTheme::DangerSoft(), UiTheme::Danger());
+			CRect cross = badge; cross.DeflateRect(Scale(5), Scale(5));
+			CPen pen(PS_SOLID, max(1, Scale(1)), down ? RGB(255, 255, 255) : UiTheme::Danger());
+			CPen* old = dc.SelectObject(&pen);
+			dc.MoveTo(cross.TopLeft()); dc.LineTo(cross.BottomRight());
+			dc.MoveTo(cross.right, cross.top); dc.LineTo(cross.left, cross.bottom);
+			dc.SelectObject(old);
+		}
+	}
+	if (m_reordering && m_editIndex >= 0) {
+		// A small floating copy stays above the pointer so the destination is visible.
+		const Tile& moving = m_tiles[m_editIndex];
+		const int size = Scale(m_compact ? 24 : 32), padding = Scale(6);
+		CRect ghost(m_editPoint.x - size / 2 - padding, m_editPoint.y - size - padding * 3,
+			m_editPoint.x + size / 2 + padding, m_editPoint.y - padding);
+		UiTheme::FillRoundRect(dc.m_hDC, ghost, Scale(8), moving.lightIcon ? RGB(47, 52, 61) : RGB(255, 255, 255), UiTheme::Accent());
+		if (moving.icon) ::DrawIconEx(dc.m_hDC, ghost.left + padding, ghost.top + padding, moving.icon, size, size, 0, NULL, DI_NORMAL);
+		if (moving.elevated) UiTheme::DrawElevationBadge(dc.m_hDC, CRect(ghost.right - Scale(14), ghost.bottom - Scale(14), ghost.right, ghost.bottom));
+	}
 
 	paint.BitBlt(0, 0, client.Width(), client.Height(), &dc, 0, 0, SRCCOPY);
 	dc.SelectObject(oldBitmap);
@@ -882,6 +1036,7 @@ void CLaunchPanel::OnPaint()
 
 void CLaunchPanel::OnMouseMove(UINT flags, CPoint point)
 {
+	if (m_removePressed >= 0) { m_editPoint = point; Invalidate(FALSE); }
 	if (!m_tracking)
 	{
 		TRACKMOUSEEVENT track = { sizeof(track), TME_LEAVE, m_hWnd, 0 };
@@ -890,7 +1045,7 @@ void CLaunchPanel::OnMouseMove(UINT flags, CPoint point)
 	MoveDrag(point);
 	const int hit = m_busyTile < 0 ? HitTestTile(point) : -1;
 	SetHotTile(hit);
-	::SetCursor(::LoadCursor(NULL, hit >= 0 ? IDC_HAND : IDC_ARROW));
+	::SetCursor(::LoadCursor(NULL, hit >= 0 || HitTestRemove(point) >= 0 ? IDC_HAND : IDC_ARROW));
 	CWnd::OnMouseMove(flags, point);
 }
 
@@ -903,6 +1058,12 @@ LRESULT CLaunchPanel::OnMouseLeave(WPARAM, LPARAM)
 
 void CLaunchPanel::OnLButtonDown(UINT flags, CPoint point)
 {
+	const int remove = HitTestRemove(point);
+	if (remove >= 0) {
+		SetFocus(); m_removePressed = remove; m_editPoint = point;
+		ClearTooltips(); SetCapture(); Invalidate(FALSE); return;
+	}
+	if (m_organizing && !TileViewport().PtInRect(point)) { FinishOrganizing(); return; }
 	if (!m_touchPanning && m_busyTile < 0)
 	{
 		SetFocus();
@@ -915,8 +1076,39 @@ void CLaunchPanel::OnLButtonDown(UINT flags, CPoint point)
 
 void CLaunchPanel::OnLButtonUp(UINT flags, CPoint point)
 {
+	if (m_removePressed >= 0) {
+		const int index = m_removePressed;
+		const BOOL remove = HitTestRemove(point) == index;
+		Edit edit;
+		edit.id = m_tiles[index].id; edit.remove = TRUE;
+		m_removePressed = -1;
+		if (GetCapture() == this) ReleaseCapture();
+		if (remove) if (CWnd* parent = GetParent()) parent->SendMessage(WM_LAUNCH_PANEL_EDIT, 0, reinterpret_cast<LPARAM>(&edit));
+		RebuildTooltips(); Invalidate(FALSE); return;
+	}
 	if (!m_touchPanning) EndDrag(point, TRUE);
 	CWnd::OnLButtonUp(flags, point);
+}
+
+void CLaunchPanel::OnRButtonDown(UINT flags, CPoint point)
+{
+	// A remote press-and-hold may be promoted to a right click after an
+	// initial left down. Cancel that pending launch before the context event.
+	UpdateTileLayout();
+	CWnd::OnRButtonDown(flags, point);
+}
+
+void CLaunchPanel::OnContextMenu(CWnd*, CPoint point)
+{
+	if (m_busyTile >= 0) return;
+	const BOOL keyboard = point == CPoint(-1, -1);
+	if (!keyboard) ScreenToClient(&point);
+	UpdateTileLayout();
+	const int index = keyboard ? m_focusTile : HitTestTile(point);
+	if (index < 0 || index >= static_cast<int>(m_tiles.size())) return;
+	SetFocus();
+	m_pressed = index;
+	StartOrganizing(); // Enter edit mode without opening a menu.
 }
 
 void CLaunchPanel::OnKeyDown(UINT character, UINT repeatCount, UINT flags)
@@ -949,6 +1141,7 @@ void CLaunchPanel::OnSetFocus(CWnd* oldWindow)
 void CLaunchPanel::OnKillFocus(CWnd* newWindow)
 {
 	CWnd::OnKillFocus(newWindow);
+	FinishOrganizing();
 	Invalidate(FALSE);
 }
 
@@ -959,9 +1152,9 @@ UINT CLaunchPanel::OnGetDlgCode()
 
 BOOL CLaunchPanel::PreTranslateMessage(MSG* message)
 {
-	if (message->hwnd == m_hWnd && message->message == WM_KEYDOWN && message->wParam == VK_ESCAPE && m_pointerDown)
+	if (message->hwnd == m_hWnd && message->message == WM_KEYDOWN && message->wParam == VK_ESCAPE && (m_pointerDown || m_organizing))
 	{
-		UpdateTileLayout();
+		if (m_organizing) FinishOrganizing(); else UpdateTileLayout();
 		Invalidate(FALSE);
 		return TRUE;
 	}

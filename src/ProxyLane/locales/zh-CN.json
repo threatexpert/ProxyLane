@@ -526,6 +526,8 @@
   "launch.confirm_start_app": "当前尚未启用配置。\r\n\r\n是否启用“%s”，并使用该配置启动“%s”？",
   "launch.confirm_draft": "此配置有未保存的修改，启动时将使用当前编辑内容。",
   "launch.opening": "正在打开…",
+  "launch.organize_hint": "右键点击图标，可调整顺序或移除",
+  "launch.organize_active": "拖动调整顺序，停留在左右边缘可翻页；点击 × 移除，点击空白处完成。",
   "launch.profile_changed": "所选配置已变更，请重新点击应用。",
   "recent.actions": "更多操作 ▾",
   "recent.actions_hint": "最近启动项可通过“更多操作”或右键上移、下移、固定和移除。固定项保持靠前，组内顺序同步首页。",

@@ -526,6 +526,8 @@
   "launch.confirm_start_app": "No profile is active.\r\n\r\nEnable “%s” and use it to launch “%s”?",
   "launch.confirm_draft": "This profile has unsaved changes. Its current edited settings will be used.",
   "launch.opening": "Opening…",
+  "launch.organize_hint": "Right-click an icon to reorder or remove it",
+  "launch.organize_active": "Drag to reorder; hold at either edge to turn pages. Click × to remove, or click outside to finish.",
   "launch.profile_changed": "The selected profile changed. Please choose the app again.",
   "recent.actions": "More actions ▾",
   "recent.actions_hint": "Use More actions or right-click a recent app to move, pin or remove it. Pinned apps stay first; order within each group also applies to Home.",

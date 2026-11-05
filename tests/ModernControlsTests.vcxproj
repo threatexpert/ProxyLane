@@ -13,7 +13,7 @@
     <ClCompile><PrecompiledHeader>NotUsing</PrecompiledHeader><RuntimeLibrary>MultiThreaded</RuntimeLibrary><AdditionalIncludeDirectories>$(ProjectDir)..\src\ProxyLane;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions></ClCompile>
     <Link><SubSystem>Console</SubSystem><AdditionalDependencies>shlwapi.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="ModernControlsTests.cpp" /><ClCompile Include="..\src\ProxyLane\ModernUI.cpp" /></ItemGroup>
+  <ItemGroup><ClCompile Include="ModernControlsTests.cpp" /><ClCompile Include="LaunchPanelInteractionTests.cpp" /><ClCompile Include="..\src\ProxyLane\LaunchPanel.cpp" /><ClCompile Include="..\src\ProxyLane\ModernUI.cpp" /></ItemGroup>
   <ItemGroup><ResourceCompile Include="ModernControlsTests.rc" /></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

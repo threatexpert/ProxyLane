@@ -1131,6 +1131,8 @@ static AppLaunchResult LaunchElevatedAndProxy(
 
 BOOL CPage3::PreTranslateMessage(MSG* message)
 {
+	if (message && message->message == WM_LBUTTONDOWN && message->hwnd != m_launchPanel.GetSafeHwnd())
+		m_launchPanel.FinishOrganizing();
 	if (message && m_windowFinderToolTip.GetSafeHwnd())
 		m_windowFinderToolTip.RelayEvent(message);
 
@@ -1249,6 +1251,7 @@ BEGIN_MESSAGE_MAP(CPage3, CModernDialog)
 	ON_NOTIFY(NM_CUSTOMDRAW, IDC_PSLIST, &CPage3::OnNMCustomdrawProcessList)
 	ON_MESSAGE(WM_LAUNCH_PANEL_TILE, &CPage3::OnLaunchPanelTile)
 	ON_MESSAGE(WM_LAUNCH_PANEL_PROFILE, &CPage3::OnLaunchPanelProfile)
+	ON_MESSAGE(WM_LAUNCH_PANEL_EDIT, &CPage3::OnLaunchPanelEdit)
 	ON_BN_CLICKED(IDC_PROCESS_TOGGLE, &CPage3::OnBnClickedProcessToggle)
 	ON_BN_CLICKED(IDC_STOP_PROXY_APP, &CPage3::OnBnClickedStopProxy)
 	ON_MESSAGE(WM_RECENT_APPLICATIONS_CHANGED, &CPage3::OnRecentApplicationsChanged)
@@ -1474,6 +1477,7 @@ void CPage3::ReloadRecentApplications(BOOL force)
 		(settings ? settings->GetSelectedProfileName() : CString());
 	const CString identity = running ? g_MainTab->GetRunningRecentProfileId() :
 		(settings ? settings->GetSelectedRecentProfileId() : CString());
+	if (m_launchPanel.IsInteracting() && identity == m_recentProfileId) return;
 	BOOL changed = force || identity != m_recentProfileId;
 	if (identity != m_recentProfileId)
 	{
@@ -1531,6 +1535,7 @@ void CPage3::ReloadRecentApplications(BOOL force)
 		tile.name = m_recentEntries[i].app.name;
 		tile.tip = RecentApplications::Description(m_recentEntries[i]);
 		tile.elevated = m_recentEntries[i].elevated;
+		tile.pinned = m_recentEntries[i].pinned;
 		tiles.push_back(tile);
 	}
 	const int oldPanelHeight = m_launchPanel.PreferredHeight();
@@ -1542,6 +1547,23 @@ void CPage3::ReloadRecentApplications(BOOL force)
 BOOL CPage3::HasConfiguredProxy() const
 {
 	return g_MainTab && g_MainTab->GetPage1() && g_MainTab->GetPage1()->m_cfgls.GetCount() > 0;
+}
+
+LRESULT CPage3::OnLaunchPanelEdit(WPARAM, LPARAM parameter)
+{
+	const CLaunchPanel::Edit edit = *reinterpret_cast<const CLaunchPanel::Edit*>(parameter);
+	CPage1* settings = g_MainTab ? g_MainTab->GetPage1() : NULL;
+	if (!settings || m_recentLaunching) return 0;
+	const BOOL running = g_MainTab->IsProxyRunning();
+	const CString profile = running ? g_MainTab->GetRunningProfileName() : settings->GetSelectedProfileName();
+	const CString identity = running ? g_MainTab->GetRunningRecentProfileId() : settings->GetSelectedRecentProfileId();
+	if (identity.IsEmpty() || identity != m_recentProfileId) { RefreshLaunchPanel(); return 0; }
+	RecentApplications::Store store(profile, RecentApplications::DefaultPath(), identity);
+	const BOOL saved = edit.remove ? store.Remove(edit.id) : store.MoveTo(edit.id, edit.targetId);
+	if (!saved) MessageBox(Localization::Get(L"recent.write_failed"), Localization::Get(L"recent.title"), MB_OK | MB_ICONWARNING);
+	ReloadRecentApplications(TRUE);
+	settings->PostMessage(WM_RECENT_APPLICATIONS_CHANGED);
+	return saved;
 }
 
 void CPage3::RefreshLaunchPanel()

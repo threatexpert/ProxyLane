@@ -69,6 +69,7 @@ namespace RecentApplications
 		BOOL Remember(Entry entry) const;
 		BOOL SetPinned(const CString& id, BOOL pinned) const;
 		BOOL Move(const CString& id, int direction) const;
+		BOOL MoveTo(const CString& id, const CString& targetId) const;
 		BOOL Remove(const CString& id) const;
 	private:
 		CString m_path;

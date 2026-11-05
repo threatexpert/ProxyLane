@@ -428,6 +428,28 @@ BOOL RecentApplications::Store::Move(const CString& id, int direction) const
 }
 
 BOOL RecentApplications::Store::SetPinned(const CString& id, BOOL pinned) const { return Change(id, FALSE, pinned); }
+BOOL RecentApplications::Store::MoveTo(const CString& id, const CString& targetId) const
+{
+	HistoryLock lock(m_path);
+	if (!lock.Valid()) return FALSE;
+	std::vector<Entry> entries; CString identity;
+	if (!ReadBound(entries, identity, FALSE)) return FALSE;
+	SortForDisplay(entries);
+	size_t from = entries.size(), to = entries.size();
+	for (size_t i = 0; i < entries.size(); ++i) {
+		if (entries[i].id == id) from = i;
+		if (entries[i].id == targetId) to = i;
+	}
+	if (from == entries.size() || to == entries.size()) { SetLastError(ERROR_NOT_FOUND); return FALSE; }
+	if (entries[from].pinned != entries[to].pinned) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+	if (from == to) return TRUE;
+	const Entry moving = entries[from];
+	entries.erase(entries.begin() + from);
+	entries.insert(entries.begin() + to, moving);
+	for (size_t i = 0; i < entries.size(); ++i) entries[i].displayOrder = i + 1;
+	Sort(entries);
+	return Write(entries, identity);
+}
 BOOL RecentApplications::Store::Remove(const CString& id) const { return Change(id, TRUE, FALSE); }
 
 BOOL RecentApplications::MatchesCatalog(const Entry& entry, const InstalledApplications::Application& app)

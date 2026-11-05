@@ -163,12 +163,19 @@ static void TestManualOrder(Fixture& f)
 	Check(rows[2].id == third, "move down restores position");
 	Check(store.Move(first, -1) && store.Move(last, 1) && store.Read(rows), "boundary moves are harmless"); SortForDisplay(rows);
 	Check(rows[0].id == first && rows[3].id == last, "boundary never wraps");
+	Check(store.MoveTo(first, last) && store.Read(rows), "drag first to last persists"); SortForDisplay(rows);
+	Check(rows[0].id == second && rows[3].id == first, "drag shifts intermediate entries forward");
+	Check(store.MoveTo(first, second) && store.Read(rows), "drag last to first persists"); SortForDisplay(rows);
+	Check(rows[0].id == first && rows[3].id == last, "drag shifts intermediate entries backward");
+	Check(store.MoveTo(first, first) && !store.MoveTo(first, L"missing"), "no-op and stale drop target");
 	Check(store.SetPinned(first, TRUE) && store.SetPinned(second, TRUE), "pin group");
 	Check(store.Move(second, -1) && store.Move(third, -1) && store.Read(rows), "moves within fixed groups"); SortForDisplay(rows);
 	Check(rows[0].id == second && rows[1].id == first && rows[2].id == third, "fixed/ordinary boundary retained");
+	Check(!store.MoveTo(first, third), "drag cannot silently change pinned status");
 	Check(!store.Move(L"missing", 1) && !store.Move(first, 0), "invalid moves rejected");
 	Check(DeleteProfile(L"A", path), "delete move profile"); Seed(path);
 	Check(!Store(L"A", path, rows[0].profileId).Move(first, 1), "stale identity cannot reorder replacement profile");
+	Check(!Store(L"A", path, rows[0].profileId).MoveTo(first, second), "stale drag cannot reorder replacement profile");
 	std::cout << "manual up/down, restart, launch stability, group boundaries, stale identity: PASS\n";
 }
 
