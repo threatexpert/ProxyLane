@@ -11,6 +11,8 @@
 #include "ProcessActions.h"
 #include "ApplicationCatalogCache.h"
 #include <afxole.h>
+#include <propkey.h>
+#include <propsys.h>
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -25,6 +27,51 @@ UINT s_uTaskbarRestart = -1;
 
 namespace
 {
+	void SetTaskbarIdentity(HWND window, bool clear = false)
+	{
+		// A launcher link carries the target app's icon. Give our window its own
+		// identity so Explorer does not reuse that link for ProxyLane's taskbar group.
+		// Resolve dynamically to retain compatibility with pre-Windows 7 systems.
+		typedef HRESULT (WINAPI* GetWindowStore)(HWND, REFIID, void**);
+		HMODULE shell = GetModuleHandleW(L"shell32.dll");
+		GetWindowStore getStore = shell ? reinterpret_cast<GetWindowStore>(
+			GetProcAddress(shell, "SHGetPropertyStoreForWindow")) : NULL;
+		if (!getStore) return;
+		CComPtr<IPropertyStore> store;
+		if (FAILED(getStore(window, IID_PPV_ARGS(&store)))) return;
+
+		const PROPERTYKEY keys[] = { PKEY_AppUserModel_RelaunchCommand,
+			PKEY_AppUserModel_RelaunchDisplayNameResource,
+			PKEY_AppUserModel_RelaunchIconResource, PKEY_AppUserModel_ID };
+		CString values[4];
+		if (!clear)
+		{
+			WCHAR executable[32768] = {};
+			const DWORD length = GetModuleFileNameW(NULL, executable, _countof(executable));
+			if (!length || length >= _countof(executable)) return;
+			// Pinning the PL window should reopen PL, not repeat the app launch.
+			values[0].Format(L"\"%s\"", executable);
+			values[1] = L"ProxyLane";
+			values[2].Format(L"%s,-%d", executable, IDR_MAINFRAME);
+			values[3] = L"ThreatExpert.ProxyLane";
+		}
+		for (size_t index = 0; index < _countof(keys); ++index)
+		{
+			PROPVARIANT value = {};
+			if (!clear)
+			{
+				value.vt = VT_LPWSTR;
+				value.pwszVal = const_cast<LPWSTR>(static_cast<LPCWSTR>(values[index]));
+			}
+			// The window store copies the string; VT_EMPTY releases it at teardown.
+			if (FAILED(store->SetValue(keys[index], value)) && !clear)
+			{
+				SetTaskbarIdentity(window, true);
+				return;
+			}
+		}
+	}
+
 	enum TaskbarMenuCommand
 	{
 		TASKBAR_MENU_OPEN = 1,
@@ -560,6 +607,7 @@ BOOL CProxyLaneDlg::OnInitDialog()
 
 	SetIcon(m_hIcon, TRUE);			// 设置大图标
 	SetIcon(m_hIcon, FALSE);		// 设置小图标
+	SetTaskbarIdentity(m_hWnd);
 	m_hInactiveIcon = CreateGrayscaleIcon(GetIcon(FALSE));
 
 	// 启动时确保当前程序目录具备 ALL APPLICATION PACKAGES 读与执行权限，适配 UWP/AppContainer 进程注入
@@ -951,6 +999,7 @@ HCURSOR CProxyLaneDlg::OnQueryDragIcon()
 
 void CProxyLaneDlg::OnDestroy()
 {
+	SetTaskbarIdentity(m_hWnd, true);
 	EndFileDrag();
 	for (size_t index = 0; index < m_fileDropTargets.size(); ++index)
 	{

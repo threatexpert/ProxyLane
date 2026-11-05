@@ -13,6 +13,7 @@ import psutil
 import win32com.client
 import win32gui
 import win32process
+from win32com.propsys import propsys, pscon
 import re
 
 PROBE = '''import ctypes,json,os,sys
@@ -89,6 +90,13 @@ dnsOpt=1
             win32gui.PostMessage(main_window(pid), 0x8000 + 100, icon_id, 0x203)  # WM_LBUTTONDBLCLK
             expect_visibility(pid, True)
 
+        def verify_taskbar_identity(pid):
+            store = propsys.SHGetPropertyStoreForWindow(main_window(pid))
+            assert store.GetValue(pscon.PKEY_AppUserModel_ID).GetValue() == "ThreatExpert.ProxyLane"
+            assert store.GetValue(pscon.PKEY_AppUserModel_RelaunchIconResource).GetValue() == str(executable) + ",-128"
+            assert store.GetValue(pscon.PKEY_AppUserModel_RelaunchCommand).GetValue() == '"' + str(executable) + '"'
+            assert store.GetValue(pscon.PKEY_AppUserModel_RelaunchDisplayNameResource).GetValue() == "ProxyLane"
+
         def command(exe, output):
             return [str(exe), "--auto", "--profile", "ShortcutTest", "--run", sys.executable,
                     "--shortcut", "--app-name", "Shortcut test application 中文",
@@ -155,6 +163,25 @@ dnsOpt=1
                                         cwd=root, timeout=20)
                 assert result.returncode == 5, (target, result.returncode)
             print("PASS: CLI blocks ProxyLane and wrapper shortcuts as launch targets", flush=True)
+            stop_owners()
+
+            # A cold shell launch carries a different icon in STARTUPINFO. The
+            # existing-instance test above cannot catch taskbar identity leakage.
+            output.unlink()
+            shortcut.IconLocation = str(Path(os.environ["SystemRoot"]) / "System32/cmd.exe") + ",0"
+            shortcut.Save()
+            os.startfile(str(root / "Example (ShortcutTest).lnk"))
+            verify(output)
+            resident = [p.pid for p in psutil.process_iter(["exe"])
+                        if p.info["exe"] and Path(p.info["exe"]) == executable]
+            assert len(resident) == 1, resident
+            expect_visibility(resident[0], False)
+            verify_taskbar_identity(resident[0])
+            open_from_tray(resident[0])
+            verify_taskbar_identity(resident[0])
+            saved_link = shell.CreateShortcut(str(root / "Example (ShortcutTest).lnk"))
+            assert "cmd.exe" in saved_link.IconLocation.lower()
+            print("PASS: cold launch from a cmd-icon link preserves PL taskbar identity when opened from tray", flush=True)
             stop_owners()
             output = root / "bootstrap32.json"
             owners.append(subprocess.Popen(command(entry32, output), cwd=root))
