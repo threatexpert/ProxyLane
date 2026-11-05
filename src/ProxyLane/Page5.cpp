@@ -84,7 +84,8 @@ BOOL CPage5::OnInitDialog()
  CString mode = Localization::Get(ConfigStorage::Path().CompareNoCase(ConfigStorage::PortablePath()) == 0 ? L"settings.portable_short" : L"settings.user_short");
  m_storageMode.Create(Localization::Get(L"settings.location") + L" · " + mode, child | SS_NOPREFIX, CRect(), this, 0x2521);
  m_storagePath.Create(ConfigStorage::Path(), child | SS_NOPREFIX | SS_PATHELLIPSIS, CRect(), this, 0x2522);
- m_updateInfo.Create(L"", child | SS_NOPREFIX, CRect(), this, 0x2524);
+ m_updateInfo.Create(L"", child, CRect(), this, 0x2524);
+ m_updateInfo.SetFont(&m_uiFont);
  m_transferTitle.Create(Localization::Get(L"settings.transfer"), child | SS_NOPREFIX, CRect(), this, 0x2526);
  m_transferInfo.Create(Localization::Get(L"settings.transfer_detail"), child | SS_NOPREFIX, CRect(), this, 0x2527);
  m_downloadLabel.Create(Localization::Get(L"page5.download_site"), child | SS_NOPREFIX, CRect(), this, 0x2528);
@@ -92,7 +93,7 @@ BOOL CPage5::OnInitDialog()
  m_downloadLink.Create(L"<a href=\"https://10000.download/\">10000.download</a>", child | WS_TABSTOP, CRect(), this, 0x2529);
  m_downloadLink.SetFont(&m_uiFont);
  if (m_projectTooltip.GetSafeHwnd()) m_projectTooltip.AddTool(&m_downloadLink, UpdateRelease::SiteUrl);
- for (UINT id : { 0x2521, 0x2522, 0x2524, 0x2526, 0x2527 }) GetDlgItem(id)->SetFont(id == 0x2522 || id == 0x2524 || id == 0x2527 ? &m_smallFont : &m_uiFont);
+ for (UINT id : { 0x2521, 0x2522, 0x2526, 0x2527 }) GetDlgItem(id)->SetFont(id == 0x2522 || id == 0x2527 ? &m_smallFont : &m_uiFont);
  if (m_projectTooltip.GetSafeHwnd()) m_projectTooltip.AddTool(&m_storagePath, ConfigStorage::Path());
  m_storagePath.ModifyStyle(0, SS_NOTIFY);
  // Frames paint below their sibling controls and never enter the tab order.
@@ -118,12 +119,15 @@ BEGIN_MESSAGE_MAP(CPage5, CModernDialog)
  ON_WM_VSCROLL()
  ON_WM_MOUSEWHEEL()
  ON_WM_TIMER()
+ ON_WM_CTLCOLOR()
  ON_CONTROL_RANGE(BN_CLICKED, 0x2500, 0x2504, &CPage5::OnSettingsAction)
 	ON_WM_SIZE()
 	ON_NOTIFY(NM_CLICK, IDC_LINK_PROJECT, &CPage5::OnProjectLink)
 	ON_NOTIFY(NM_RETURN, IDC_LINK_PROJECT, &CPage5::OnProjectLink)
  ON_NOTIFY(NM_CLICK, 0x2529, &CPage5::OnDownloadLink)
  ON_NOTIFY(NM_RETURN, 0x2529, &CPage5::OnDownloadLink)
+ ON_NOTIFY(NM_CLICK, 0x2524, &CPage5::OnUpdateLink)
+ ON_NOTIFY(NM_RETURN, 0x2524, &CPage5::OnUpdateLink)
 	ON_CBN_SELCHANGE(IDC_COMBO_LANGUAGE, &CPage5::OnLanguageChanged)
 END_MESSAGE_MAP()
 
@@ -162,6 +166,42 @@ void CPage5::OnDownloadLink(NMHDR*, LRESULT* result)
 {
  ShellExecute(m_hWnd, L"open", UpdateRelease::SiteUrl, NULL, NULL, SW_SHOWNORMAL);
  if (result) *result = 0;
+}
+
+void CPage5::OnUpdateLink(NMHDR*, LRESULT* result)
+{
+ if (m_updateFound)
+  ShellExecute(m_hWnd, L"open", UpdateRelease::DownloadUrl, NULL, NULL, SW_SHOWNORMAL);
+ if (result) *result = 0;
+}
+
+HBRUSH CPage5::OnCtlColor(CDC* dc, CWnd* wnd, UINT ctlColor)
+{
+ HBRUSH brush = CModernDialog::OnCtlColor(dc, wnd, ctlColor);
+ if (wnd && wnd->GetSafeHwnd() == m_updateInfo.GetSafeHwnd())
+  dc->SetTextColor(m_updateFound ? RGB(21, 128, 61) : m_updateFailed ? UiTheme::Danger() : UiTheme::TextSecondary());
+ return brush;
+}
+
+void CPage5::SetUpdateStatus(const CString& text, bool found, bool failed)
+{
+ m_updateFound = found;
+ m_updateFailed = failed;
+ CString markup(text);
+ markup.Replace(L"&", L"&amp;");
+ markup.Replace(L"<", L"&lt;");
+ markup.Replace(L">", L"&gt;");
+ if (found) markup = L"<a href=\"" + CString(UpdateRelease::DownloadUrl) + L"\">" + markup + L"</a>";
+ m_updateInfo.SetWindowText(markup);
+ m_updateInfo.ModifyStyle(found ? 0 : WS_TABSTOP, found ? WS_TABSTOP : 0);
+ if (found) {
+  // Let the native hyperlink retain keyboard/accessibility behavior and use our text color.
+  LITEM item = {};
+  item.mask = LIF_ITEMINDEX | LIF_STATE;
+  item.stateMask = item.state = LIS_DEFAULTCOLORS;
+  m_updateInfo.SendMessage(LM_SETITEM, 0, reinterpret_cast<LPARAM>(&item));
+ }
+ LayoutAboutPage();
 }
 
 BOOL CPage5::UsesSecondaryText(UINT controlId) const
@@ -250,7 +290,8 @@ void CPage5::LayoutAboutPage()
  place(0x2504, right - checkW, y + S(16), checkW, buttonH);
  GetDlgItem(IDC_STATIC_ABOUT_TAGLINE)->ShowWindow(SW_HIDE);
  y += S(60);
- const int updateH = detailHeight(0x2524, inner);
+ CString updateText; m_updateInfo.GetWindowText(updateText);
+ const int updateH = updateText.IsEmpty() ? 0 : max(S(20), (int)m_updateInfo.SendMessage(LM_GETIDEALHEIGHT, max(1, inner), 0));
  m_updateInfo.ShowWindow(updateH ? SW_SHOWNA : SW_HIDE);
  if (updateH) { place(0x2524, x + pad, y, inner, updateH); y += updateH + S(4); }
  CClientDC linkDc(this); CFont* oldLinkFont = linkDc.SelectObject(&m_uiFont);
@@ -348,10 +389,12 @@ void CPage5::OnSettingsAction(UINT id)
   break;
  }
  case 4: {
-  if (m_updateFound) { ShellExecute(m_hWnd, L"open", UpdateRelease::DownloadUrl, NULL, NULL, SW_SHOWNORMAL); break; }
+  if (m_updateQuery.Busy()) break;
   if (m_updateQuery.Request([](CString& tag) { return FetchRelease(tag); })) {
-   m_settingsButtons[4].EnableWindow(FALSE); m_updateInfo.SetWindowText(Localization::Get(L"settings.checking")); LayoutAboutPage(); SetTimer(0x2506, 100, NULL);
-  }
+   m_settingsButtons[4].EnableWindow(FALSE);
+   SetUpdateStatus(Localization::Get(L"settings.checking"));
+   SetTimer(0x2506, 100, NULL);
+  } else SetUpdateStatus(Localization::Get(L"settings.update_failed"), false, true);
   break;
  }
  }
@@ -363,12 +406,10 @@ void CPage5::OnTimer(UINT_PTR id)
  KillTimer(id); m_settingsButtons[4].EnableWindow(TRUE);
  UpdateRelease::VersionParts latest, current;
  if (!result || !result->succeeded || !UpdateRelease::Version((LPCSTR)CStringA(result->value), latest) || !UpdateRelease::Version((LPCSTR)CStringA(AppVersion::DisplayVersion()), current)) {
-  m_updateInfo.SetWindowText(Localization::Get(L"settings.update_failed")); LayoutAboutPage(); return;
+  SetUpdateStatus(Localization::Get(L"settings.update_failed"), false, true); return;
  }
- m_updateFound = latest > current;
- m_updateInfo.SetWindowText(m_updateFound ? Localization::Format(L"settings.update_found", (LPCWSTR)result->value) : Localization::Get(L"settings.up_to_date"));
- if (m_updateFound) m_settingsButtons[4].SetWindowText(Localization::Get(L"settings.view_update"));
- LayoutAboutPage();
+ const bool found = latest > current;
+ SetUpdateStatus(found ? Localization::Format(L"settings.update_found", (LPCWSTR)result->value) : Localization::Get(L"settings.up_to_date"), found);
 }
 void CPage5::SwitchStorage()
 {
