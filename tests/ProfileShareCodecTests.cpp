@@ -49,14 +49,17 @@ int ProfileShareCodecTestsMain()
         if (value["type"] == "NOPROXY") { value["host"] = ""; value["port"] = 0; }
         assert(ProfileShare::Decode(ProfileShare::Encode(value)) == value);
     }
-    Json legacyHttp = original;
-    legacyHttp["type"] = "HTTP11"; legacyHttp["hook_udp"] = false;
-    Json canonicalHttp = legacyHttp;
-    canonicalHttp["type"] = "HTTP";
-    assert(ProfileShare::Decode(std::string(ProfileShare::Prefix) +
-        ProfileShare::Base64Url(legacyHttp.dump())) == canonicalHttp);
-    assert(ProfileShare::Encode(legacyHttp) == ProfileShare::Encode(canonicalHttp));
-    for (const char* type : {"SOCKS4", "SOCKS4A", "HTTP10"})
+    for (const char* type : {"HTTP10", "HTTP11"})
+    {
+        Json legacyHttp = original;
+        legacyHttp["type"] = type; legacyHttp["hook_udp"] = false;
+        Json canonicalHttp = legacyHttp;
+        canonicalHttp["type"] = "HTTP";
+        assert(ProfileShare::Decode(std::string(ProfileShare::Prefix) +
+            ProfileShare::Base64Url(legacyHttp.dump())) == canonicalHttp);
+        assert(ProfileShare::Encode(legacyHttp) == ProfileShare::Encode(canonicalHttp));
+    }
+    for (const char* type : {"SOCKS4", "SOCKS4A"})
     {
         Json removed = original;
         removed["type"] = type; removed["transport"] = "PLAIN"; removed["hook_udp"] = false;

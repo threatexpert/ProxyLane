@@ -1886,7 +1886,7 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 
 		// Retain unsupported legacy profiles for editing, but do not leave the
 		// previous selection active (which would silently change their protocol).
-		if (szType.CompareNoCase(L"HTTP11") == 0) szType = L"HTTP";
+		if (szType.CompareNoCase(L"HTTP10") == 0 || szType.CompareNoCase(L"HTTP11") == 0) szType = L"HTTP";
 		m_cbProxyType.SetCurSel(m_cbProxyType.FindStringExact(-1, szType));
 		m_edit_HostName.SetWindowText(szHost);
 		m_edit_Port.SetWindowText(szPort);

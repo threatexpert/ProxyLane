@@ -69,7 +69,9 @@ BOOL CProxyProfileStore::Load(CfgProxyItem& item) const
 
 	item.pi.szItemName = _T("myproxy");
 	item.pi.strProxyType = m_ini.GetString(section, _T("Type"));
-	if (item.pi.GetProxyType() == PROXYTYPE_HTTP11) item.pi.strProxyType = L"HTTP";
+	// Legacy HTTP profiles now use HTTP/1.1 CONNECT; loading does not rewrite the INI.
+	const int storedType = item.pi.GetProxyType();
+	if (storedType == PROXYTYPE_HTTP10 || storedType == PROXYTYPE_HTTP11) item.pi.strProxyType = L"HTTP";
 	item.pi.strProxyHost = m_ini.GetString(section, _T("Host"));
 	item.pi.nProxyPort = m_ini.GetInt(section, _T("Port"));
 	item.pi.strProxyUser = m_ini.GetString(section, _T("User"));
@@ -149,7 +151,9 @@ BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 	if (!ini.SetDWORD(section, _T("ChildFilterMode"), item.nChildFilterMode)) return false;
 	if (!ini.SetString(section, _T("TargetFilter"), EncodeFilter(item.strTargetFilter))) return false;
 	if (!ini.SetDWORD(section, _T("TargetFilterMode"), item.nTargetFilterMode)) return false;
-	const CString type = item.pi.GetProxyType() == PROXYTYPE_HTTP11 ? CString(L"HTTP") : (CString)item.pi.strProxyType;
+	const int proxyType = item.pi.GetProxyType();
+	const CString type = (proxyType == PROXYTYPE_HTTP10 || proxyType == PROXYTYPE_HTTP11)
+		? CString(L"HTTP") : (CString)item.pi.strProxyType;
 	if (!ini.SetString(section, _T("Type"), type)) return false;
 	if (!ini.SetString(section, _T("Host"), (CString)item.pi.strProxyHost)) return false;
 	if (!ini.SetInt(section, _T("Port"), item.pi.nProxyPort)) return false;

@@ -489,6 +489,25 @@ static void TestProfileSave(Fixture& f)
  Check(!profiles.Save(item), "profile store reports write failure");
  Check(ini.GetInt(L"proxy_Save", L"Port") == 1080, "failed save retains all previous settings");
  SetFileAttributes(path, FILE_ATTRIBUTE_NORMAL);
+ for (LPCTSTR legacyType : { L"HTTP10", L"HTTP11" })
+ {
+  Check(ini.SetString(L"proxy_Save", L"Type", legacyType) &&
+   ini.SetString(L"proxy_Save", L"Transport", L"GONC_TLS_PSK") &&
+   ini.SetString(L"proxy_Save", L"PSK", L"legacy-psk") &&
+   ini.SetString(L"proxy_Save", L"TargetFilter", L"*.example.org:443"), "seed legacy HTTP profile");
+  CfgProxyItem loaded = {}; loaded.strName = L"Save";
+  Check(profiles.Load(loaded) && (CString)loaded.pi.strProxyType == L"HTTP" &&
+   loaded.pi.GetProxyType() == PROXYTYPE_HTTP11, "legacy HTTP loads as HTTP/1.1 CONNECT");
+  Check(ini.GetString(L"proxy_Save", L"Type") == legacyType, "loading does not rewrite legacy INI");
+  Check((CString)loaded.pi.strProxyHost == L"127.0.0.1" && loaded.pi.nProxyPort == 1080 &&
+   (CString)loaded.pi.strProxyUser == L"user" && (CString)loaded.pi.strProxyPass == L"pass" &&
+   loaded.nTransportMode == PROXY_TRANSPORT_GONC_TLS_PSK && loaded.strTransportPsk == L"legacy-psk" &&
+   loaded.strTargetFilter == L"*.example.org:443" && loaded.bHookTCP, "legacy HTTP preserves endpoint, credentials, transport and rules");
+  Check(profiles.Save(loaded) && ini.GetString(L"proxy_Save", L"Type") == L"HTTP" &&
+   ini.GetString(L"proxy_Save", L"RecentAppsId") == L"preserve-history", "save canonical HTTP and preserve history");
+  loaded.pi.strProxyType = legacyType;
+  Check(profiles.Save(loaded) && ini.GetString(L"proxy_Save", L"Type") == L"HTTP", "save also normalizes legacy in-memory type");
+ }
  std::cout << "profile transaction, history preservation and failed-save rollback: PASS\n";
 }
 
