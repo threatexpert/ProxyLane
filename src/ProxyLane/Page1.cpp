@@ -215,11 +215,8 @@ BOOL CPage1::OnInitDialog()
 	UpdateProxyStateUi();
 
 	m_cbProxyType.AddString(_T("NOPROXY"));
-	m_cbProxyType.AddString(_T("SOCKS4"));
-	m_cbProxyType.AddString(_T("SOCKS4A"));
 	m_cbProxyType.AddString(_T("SOCKS5"));
-	m_cbProxyType.AddString(_T("HTTP10"));
-	m_cbProxyType.AddString(_T("HTTP11"));
+	m_cbProxyType.AddString(_T("HTTP"));
 	m_cbTransport.AddString(Localization::Get(_T("transport.plain")));
 	m_cbTransport.AddString(Localization::Get(_T("transport.gonc_tls_psk")));
 	m_cbTransport.SetCurSel(PROXY_TRANSPORT_PLAIN);
@@ -417,19 +414,24 @@ void CPage1::LayoutSettingsPage()
 				row += hintHeight + S(12);
 			}
 		}
-		const int typeW = S(140), portW = S(90);
-		const int hostW = innerW - typeW - portW - gapX * 2;
+		const int typeW = S(100), portW = S(72);
+		const int advancedW = max(S(180), textWidth(0x2402) + S(16));
+		const bool inlineAdvanced = innerW >= typeW + S(144) + portW + advancedW + gapX * 3;
+		const int hostW = inlineAdvanced ? innerW - typeW - portW - advancedW - gapX * 3 : innerW - typeW - gapX;
 		place(IDC_STATIC_TYPE_LABEL, innerX, row, typeW, labelH);
 		place(IDC_CB_PROXYTYPE, innerX, row + labelH + S(2), typeW, S(260));
 		place(IDC_STATIC_HOST_LABEL, innerX + typeW + gapX, row, hostW, labelH);
 		place(IDC_EDIT_ADDR, innerX + typeW + gapX, row + labelH + S(2), hostW, fieldH);
-		place(IDC_STATIC_PORT_LABEL, innerX + typeW + hostW + gapX * 2, row, portW, labelH);
-		place(IDC_EDIT_PORT, innerX + typeW + hostW + gapX * 2, row + labelH + S(2), portW, fieldH);
+		// Keep the optional-section toggle beside the port, including at narrow
+		// widths where the pair moves together to the next row.
+		if (!inlineAdvanced) row += rowStep;
+		const int portX = inlineAdvanced ? innerX + typeW + hostW + gapX * 2 : innerX;
+		place(IDC_STATIC_PORT_LABEL, portX, row, portW, labelH);
+		place(IDC_EDIT_PORT, portX, row + labelH + S(2), portW, fieldH);
+		place(0x2402, portX + portW + gapX, row + labelH + S(2), advancedW, fieldH);
 
 		// Combined optional section follows lijing6006/ProxyLane PR #3.
 		row += rowStep;
-		place(0x2402, innerX - S(4), row, min(innerW, max(S(180), textWidth(0x2402) + S(12))), S(26));
-		row += S(30);
 		const UINT advancedIds[] = { IDC_STATIC_USER_LABEL, IDC_EDIT_USER, IDC_STATIC_PASSWORD_LABEL, IDC_EDIT_PASS,
 			IDC_STATIC_TRANSPORT_LABEL, IDC_COMBO_TRANSPORT, IDC_STATIC_PSK_LABEL, IDC_EDIT_TRANSPORT_PSK };
 		for (int i = 0; i < _countof(advancedIds); ++i)
@@ -762,7 +764,18 @@ BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 
 	CString szType, szHost, szPort, szUser, szPass, szTransportPsk;
 
-	m_cbProxyType.GetLBText(m_cbProxyType.GetCurSel(), szType);
+	const int typeIndex = m_cbProxyType.GetCurSel();
+	if (typeIndex == CB_ERR)
+	{
+		m_settingsValidationKey = L"profile.unsupported_type";
+		return FALSE;
+	}
+	m_cbProxyType.GetLBText(typeIndex, szType);
+	if (szType != L"NOPROXY" && szType != L"SOCKS5" && szType != L"HTTP")
+	{
+		m_settingsValidationKey = L"profile.unsupported_type";
+		return FALSE;
+	}
 	m_edit_HostName.GetWindowText(szHost);
 	m_edit_Port.GetWindowText(szPort);
 	m_edit_User.GetWindowText(szUser);
@@ -918,7 +931,8 @@ void CPage1::UpdateTransportEnable()
 	const int selectedProxyType = selectedProxy.GetProxyType();
 	const BOOL direct = proxyType.CompareNoCase(_T("NOPROXY")) == 0;
 	const CString group = Localization::Get(direct ? L"page1.direct_group" : L"page1.proxy_group");
-	const CString hint = direct ? Localization::Get(L"page1.direct_hint") : CString();
+	const CString hint = typeIndex == CB_ERR ? Localization::Get(L"profile.unsupported_type") :
+		(direct ? Localization::Get(L"page1.direct_hint") : CString());
 	CString previousHint, previousGroup;
 	GetDlgItemText(IDC_STATIC_UPSTREAM_HINT, previousHint);
 	GetDlgItemText(IDC_STATIC_PROXY_GROUP, previousGroup);
@@ -938,7 +952,7 @@ void CPage1::UpdateTransportEnable()
 		ProxyTransportPolicy::SupportsGoncTlsPsk(selectedProxyType);
 	// Preserve an encrypted profile on unsupported hosts; never silently downgrade it.
 	const BOOL supportsModules = ProxySupportsOptionalModules();
-	if (direct || (supportsModules && !supportsSecureTransport))
+	if (direct || (typeIndex != CB_ERR && supportsModules && !supportsSecureTransport))
 		m_cbTransport.SetCurSel(PROXY_TRANSPORT_PLAIN);
 	m_cbTransport.EnableWindow(supportsModules && supportsSecureTransport);
 	m_editTransportPsk.EnableWindow(supportsModules && supportsSecureTransport &&
@@ -946,8 +960,8 @@ void CPage1::UpdateTransportEnable()
 	if (m_btnHookUDP.GetSafeHwnd())
 	{
 		const BOOL supportsUdp =
-			ProxyTransportPolicy::SupportsUdpProxy(selectedProxyType);
-		if (!supportsUdp)
+			typeIndex != CB_ERR && ProxyTransportPolicy::SupportsUdpProxy(selectedProxyType);
+		if (typeIndex != CB_ERR && !supportsUdp)
 			m_btnHookUDP.SetCheck(BST_UNCHECKED);
 		m_btnHookUDP.EnableWindow(supportsUdp);
 	}
@@ -1457,7 +1471,7 @@ BOOL CPage1::SupportsIpv6ProxyTest()
 {
 	const int proxyType = m_testProxyInfo.GetProxyType();
 	return proxyType == PROXYTYPE_NOPROXY || proxyType == PROXYTYPE_SOCKS5 ||
-		proxyType == PROXYTYPE_HTTP10 || proxyType == PROXYTYPE_HTTP11;
+		proxyType == PROXYTYPE_HTTP11;
 }
 
 BOOL CPage1::StartIpv6ProxyTest()
@@ -1870,7 +1884,10 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		szUser = item->pi.strProxyUser;
 		szPass = item->pi.strProxyPass;
 
-		m_cbProxyType.SelectString(0, szType);
+		// Retain unsupported legacy profiles for editing, but do not leave the
+		// previous selection active (which would silently change their protocol).
+		if (szType.CompareNoCase(L"HTTP11") == 0) szType = L"HTTP";
+		m_cbProxyType.SetCurSel(m_cbProxyType.FindStringExact(-1, szType));
 		m_edit_HostName.SetWindowText(szHost);
 		m_edit_Port.SetWindowText(szPort);
 		m_edit_User.SetWindowText(szUser);

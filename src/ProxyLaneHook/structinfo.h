@@ -237,7 +237,7 @@ typedef struct _tagProxyInfo
 			return PROXYTYPE_SOCKS5;
 		else if(!_stricmp(strProxyType, "HTTP10"))
 			return PROXYTYPE_HTTP10;
-		else if(!_stricmp(strProxyType, "HTTP11"))
+		else if(!_stricmp(strProxyType, "HTTP") || !_stricmp(strProxyType, "HTTP11"))
 			return PROXYTYPE_HTTP11;
 		else
 			return PROXYTYPE_NOPROXY;

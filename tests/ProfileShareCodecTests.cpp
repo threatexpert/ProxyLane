@@ -42,12 +42,25 @@ int ProfileShareCodecTestsMain()
     assert(ProfileShare::Base64Url("f") == "Zg");
     assert(ProfileShare::Base64Url("fo") == "Zm8");
     assert(ProfileShare::Base64Url("foo") == "Zm9v");
-    for (const char* type : {"SOCKS4", "SOCKS4A", "SOCKS5", "HTTP10", "HTTP11", "NOPROXY"})
+    for (const char* type : {"SOCKS5", "HTTP", "NOPROXY"})
     {
         Json value = original;
         value["type"] = type; value["transport"] = "PLAIN"; value["hook_udp"] = false;
         if (value["type"] == "NOPROXY") { value["host"] = ""; value["port"] = 0; }
         assert(ProfileShare::Decode(ProfileShare::Encode(value)) == value);
+    }
+    Json legacyHttp = original;
+    legacyHttp["type"] = "HTTP11"; legacyHttp["hook_udp"] = false;
+    Json canonicalHttp = legacyHttp;
+    canonicalHttp["type"] = "HTTP";
+    assert(ProfileShare::Decode(std::string(ProfileShare::Prefix) +
+        ProfileShare::Base64Url(legacyHttp.dump())) == canonicalHttp);
+    assert(ProfileShare::Encode(legacyHttp) == ProfileShare::Encode(canonicalHttp));
+    for (const char* type : {"SOCKS4", "SOCKS4A", "HTTP10"})
+    {
+        Json removed = original;
+        removed["type"] = type; removed["transport"] = "PLAIN"; removed["hook_udp"] = false;
+        RejectValue(removed);
     }
     // Disabled fields, including credentials, must survive a full-profile share.
     Json value = original;

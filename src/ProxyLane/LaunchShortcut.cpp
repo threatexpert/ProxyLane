@@ -126,6 +126,11 @@ LaunchShortcut::DecodeResult LaunchShortcut::Decode(const InstalledApplications:
         // Legacy --run links may point at an ordinary application shortcut. Nested
         // ProxyLane links are rejected instead of recursively interpreting commands.
         if (!InstalledApplications::ResolveShortcut(target.path, target) || IsLink(target.path)) return Invalid;
+        if (!options.initialArguments.IsEmpty())
+        {
+            if (!target.arguments.IsEmpty()) target.arguments += L" ";
+            target.arguments += options.initialArguments;
+        }
     }
     if (!target.IsPackaged() && IsProxyLaneExecutable(target.path)) return Invalid;
     for (size_t i = 0; i < options.targetArguments.size(); ++i)

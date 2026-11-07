@@ -36,7 +36,7 @@ Prefer launching applications through ProxyLane. Attaching to a running process 
 ### Proxy Types and Rules
 
 - **SOCKS5**: TCP and UDP; UDP requires server support.
-- **HTTP10 / HTTP11**: TCP through HTTP CONNECT, without UDP proxying.
+- **HTTP**: TCP through HTTP/1.1 CONNECT, without UDP proxying. Existing HTTP11 profiles remain compatible.
 - **NOPROXY**: direct connections for monitoring and decryption without an external proxy. No server address or port is needed.
 - **Child-process / target rules**: by default, all child processes (with **Proxy child processes** enabled) and all network destinations are proxied. To limit the scope, follow the matching examples in the interface.
 - **Block UDP / Block IPv6**: restrict the corresponding traffic as needed. Blocking UDP takes priority over UDP proxying or capture.
@@ -104,9 +104,9 @@ The profile dropdown refreshes when opened to reflect changes made by other inst
 
 ## gonc TLS-PSK Secure Transport
 
-For SOCKS5, HTTP10 or HTTP11, select `gonc TLS-PSK` under **Transport** and enter the remote gonc server address, port and matching PSK. No separate local gonc client is needed.
+For SOCKS5 or HTTP, select `gonc TLS-PSK` under **Transport** and enter the remote gonc server address, port and matching PSK. No separate local gonc client is needed.
 
-SOCKS5 supports encrypted TCP and UDP; HTTP10/HTTP11 support TCP only. To accept both SOCKS5 and HTTP on the same server port, enable `-http`, for example:
+SOCKS5 supports encrypted TCP and UDP; HTTP supports TCP only. To accept both SOCKS5 and HTTP on the same server port, enable `-http`, for example:
 
 ```bat
 gonc -e ":s5s -u -http" -l -k -psk YOUR_PSK -tls 1083

@@ -38,8 +38,7 @@ inline void Validate(const Json& value)
         name.front() == ' ' || name.back() == ' ' || name.find('\t') != std::string::npos)
         throw Error("share.invalid_name");
     const std::string type = String(value, "type", 16);
-    if (type != "NOPROXY" && type != "SOCKS4" && type != "SOCKS4A" &&
-        type != "SOCKS5" && type != "HTTP10" && type != "HTTP11")
+    if (type != "NOPROXY" && type != "SOCKS5" && type != "HTTP" && type != "HTTP11")
         throw Error("share.invalid_type");
     const std::string host = String(value, "host", 127);
     String(value, "user", 127);
@@ -76,7 +75,7 @@ inline void Validate(const Json& value)
     }
     if (transport == "GONC_TLS_PSK")
     {
-        if (type != "SOCKS5" && type != "HTTP10" && type != "HTTP11")
+        if (type != "SOCKS5" && type != "HTTP" && type != "HTTP11")
             throw Error("profile.secure_transport_unsupported");
         if (psk.empty()) throw Error("profile.psk_required");
     }
@@ -103,7 +102,9 @@ inline std::string Base64Url(const std::string& input)
 inline std::string Encode(const Json& value)
 {
     Validate(value);
-    const std::string json = value.dump(); // Also validates UTF-8.
+    Json canonical = value;
+    if (canonical["type"] == "HTTP11") canonical["type"] = "HTTP";
+    const std::string json = canonical.dump(); // Also validates UTF-8.
     if (json.size() > MaxJsonBytes) throw Error("share.too_large");
     std::string result = Prefix + Base64Url(json);
     if (result.size() > MaxCodeBytes) throw Error("share.too_large");
@@ -150,6 +151,7 @@ inline Json Decode(std::string code)
         return true;
     });
     Validate(value);
+    if (value["type"] == "HTTP11") value["type"] = "HTTP";
     return value;
 }
 }

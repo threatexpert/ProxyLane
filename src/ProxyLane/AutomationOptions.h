@@ -44,6 +44,7 @@ BOOL ParseAutomationOptions(
 	CString& errorMessage);
 
 CString QuoteCommandLineArgument(const CString& argument);
+BOOL ExpandLaunchEnvironment(const CString& source, CString& expanded);
 CString BuildAutomationCommandLine(
 	const AutomationOptions& options,
 	LPCTSTR bootstrapEventName);

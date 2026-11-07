@@ -36,7 +36,7 @@ ProxyLane 让指定 Windows 应用使用独立的代理配置，无需修改系�
 ### 代理类型与规则
 
 - **SOCKS5**：支持 TCP 和 UDP；UDP 需要服务端支持。
-- **HTTP10 / HTTP11**：通过 HTTP CONNECT 代理 TCP，不支持 UDP 代理。
+- **HTTP**：通过 HTTP/1.1 CONNECT 代理 TCP，不支持 UDP 代理。兼容读取旧 HTTP11 配置。
 - **NOPROXY**：直接连接目标，用于监视、解密等不需要外部代理的场景，无需填写服务器地址和端口。
 - **子进程规则 / 目标规则**：默认代理所有子进程（需启用“代理子进程”）和网络地址。需要限定范围时，可按界面示例填写匹配规则。
 - **禁止 UDP / 阻止 IPv6**：按需限制相应流量。“禁止 UDP”优先于 UDP 代理或接管选项。
@@ -111,9 +111,9 @@ HTTPS 解密不限于 443 端口；QUIC 支持 v1，可查看 HTTP/3，以及其
 
 ## gonc TLS-PSK 加密传输
 
-在 SOCKS5、HTTP10 或 HTTP11 配置的 **加密模式** 中选择 `gonc TLS-PSK`，填写远端 gonc 服务的地址、端口及相同的 PSK，无需在本机另开 gonc 客户端。
+在 SOCKS5 或 HTTP 配置的 **加密模式** 中选择 `gonc TLS-PSK`，填写远端 gonc 服务的地址、端口及相同的 PSK，无需在本机另开 gonc 客户端。
 
-SOCKS5 支持加密 TCP 和 UDP，HTTP10/HTTP11 仅支持 TCP。若远端同一端口需要同时接受 SOCKS5 和 HTTP，可启用 `-http`，例如：
+SOCKS5 支持加密 TCP 和 UDP，HTTP 仅支持 TCP。若远端同一端口需要同时接受 SOCKS5 和 HTTP，可启用 `-http`，例如：
 
 ```bat
 gonc -e ":s5s -u -http" -l -k -psk YOUR_PSK -tls 1083

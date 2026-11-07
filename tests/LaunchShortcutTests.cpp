@@ -41,13 +41,35 @@ static void TestArguments()
     const LPCWSTR values[] = { L"", L"--help", L"/?", L"--profile", L"中文 空格", L"backslash\\", L"space end\\", L"a\\\"b", L"\"" };
     for (size_t i = 0; i < _countof(values); ++i) original.targetArguments.push_back(values[i]);
     CString error; AutomationOptions parsed;
-    Check(ParseAutomationOptions(L"ProxyLane.exe " + BuildAutomationCommandLine(original, L"Local\\test"), parsed, error), "parse exported options");
-    Equal(original, parsed); Check(parsed.shortcut && !parsed.showHelp && parsed.bootstrapEventName == L"Local\\test", "bootstrap and help boundary");
+    AutomationOptions combined = original;
+    for (size_t i = 0; i < combined.targetArguments.size(); ++i)
+        combined.initialArguments += L" " + QuoteCommandLineArgument(combined.targetArguments[i]);
+    combined.targetArguments.clear();
+    const CString exported = BuildAutomationCommandLine(original, L"Local\\test");
+    Check(exported.Find(L" --arguments ") < 0 && exported.Find(L" -- ") >= 0, "export uses raw -- tail");
+    Check(ParseAutomationOptions(L"ProxyLane.exe " + exported, parsed, error), "parse exported options");
+    Equal(combined, parsed); Check(parsed.shortcut && !parsed.showHelp && parsed.bootstrapEventName == L"Local\\test", "bootstrap and help boundary");
     original.packaged = TRUE; original.targetPath = L"Test.Package!App";
-    Check(ParseAutomationOptions(L"ProxyLane.exe " + BuildAutomationCommandLine(original, NULL), parsed, error), "parse packaged target"); Equal(original, parsed);
+    combined.packaged = TRUE; combined.targetPath = original.targetPath;
+    Check(ParseAutomationOptions(L"ProxyLane.exe " + BuildAutomationCommandLine(original, NULL), parsed, error), "parse packaged target"); Equal(combined, parsed);
     Check(!ParseAutomationOptions(L"ProxyLane.exe --auto --profile A --run app.exe --elevated --elevated", parsed, error), "reject duplicate flags");
     Check(!ParseAutomationOptions(L"ProxyLane.exe --auto --profile A --run app.exe --working-directory", parsed, error), "reject missing directory");
     Check(ParseAutomationOptions(L"ProxyLane.exe --auto --profile A --run app.exe -- --help", parsed, error) && !parsed.showHelp, "application help is not ProxyLane help");
+    const CString raw = L"--user-data-dir=\"%APPDATA%\\browser-W\"  \"\"\t--help ";
+    for (size_t i = 0; i < _countof(values); ++i)
+    {
+        CString name(values[i]); if (name.IsEmpty()) name = L"--";
+        const CString prefix = L"\"C:\\Program Files\\ProxyLane.exe\" --auto --profile " + QuoteCommandLineArgument(name) +
+            L" --run app.exe --app-name " + QuoteCommandLineArgument(name);
+        Check(ParseAutomationOptions(prefix + L" -- " + raw, parsed, error) && parsed.initialArguments == raw &&
+            parsed.targetArguments.empty() && parsed.applicationName == name && !parsed.showHelp, "raw tail preserves quotes, whitespace and variables");
+    }
+    Check(ParseAutomationOptions(L"ProxyLane.exe --auto --profile A --run app.exe --arguments " +
+        QuoteCommandLineArgument(raw) + L" --shortcut", parsed, error) && parsed.initialArguments == raw && parsed.shortcut,
+        "old --arguments links remain supported");
+    Check(ParseAutomationOptions(L"ProxyLane.exe --auto --profile A --run app.exe --arguments old -- new \"two words\"", parsed, error) &&
+        parsed.initialArguments == L"old new \"two words\"", "legacy arguments plus raw tail append once");
+    Check(ParseAutomationOptions(L"ProxyLane.exe --auto --profile A --run app.exe --", parsed, error) && parsed.initialArguments.IsEmpty(), "empty tail");
 
     std::vector<BYTE> bytes;
     Check(SerializeCommand(original, bytes) && ParseCommand(bytes.data(), static_cast<DWORD>(bytes.size()), parsed), "v3 wire codec with notification metadata"); Equal(original, parsed);
@@ -63,16 +85,68 @@ static void TestArguments()
     std::cout << "CLI quoting, launch metadata, notification metadata and released-protocol compatibility: PASS\n";
 }
 
+static void TestRawTailBoundary()
+{
+    const LPCWSTR profiles[] = { L"Test -- A", L"--", L"PL_RAW_TAIL_MARKER",
+        L"Test -- PL_RAW_TAIL_MARKER A", L"a\\\"b", L"中文 路径\\", L"\"\"", L"a\tb" };
+    const LPCWSTR separators[] = { L"--", L"\"--\"", L"-\"-\"", L"--\"\"" };
+    const LPCWSTR tails[] = { L"-val  v=\"a\"", L"\"\"\t\"tail\\\\\" ",
+        L"PL_RAW_TAIL_MARKER --profile ignored", L"\"unclosed application quote",
+        L"--help --arguments \"%APPDATA%\\browser-W\"", L"" };
+    CString error; AutomationOptions parsed;
+    for (size_t p = 0; p < _countof(profiles); ++p)
+    {
+        const CString prefix = L"\"C:\\Program Files\\ProxyLane.exe\" --auto --profile " +
+            QuoteCommandLineArgument(profiles[p]) + L" --run app.exe --app-name PL_RAW_TAIL_MARKER ";
+        for (size_t s = 0; s < _countof(separators); ++s)
+        {
+            for (size_t t = 0; t < _countof(tails); ++t)
+            {
+                Check(ParseAutomationOptions(prefix + separators[s] + L" \t " + tails[t], parsed, error) &&
+                    parsed.initialArguments == tails[t] && parsed.profileName == profiles[p] &&
+                    parsed.applicationName == L"PL_RAW_TAIL_MARKER" && !parsed.showHelp && parsed.targetArguments.empty(),
+                    "system-validated boundary preserves raw tail despite marker/delimiter collisions");
+            }
+        }
+    }
+    Check(ParseAutomationOptions(L"ProxyLane.exe --auto --profile A --run app.exe --arguments "
+        L"\"-- PL_RAW_TAIL_MARKER\" -- -val  v=\"a\"", parsed, error) &&
+        parsed.initialArguments == L"-- PL_RAW_TAIL_MARKER -val  v=\"a\"", "legacy value is not a delimiter");
+    Check(ParseAutomationOptions(L"ProxyLane.exe --auto --profile A --run app.exe \"--\"", parsed, error) &&
+        parsed.initialArguments.IsEmpty(), "end of command is a candidate boundary");
+    Check(!ParseAutomationOptions(L"ProxyLane.exe --auto --profile A --run app.exe \"--", parsed, error) &&
+        !error.IsEmpty(), "unverifiable boundary fails instead of silently dropping arguments");
+    std::cout << "System-validated raw boundary, marker collisions and failure handling: PASS\n";
+}
+
+static void TestEnvironment()
+{
+    const LPCWSTR variable = L"PROXYLANE_TEST_SHORTCUT_ENV_7B6A";
+    WCHAR previous[32768] = {}; DWORD count = GetEnvironmentVariableW(variable, previous, _countof(previous));
+    Check(SetEnvironmentVariableW(variable, L"C:\\Users\\Test 中文\\Application Data") != FALSE, "set test environment");
+    CString expanded;
+    const BOOL ok = ExpandLaunchEnvironment(L"--user-data-dir=\"%PROXYLANE_TEST_SHORTCUT_ENV_7B6A%\\browser-W\"", expanded);
+    SetEnvironmentVariableW(variable, count ? previous : NULL);
+    Check(ok && expanded == L"--user-data-dir=\"C:\\Users\\Test 中文\\Application Data\\browser-W\"", "expand quoted Unicode and space paths");
+    Check(ExpandLaunchEnvironment(L"%PROXYLANE_TEST_UNDEFINED_7B6A% 100% \"\"", expanded) &&
+        expanded == L"%PROXYLANE_TEST_UNDEFINED_7B6A% 100% \"\"", "preserve undefined variables and literal percent");
+    Check(ExpandLaunchEnvironment(CString(), expanded) && expanded.IsEmpty(), "empty arguments");
+    Check(!ExpandLaunchEnvironment(CString(L'x', 32767), expanded), "reject expanded command exceeding Windows limit");
+    std::cout << "Launch-time environment expansion: PASS\n";
+}
+
 static void TestLinks(const CString& directory, CString& cachedIcon)
 {
     WCHAR system[MAX_PATH]; GetSystemDirectory(system, _countof(system));
     const CString appPath = CString(system) + L"\\notepad.exe", iconPath = CString(system) + L"\\shell32.dll";
     const CString source = directory + L"\\source.lnk", exported = directory + L"\\launch.lnk";
-    const CString raw = L"--help \"路径 with spaces\\\"quote\" \"tail\\\\\"";
+    const CString raw = L"--help \"路径 with spaces\\\"quote\" \"tail\\\\\" --user-data-dir=\"%APPDATA%\\browser-W\"";
     WriteLink(source, appPath, raw, directory, iconPath, 17);
     RecentApplications::Entry entry; entry.app.name = L"Example 中文"; entry.shortcut = source; entry.elevated = TRUE;
     Check(SUCCEEDED(LaunchShortcut::Create(exported, L"Profile 中文", entry)), "export real shortcut");
     CComPtr<IShellLinkW> link = ReadLink(exported); WCHAR value[32768] = {}; int index = 0;
+    Check(SUCCEEDED(link->GetArguments(value, _countof(value))) && CString(value).Find(L" --arguments ") < 0 &&
+        CString(value).Find(L" -- " + raw) >= 0, "export keeps environment variables in raw -- tail");
     Check(SUCCEEDED(link->GetIconLocation(value, _countof(value), &index)) && iconPath == value && index == 17, "preserve custom icon and resource index");
     InstalledApplications::Application input, target; input.path = exported; AutomationOptions options;
     Check(LaunchShortcut::Decode(input, target, options) == LaunchShortcut::Decoded, "decode exported shortcut");
@@ -120,7 +194,7 @@ int wmain()
     const CString flag = ConfigStorage::Directory(LaunchShortcut::ExecutablePath()) + L"\\portable.flag";
     HANDLE marker = CreateFile(flag, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     const bool createdMarker = marker != INVALID_HANDLE_VALUE; if (createdMarker) CloseHandle(marker);
-    try { TestArguments(); TestLinks(directory, icon); }
+    try { TestArguments(); TestRawTailBoundary(); TestEnvironment(); TestLinks(directory, icon); }
     catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << " error=" << GetLastError() << "\n"; result = 1; }
     DeleteFile(directory + L"\\source.lnk"); SetFileAttributes(directory + L"\\launch.lnk", FILE_ATTRIBUTE_NORMAL);
     DeleteFile(directory + L"\\launch.lnk"); RemoveDirectory(directory);

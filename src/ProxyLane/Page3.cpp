@@ -3677,6 +3677,11 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 			return APP_LAUNCH_INVALID_TARGET;
 		}
 		launchArguments = shortcut.arguments;
+		if (!initialArguments.IsEmpty())
+		{
+			if (!launchArguments.IsEmpty()) launchArguments += L" ";
+			launchArguments += initialArguments;
+		}
 		if (shortcut.IsPackaged())
 		{
 			for (size_t i = 0; i < extraArguments.size(); ++i)
@@ -3736,17 +3741,19 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 	if (!szBaseDir[0])
 		GetAppFolderPath(szTargetPath, szBaseDir);
 
-	CString commandLine = QuoteCommandLineArgument(szTargetPath);
-	if (!launchArguments.IsEmpty())
-	{
-		commandLine += _T(" ");
-		commandLine += launchArguments;
-	}
 	for (size_t i = 0; i < extraArguments.size(); ++i)
 	{
-		commandLine += _T(" ");
-		commandLine += QuoteCommandLineArgument(extraArguments[i]);
+		if (!launchArguments.IsEmpty()) launchArguments += L" ";
+		launchArguments += QuoteCommandLineArgument(extraArguments[i]);
 	}
+	CString expandedArguments;
+	if (!ExpandLaunchEnvironment(launchArguments, expandedArguments))
+	{
+		myWow64RevertWow64FsRedirection(WowRedirOldValue);
+		return APP_LAUNCH_CREATE_PROCESS_FAILED;
+	}
+	CString commandLine = QuoteCommandLineArgument(szTargetPath);
+	if (!expandedArguments.IsEmpty()) commandLine += L" " + expandedArguments;
 
 	const BrowserLaunchWatch::Observation browserObservation = CaptureBrowserCandidates(szTargetPath);
 	if (elevationMode == APP_LAUNCH_ELEVATION_FORCE_ADMIN)
@@ -3899,6 +3906,12 @@ AppLaunchResult CPage3::LaunchPackagedAppById(LPCTSTR aumid, const CString& argu
 {
 	if (outcome) { ZeroMemory(outcome,sizeof(*outcome)); outcome->error=ERROR_GEN_FAILURE; }
 	if (!aumid || !aumid[0]) return APP_LAUNCH_INVALID_TARGET;
+	CString expandedArguments;
+	if (!ExpandLaunchEnvironment(arguments, expandedArguments))
+	{
+		if (outcome) outcome->error = GetLastError();
+		return APP_LAUNCH_CREATE_PROCESS_FAILED;
+	}
 	TCHAR szModulePath[MAX_PATH] = { 0 };
 	if (GetModuleFileName(NULL, szModulePath, _countof(szModulePath)))
 	{
@@ -3932,7 +3945,7 @@ AppLaunchResult CPage3::LaunchPackagedAppById(LPCTSTR aumid, const CString& argu
 	DWORD processId = 0;
 	HRESULT hr = PackagedAppSupport::ActivatePackagedApp(
 		aumid,
-		arguments.IsEmpty() ? NULL : static_cast<LPCTSTR>(arguments),
+		expandedArguments.IsEmpty() ? NULL : static_cast<LPCTSTR>(expandedArguments),
 		&processId);
 
 	if (FAILED(hr) || processId == 0)

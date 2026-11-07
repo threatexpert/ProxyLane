@@ -63,7 +63,11 @@ dnsOpt=1
         working.mkdir()
         probe = root / "probe.py"
         probe.write_text(PROBE, encoding="utf-8")
-        expected = ["--help", "space argument", 'embedded"quote', "trailing space\\", "中文"]
+        plain_arguments = ["--help", "space argument", 'embedded"quote', "trailing space\\", "中文", ""]
+        os.environ["PROXYLANE_TEST_SHORTCUT_ENV_7B6A"] = str(working)
+        expected = plain_arguments + ["--user-data-dir=" + os.environ["APPDATA"] + "\\browser-W",
+                                      "--test-dir=" + str(working) + "\\browser-W",
+                                      "%PROXYLANE_TEST_UNDEFINED_7B6A%"]
         owners = []
 
         def main_window(pid):
@@ -97,15 +101,22 @@ dnsOpt=1
             assert store.GetValue(pscon.PKEY_AppUserModel_RelaunchCommand).GetValue() == '"' + str(executable) + '"'
             assert store.GetValue(pscon.PKEY_AppUserModel_RelaunchDisplayNameResource).GetValue() == "ProxyLane"
 
-        def command(exe, output):
-            return [str(exe), "--auto", "--profile", "ShortcutTest", "--run", sys.executable,
-                    "--shortcut", "--app-name", "Shortcut test application 中文",
-                    "--working-directory", str(working), "--arguments",
-                    subprocess.list2cmdline([str(probe), str(output)] + expected)]
+        def application_arguments(output):
+            return (subprocess.list2cmdline([str(probe), str(output)] + plain_arguments) +
+                    ' --user-data-dir="%APPDATA%\\browser-W"' +
+                    ' --test-dir="%PROXYLANE_TEST_SHORTCUT_ENV_7B6A%\\browser-W"' +
+                    ' %PROXYLANE_TEST_UNDEFINED_7B6A%')
 
-        def verify(output):
+        def command(exe, output, legacy=False):
+            prefix = subprocess.list2cmdline([str(exe), "--auto", "--profile", "ShortcutTest", "--run", sys.executable,
+                                             "--shortcut", "--app-name", "Shortcut test application 中文",
+                                             "--working-directory", str(working)])
+            raw = application_arguments(output)
+            return prefix + (" --arguments " + subprocess.list2cmdline([raw]) if legacy else " -- " + raw)
+
+        def verify(output, extra=()):
             result = wait_result(output)
-            assert result["args"] == expected, result
+            assert result["args"] == expected + list(extra), result
             assert os.path.normcase(result["cwd"]) == os.path.normcase(str(working)), result
             assert result["hooked"], result
 
@@ -146,12 +157,42 @@ dnsOpt=1
                 print(f"PASS: {name} retains launch information through the active instance", flush=True)
             print("PASS: startup stays in tray; forwarded shortcuts preserve both visible and hidden window states", flush=True)
 
+            for exe in (executable, entry32):
+                output = root / (exe.stem + "-legacy.json")
+                result = subprocess.run(command(exe, output, legacy=True), cwd=root, timeout=30)
+                assert result.returncode == 0, result.returncode
+                verify(output)
+            print("PASS: legacy --arguments expands variables and forwards correctly on both architectures", flush=True)
+
+            shell = win32com.client.Dispatch("WScript.Shell")
+            ordinary_path = root / "Original application.lnk"
+            ordinary = shell.CreateShortcut(str(ordinary_path))
+            ordinary.TargetPath = sys.executable
+            ordinary.WorkingDirectory = str(working)
+            ordinary_output = root / "ordinary.json"
+            ordinary.Arguments = application_arguments(ordinary_output)
+            ordinary.Save()
+            result = subprocess.run([str(executable), "--auto", "--profile", "ShortcutTest", "--run", str(ordinary_path)],
+                                    cwd=root, timeout=30)
+            assert result.returncode == 0, result.returncode
+            verify(ordinary_output)
+            print("PASS: an ordinary .lnk launched through PL expands environment variables", flush=True)
+            ordinary_output.unlink()
+            result = subprocess.run([str(executable), "--auto", "--profile", "ShortcutTest", "--run", str(ordinary_path),
+                                     "--", "appended argument"], cwd=root, timeout=30)
+            assert result.returncode == 0, result.returncode
+            verify(ordinary_output, ["appended argument"])
+            ordinary_output.unlink()
+            os.startfile(str(ordinary_path))
+            shell_result = wait_result(ordinary_output)
+            assert shell_result["args"] == expected, shell_result
+            print("PASS: PL matches Shell variable expansion; raw -- arguments also append to an ordinary .lnk", flush=True)
+
             # Shell invocation of the same format produced by the export code.
             output = root / "shell.json"
-            shell = win32com.client.Dispatch("WScript.Shell")
             shortcut = shell.CreateShortcut(str(root / "Example (ShortcutTest).lnk"))
             shortcut.TargetPath = str(executable)
-            shortcut.Arguments = subprocess.list2cmdline(command(executable, output)[1:])
+            shortcut.Arguments = command(executable, output)[len(subprocess.list2cmdline([str(executable)])) + 1:]
             shortcut.IconLocation = sys.executable + ",0"
             shortcut.Save()
             os.startfile(str(root / "Example (ShortcutTest).lnk"))
