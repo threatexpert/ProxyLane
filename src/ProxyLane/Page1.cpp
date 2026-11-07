@@ -414,21 +414,26 @@ void CPage1::LayoutSettingsPage()
 				row += hintHeight + S(12);
 			}
 		}
-		const int typeW = S(100), portW = S(72);
-		const int advancedW = max(S(180), textWidth(0x2402) + S(16));
-		const bool inlineAdvanced = innerW >= typeW + S(144) + portW + advancedW + gapX * 3;
-		const int hostW = inlineAdvanced ? innerW - typeW - portW - advancedW - gapX * 3 : innerW - typeW - gapX;
+		const int typeW = S(92), portW = S(64), endpointGap = S(8);
+		const int advancedW = textWidth(0x2402) + S(16);
+		const int minHostW = max(S(112), textWidth(IDC_STATIC_HOST_LABEL) + S(8));
+		const bool inlineAdvanced = innerW >= typeW + minHostW + portW + advancedW + endpointGap * 3;
+		// Reserve room for the optional toggle before growing the address field.
+		// Cap its width in both layouts so wrapping never creates an oversized edit.
+		const int hostW = min(S(220), inlineAdvanced
+			? innerW - typeW - portW - advancedW - endpointGap * 3
+			: innerW - typeW - endpointGap);
 		place(IDC_STATIC_TYPE_LABEL, innerX, row, typeW, labelH);
 		place(IDC_CB_PROXYTYPE, innerX, row + labelH + S(2), typeW, S(260));
-		place(IDC_STATIC_HOST_LABEL, innerX + typeW + gapX, row, hostW, labelH);
-		place(IDC_EDIT_ADDR, innerX + typeW + gapX, row + labelH + S(2), hostW, fieldH);
+		place(IDC_STATIC_HOST_LABEL, innerX + typeW + endpointGap, row, hostW, labelH);
+		place(IDC_EDIT_ADDR, innerX + typeW + endpointGap, row + labelH + S(2), hostW, fieldH);
 		// Keep the optional-section toggle beside the port, including at narrow
 		// widths where the pair moves together to the next row.
 		if (!inlineAdvanced) row += rowStep;
-		const int portX = inlineAdvanced ? innerX + typeW + hostW + gapX * 2 : innerX;
+		const int portX = inlineAdvanced ? innerX + typeW + hostW + endpointGap * 2 : innerX;
 		place(IDC_STATIC_PORT_LABEL, portX, row, portW, labelH);
 		place(IDC_EDIT_PORT, portX, row + labelH + S(2), portW, fieldH);
-		place(0x2402, portX + portW + gapX, row + labelH + S(2), advancedW, fieldH);
+		place(0x2402, portX + portW + endpointGap, row + labelH + S(2), advancedW, fieldH);
 
 		// Combined optional section follows lijing6006/ProxyLane PR #3.
 		row += rowStep;
