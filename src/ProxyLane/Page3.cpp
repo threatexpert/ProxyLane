@@ -3884,6 +3884,49 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 	return APP_LAUNCH_SUCCESS;
 }
 
+BOOL CPage3::StartUpdateHelper(const CString& arguments, HANDLE& process, BOOL* proxied)
+{
+	process = NULL;
+	const BOOL inject = g_MainTab && g_MainTab->IsProxyRunning();
+	if (proxied) *proxied = inject;
+	WCHAR executable[MAX_PATH] = {};
+	const DWORD length = GetModuleFileName(NULL, executable, _countof(executable));
+	if (!length || length >= _countof(executable)) return FALSE;
+	CString commandLine = QuoteCommandLineArgument(executable) + L" " + arguments;
+	if (inject) commandLine += L" --direct";
+	STARTUPINFO si = { sizeof(si) };
+	PROCESS_INFORMATION pi = {};
+	LPTSTR mutableCommandLine = commandLine.GetBuffer();
+	const BOOL created = CreateProcess(executable, mutableCommandLine, NULL, NULL, FALSE,
+		CREATE_SUSPENDED | CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+	commandLine.ReleaseBuffer();
+	if (!created) return FALSE;
+	if (inject)
+	{
+		// Never fall back to a direct download: the user chose to go through the proxy.
+		char pipeName[MAX_PATH] = "\0";
+		IProxyReceptionCentre* prc = g_GlobalProxy ? g_GlobalProxy->GetPRCInstance() : NULL;
+		if (!prc || !prc->GetPRCPipeName(pipeName, MAX_PATH) ||
+			InjectDll(pi.hProcess, pi.dwProcessId, pi.dwThreadId, pipeName) <= 0)
+		{
+			TerminateProcess(pi.hProcess, AUTOMATION_EXIT_INJECTION_FAILED);
+			CloseHandle(pi.hThread);
+			CloseHandle(pi.hProcess);
+			return FALSE;
+		}
+	}
+	if (ResumeThread(pi.hThread) == (DWORD)-1)
+	{
+		TerminateProcess(pi.hProcess, AUTOMATION_EXIT_CREATE_PROCESS_FAILED);
+		CloseHandle(pi.hThread);
+		CloseHandle(pi.hProcess);
+		return FALSE;
+	}
+	CloseHandle(pi.hThread);
+	process = pi.hProcess;
+	return TRUE;
+}
+
 AppLaunchResult CPage3::LaunchPackagedAppAndProxy(
 	LPCTSTR fileName,
 	const CString& manifestDir,

@@ -25,7 +25,7 @@ It also helps inspect application traffic: view HTTP/1.1, HTTP/2 and HTTP/3 requ
 
 ## Quick Start
 
-1. Extract the entire release package, keeping the executables and DLLs together. On 64-bit Windows, use `ProxyLane64.exe`.
+1. Run `ProxyLane-version-Setup.exe` (administrator rights, Windows 7 SP1 or later), or extract the entire zip package, keeping the executables and DLLs together. On 64-bit Windows, use `ProxyLane64.exe`.
 2. Under **Proxy Settings**, select or create a profile and enter the proxy type, server address, port and credentials.
 3. Enable TCP proxying, UDP proxying and **Proxy child processes** as needed. Click **Test Current** to check the connection, then **Start Proxy**.
 4. Under **Apps and Processes**, choose an app to launch, or drop an executable or shortcut into ProxyLane. To attach to a running app, select its process and click **Proxy Selected Processes**.
@@ -176,6 +176,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 
 The script checks that the application and Hook DLL versions match, creates `dist/ProxyLane-version-Windows.zip`, and reports its SHA-256. Use `-OutputDirectory D:\releases` to choose another output directory.
 
+Add `-Installer` to also build `dist/ProxyLane-version-Setup.exe` with Inno Setup 6. The installer behavior and the download-service fields required for in-app updates are described in [docs/installer-and-updates.md](docs/installer-and-updates.md).
+
 The package includes both application architectures and Hook DLLs, the 64-bit secure-transport and MITM DLLs, both README files, and a `LICENSE` containing third-party notices. No active INI is shipped. Test and Direct defaults are created on first launch, so extracting an upgrade does not overwrite user settings. Test executables and command-line helpers are excluded.
 
 ## Project Structure
@@ -197,4 +199,4 @@ Use **New profile** in the profile menu to create a separate draft. **Authentica
 
 Configuration location depends only on the `portable.flag` file beside the EXE; an empty file is sufficient. With the flag, settings use the adjacent `ProxyLane.ini`; without it, they use `%LOCALAPPDATA%\ProxyLane\ProxyLane.ini`. No registry preference is read or written. An adjacent INI alone does not enable portable mode; users upgrading from older versions must create `portable.flag` to keep using it. **Settings & About** shows the active path and offers “Switch to app-folder settings” or “Switch to user-folder settings”, plus import and export. Switching only creates or removes the marker and restarts the app; it does not copy, move or overwrite existing INI files. First-run defaults are created if the selected location has no INI. Import other settings yourself if needed. Use a separate directory with `portable.flag` for isolated test builds.
 
-Routine automatic backups and the separate restore UI are not provided. Full configuration import retains its original protection: a timestamped backup beside the current INI before replacement, and recovery if importing or restarting fails. Configuration saves validate a temporary file before replacement; failed writes keep the original configuration and unsaved edits. Exports contain passwords and PSKs, but not referenced external files. Manual update checks query https://10000.download/api/tools/proxylane/release in the background (the download service caches releases for ten minutes). New releases open the download site for the user to choose a package; nothing is installed automatically and the client does not need direct access to GitHub. Settings & About also links to the download site.
+Routine automatic backups and the separate restore UI are not provided. Full configuration import retains its original protection: a timestamped backup beside the current INI before replacement, and recovery if importing or restarting fails. Configuration saves validate a temporary file before replacement; failed writes keep the original configuration and unsaved edits. Exports contain passwords and PSKs, but not referenced external files. Manual update checks query https://10000.download/api/tools/proxylane/release in the background (the download service caches releases for ten minutes). For a zip copy, a new release opens the download site for the user to choose a package. An installed copy downloads the setup after confirmation, verifies its SHA-256, then exits and upgrades silently. While a proxy is running, both the check and the download go through the current proxy profile. The client does not need direct access to GitHub; see [docs/installer-and-updates.md](docs/installer-and-updates.md) (Chinese). Settings & About also links to the download site.

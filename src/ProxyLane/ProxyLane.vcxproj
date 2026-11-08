@@ -252,6 +252,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     <ClCompile Include="..\ProxyLaneHook\token.cpp" />
     <ClCompile Include="AppVersion.cpp" />
     <ClCompile Include="LaunchShortcut.cpp" />
+    <ClCompile Include="UpdateHelper.cpp" />
     <ClCompile Include="AutomationOptions.cpp" />
     <ClCompile Include="Base64.cpp" />
     <ClCompile Include="IniFile.cpp" />
@@ -327,6 +328,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     <ClInclude Include="LaunchPanelPaging.h" />
     <ClInclude Include="Page5.h" />
     <ClInclude Include="UpdateRelease.h" />
+    <ClInclude Include="UpdateHelper.h" />
 	<ClInclude Include="ProfileCommandBroker.h" />
 	<ClInclude Include="ExitProcessesDialog.h" />
 	<ClInclude Include="ExitProcessCleanup.h" />

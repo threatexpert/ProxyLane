@@ -2,6 +2,16 @@
 
 #include "ModernUI.h"
 #include "AsyncSnapshot.h"
+#include <string>
+
+// Result of one update-helper run (metadata check or installer download).
+struct UpdateOutcome
+{
+	CString version;
+	std::string assetPath, sha256;
+	unsigned long long size = 0;
+	CString file;
+};
 
 class CPage5 : public CModernDialog
 {
@@ -25,7 +35,12 @@ protected:
  CStatic m_storageMode, m_storagePath, m_transferTitle, m_transferInfo;
  CStatic m_downloadLabel;
  CLinkCtrl m_downloadLink, m_updateInfo;
- AsyncSnapshot<CString> m_updateQuery;
+ AsyncSnapshot<UpdateOutcome> m_updateQuery;
+ enum UpdateStage { UPDATE_IDLE, UPDATE_CHECKING, UPDATE_FOUND_SITE, UPDATE_FOUND_INSTALLER, UPDATE_DOWNLOADING, UPDATE_READY };
+ UpdateStage m_updateStage = UPDATE_IDLE;
+ UpdateOutcome m_release;      // latest version and its installer asset, if any
+ CString m_installerFile;      // verified download, UPDATE_READY only
+ bool m_updateViaProxy = false;
  bool m_updateFound = false, m_updateFailed = false, m_layout = false;
  int m_scroll = 0;
  afx_msg void OnSettingsAction(UINT id);
@@ -34,6 +49,12 @@ protected:
  afx_msg BOOL OnMouseWheel(UINT flags, short delta, CPoint point);
  void ReportStorageError(DWORD error, const CString& path = CString());
  void SwitchStorage();
+ void StartUpdateCheck();
+ void FinishUpdateCheck(std::unique_ptr<AsyncSnapshot<UpdateOutcome>::Result> result);
+ void StartInstallerDownload();
+ void FinishInstallerDownload(std::unique_ptr<AsyncSnapshot<UpdateOutcome>::Result> result);
+ void OfferInstall();
+ CString UpdateRouteText() const;
  void SetUpdateStatus(const CString& text, bool found = false, bool failed = false);
  afx_msg HBRUSH OnCtlColor(CDC* dc, CWnd* wnd, UINT ctlColor);
  afx_msg void OnUpdateLink(NMHDR* notifyHeader, LRESULT* result);

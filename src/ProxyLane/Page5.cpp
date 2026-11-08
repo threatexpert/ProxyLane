@@ -8,8 +8,9 @@
 #include "MainTab.h"
 #include "Page1.h"
 #include "UpdateRelease.h"
-#include <wininet.h>
-#pragma comment(lib, "wininet.lib")
+#include "UpdateHelper.h"
+#include "Page3.h"
+#include "ProxyLaneDlg.h"
 
 IMPLEMENT_DYNAMIC(CPage5, CModernDialog)
 
@@ -76,6 +77,8 @@ BOOL CPage5::OnInitDialog()
   m_settingsButtons[i].Create(Localization::Get(keys[i]), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, CRect(), this, 0x2500 + i);
   m_settingsButtons[i].SetFont(&m_uiFont);
  }
+ // An installed copy lives in Program Files, where portable.flag cannot be written.
+ if (!portable && UpdateHelper::IsInstalledCopy()) m_settingsButtons[1].EnableWindow(FALSE);
  // Row-based cards follow lijing6006/ProxyLane PR #3.
  const DWORD child = WS_CHILD | WS_VISIBLE;
  m_configCard.Create(Localization::Get(L"settings.config_title"), child | BS_GROUPBOX, CRect(), this, 0x2530);
@@ -170,9 +173,13 @@ void CPage5::OnDownloadLink(NMHDR*, LRESULT* result)
 
 void CPage5::OnUpdateLink(NMHDR*, LRESULT* result)
 {
- if (m_updateFound)
-  ShellExecute(m_hWnd, L"open", UpdateRelease::DownloadUrl, NULL, NULL, SW_SHOWNORMAL);
  if (result) *result = 0;
+ switch (m_updateStage) {
+ case UPDATE_FOUND_SITE: ShellExecute(m_hWnd, L"open", UpdateRelease::DownloadUrl, NULL, NULL, SW_SHOWNORMAL); break;
+ case UPDATE_FOUND_INSTALLER: StartInstallerDownload(); break;
+ case UPDATE_READY: OfferInstall(); break;
+ default: break;
+ }
 }
 
 HBRUSH CPage5::OnCtlColor(CDC* dc, CWnd* wnd, UINT ctlColor)
@@ -341,33 +348,163 @@ void CPage5::ReportStorageError(DWORD error, const CString& path)
 }
 namespace
 {
- struct InternetHandle {
-  HINTERNET h; explicit InternetHandle(HINTERNET value) : h(value) {}
-  ~InternetHandle() { if (h) InternetCloseHandle(h); }
- };
- bool FetchRelease(CString& tag)
+ const UINT_PTR kUpdateTimer = 0x2506;
+ const DWORD kCheckTimeout = 60 * 1000, kDownloadTimeout = 20 * 60 * 1000;
+ const wchar_t kSetupWaitingMutex[] = L"ProxyLaneSetupWaiting";
+ // Waits for a helper started by CPage3::StartUpdateHelper and owns its handle.
+ bool WaitHelper(HANDLE process, DWORD timeout)
  {
-  InternetHandle session(InternetOpen(L"ProxyLane update check", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0));
-  if (!session.h) return false;
-  DWORD timeout = 20000; // Allow the site's 15-second upstream lookup to complete.
-  InternetSetOption(session.h, INTERNET_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
-  InternetSetOption(session.h, INTERNET_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));
-  InternetSetOption(session.h, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
-  InternetHandle request(InternetOpenUrl(session.h, UpdateRelease::ApiUrl,
-   L"Accept: application/json\r\n", (DWORD)-1, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI |
-   INTERNET_FLAG_NO_AUTO_REDIRECT | INTERNET_FLAG_NO_COOKIES | INTERNET_FLAG_NO_AUTH, 0));
-  if (!request.h) return false;
-  DWORD status = 0, size = sizeof(status);
-  if (!HttpQueryInfo(request.h, HTTP_QUERY_STATUS_CODE | HTTP_QUERY_FLAG_NUMBER, &status, &size, NULL) || status != 200) return false;
-  std::string body; char buffer[4096]; DWORD count = 0;
-  do {
-   if (!InternetReadFile(request.h, buffer, sizeof(buffer), &count)) return false;
-   body.append(buffer, count); if (body.size() > UpdateRelease::MaxResponseBytes) return false;
-  } while (count);
-  std::string text;
-  if (!UpdateRelease::Parse(body, text)) return false;
-  tag = CString(text.c_str()); return true;
+  DWORD code = UpdateHelper::EXIT_NETWORK;
+  if (WaitForSingleObject(process, timeout) != WAIT_OBJECT_0) TerminateProcess(process, UpdateHelper::EXIT_NETWORK);
+  else if (!GetExitCodeProcess(process, &code)) code = UpdateHelper::EXIT_NETWORK;
+  CloseHandle(process);
+  return code == UpdateHelper::EXIT_OK;
  }
+ bool MatchesRelease(const CString& file, const UpdateOutcome& release)
+ {
+  std::string digest; unsigned long long size = 0;
+  return UpdateHelper::Sha256File(file, digest, size) && size == release.size && digest == release.sha256;
+ }
+}
+CString CPage5::UpdateRouteText() const
+{
+ return m_updateViaProxy && g_MainTab ? Localization::Format(L"update.route_proxy", (LPCWSTR)g_MainTab->GetRunningProfileName())
+  : Localization::Get(L"update.route_direct");
+}
+void CPage5::StartUpdateCheck()
+{
+ CPage3* page3 = g_MainTab ? g_MainTab->GetPage3() : NULL;
+ // Setup programs from earlier updates are no longer in use by now.
+ UpdateHelper::CleanWorkDirectory(m_installerFile);
+ const CString directory = UpdateHelper::WorkDirectory();
+ CString output; output.Format(L"%s\\release-%lu-%lu.json", (LPCWSTR)directory, GetCurrentProcessId(), GetTickCount());
+ HANDLE process = NULL; BOOL proxied = FALSE;
+ if (!page3 || directory.IsEmpty() ||
+  !page3->StartUpdateHelper(UpdateHelper::BuildArguments(UpdateHelper::RELEASE_METADATA, CString(), output), process, &proxied)) {
+  SetUpdateStatus(Localization::Get(proxied ? L"update.proxy_start_failed" : L"settings.update_failed"), false, true);
+  return;
+ }
+ m_updateViaProxy = proxied != FALSE;
+ const bool requested = m_updateQuery.Request([process, output](UpdateOutcome& outcome) {
+  const bool finished = WaitHelper(process, kCheckTimeout);
+  std::string body, tag; UpdateRelease::Installer installer;
+  const bool ok = finished && UpdateHelper::ReadSmallFile(output, body, UpdateRelease::MaxResponseBytes) &&
+   UpdateRelease::Parse(body, tag, &installer);
+  DeleteFile(output);
+  if (!ok) return false;
+  outcome.version = CString(tag.c_str());
+  outcome.assetPath = installer.path; outcome.sha256 = installer.sha256; outcome.size = installer.size;
+  return true;
+ });
+ if (!requested) { WaitHelper(process, 0); SetUpdateStatus(Localization::Get(L"settings.update_failed"), false, true); return; }
+ m_updateStage = UPDATE_CHECKING;
+ m_settingsButtons[4].EnableWindow(FALSE);
+ SetUpdateStatus(Localization::Get(L"settings.checking"));
+ SetTimer(kUpdateTimer, 100, NULL);
+}
+void CPage5::FinishUpdateCheck(std::unique_ptr<AsyncSnapshot<UpdateOutcome>::Result> result)
+{
+ m_updateStage = UPDATE_IDLE;
+ UpdateRelease::VersionParts latest, current;
+ if (!result || !result->succeeded || !UpdateRelease::Version((LPCSTR)CStringA(result->value.version), latest) || !UpdateRelease::Version((LPCSTR)CStringA(AppVersion::DisplayVersion()), current)) {
+  SetUpdateStatus(Localization::Get(m_updateViaProxy ? L"update.check_failed_proxy" : L"settings.update_failed"), false, true); return;
+ }
+ if (!(latest > current)) { SetUpdateStatus(Localization::Get(L"settings.up_to_date")); return; }
+ m_release = result->value;
+ // Only an installed copy updates in place; a zip copy keeps its own folder.
+ const bool install = !m_release.assetPath.empty() && UpdateHelper::IsInstalledCopy();
+ m_updateStage = install ? UPDATE_FOUND_INSTALLER : UPDATE_FOUND_SITE;
+ SetUpdateStatus(Localization::Format(install ? L"update.found_install" : L"settings.update_found", (LPCWSTR)m_release.version), true);
+}
+void CPage5::StartInstallerDownload()
+{
+ if (m_updateQuery.Busy()) return;
+ CPage3* page3 = g_MainTab ? g_MainTab->GetPage3() : NULL;
+ m_updateViaProxy = g_MainTab && g_MainTab->IsProxyRunning();
+ CString megabytes; megabytes.Format(L"%.1f", m_release.size / (1024.0 * 1024.0));
+ if (MessageBox(Localization::Format(L"update.download_confirm", (LPCWSTR)m_release.version, (LPCWSTR)megabytes, (LPCWSTR)UpdateRouteText()),
+  Localization::Get(L"update.title"), MB_OKCANCEL | MB_ICONQUESTION) != IDOK) return;
+ const CString directory = UpdateHelper::WorkDirectory();
+ const CString output = directory + L"\\" + CString(UpdateRelease::InstallerName((LPCSTR)CStringA(m_release.version)).c_str());
+ HANDLE process = NULL; BOOL proxied = FALSE;
+ if (!page3 || directory.IsEmpty() || !page3->StartUpdateHelper(
+  UpdateHelper::BuildArguments(UpdateHelper::INSTALLER, CString(m_release.assetPath.c_str()), output), process, &proxied)) {
+  SetUpdateStatus(Localization::Get(proxied ? L"update.proxy_start_failed" : L"update.download_failed"), false, true);
+  return;
+ }
+ m_updateViaProxy = proxied != FALSE;
+ const UpdateOutcome expected = m_release;
+ const bool requested = m_updateQuery.Request([process, output, expected](UpdateOutcome& outcome) {
+  const bool ok = WaitHelper(process, kDownloadTimeout) && MatchesRelease(output, expected);
+  if (!ok) { DeleteFile(output); return false; }
+  outcome = expected; outcome.file = output;
+  return true;
+ });
+ if (!requested) { WaitHelper(process, 0); SetUpdateStatus(Localization::Get(L"update.download_failed"), false, true); return; }
+ m_updateStage = UPDATE_DOWNLOADING;
+ m_settingsButtons[4].EnableWindow(FALSE);
+ SetUpdateStatus(Localization::Format(L"update.downloading", (LPCWSTR)m_release.version, (LPCWSTR)megabytes, (LPCWSTR)UpdateRouteText()));
+ SetTimer(kUpdateTimer, 200, NULL);
+}
+void CPage5::FinishInstallerDownload(std::unique_ptr<AsyncSnapshot<UpdateOutcome>::Result> result)
+{
+ if (!result || !result->succeeded) {
+  // Keep the stage so that clicking the link again retries the download.
+  m_updateStage = UPDATE_FOUND_INSTALLER;
+  SetUpdateStatus(Localization::Format(m_updateViaProxy ? L"update.download_failed_proxy_retry" : L"update.download_failed_retry",
+   (LPCWSTR)m_release.version), true);
+  return;
+ }
+ m_installerFile = result->value.file;
+ m_updateStage = UPDATE_READY;
+ SetUpdateStatus(Localization::Format(L"update.ready", (LPCWSTR)m_release.version), true);
+ OfferInstall();
+}
+void CPage5::OfferInstall()
+{
+ if (m_updateStage != UPDATE_READY || m_installerFile.IsEmpty()) return;
+ if (MessageBox(Localization::Format(L"update.install_confirm", (LPCWSTR)m_release.version),
+  Localization::Get(L"update.title"), MB_OKCANCEL | MB_ICONQUESTION) != IDOK) return;
+ // theApp's main window is always the modal CProxyLaneDlg.
+ CProxyLaneDlg* main = static_cast<CProxyLaneDlg*>(AfxGetMainWnd());
+ if (!main) return;
+ const CString file = m_installerFile;
+ const UpdateOutcome expected = m_release;
+ bool verified = true;
+ const BOOL exiting = main->ExitForUpdate([&]() -> BOOL {
+  // Verify again just before execution; the file sits in a user-writable folder.
+  if (!MatchesRelease(file, expected)) { verified = false; return FALSE; }
+  const CString parameters = UpdateHelper::InstallerParameters();
+  SHELLEXECUTEINFO info = { sizeof(info) };
+  info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+  info.hwnd = main->GetSafeHwnd(); info.lpFile = file;
+  info.lpParameters = parameters; info.nShow = SW_SHOWNORMAL;
+  if (!ShellExecuteEx(&info) || !info.hProcess) return FALSE;
+  // Setup elevates itself and then announces that it waits for ProxyLane to
+  // exit. If elevation is declined, the setup process ends first instead.
+  main->EnableWindow(FALSE);
+  BOOL started = FALSE;
+  const DWORD begin = GetTickCount();
+  while (GetTickCount() - begin < 5 * 60 * 1000) {
+   HANDLE ready = OpenMutex(SYNCHRONIZE, FALSE, kSetupWaitingMutex);
+   // An elevated setup's mutex may deny us access; it still exists.
+   if (ready || GetLastError() == ERROR_ACCESS_DENIED) { if (ready) CloseHandle(ready); started = TRUE; break; }
+   if (MsgWaitForMultipleObjects(1, &info.hProcess, FALSE, 200, QS_ALLINPUT) == WAIT_OBJECT_0) break;
+   MSG message;
+   while (PeekMessage(&message, NULL, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessage(&message); }
+  }
+  main->EnableWindow(TRUE);
+  CloseHandle(info.hProcess);
+  return started;
+ });
+ if (exiting) return;
+ if (!verified) {
+  DeleteFile(file); m_installerFile.Empty();
+  m_updateStage = UPDATE_FOUND_INSTALLER;
+  SetUpdateStatus(Localization::Format(L"update.verify_failed", (LPCWSTR)m_release.version), true);
+  return;
+ }
+ SetUpdateStatus(Localization::Format(L"update.install_not_started", (LPCWSTR)m_release.version), true);
 }
 void CPage5::OnSettingsAction(UINT id)
 {
@@ -388,28 +525,18 @@ void CPage5::OnSettingsAction(UINT id)
   if (!lock.Valid() || !ConfigStorage::Update(picker.GetPathName(), [](const CString& staged) { return CopyFile(ConfigStorage::Path(), staged, FALSE) != FALSE; })) ReportStorageError(GetLastError(), picker.GetPathName());
   break;
  }
- case 4: {
-  if (m_updateQuery.Busy()) break;
-  if (m_updateQuery.Request([](CString& tag) { return FetchRelease(tag); })) {
-   m_settingsButtons[4].EnableWindow(FALSE);
-   SetUpdateStatus(Localization::Get(L"settings.checking"));
-   SetTimer(0x2506, 100, NULL);
-  } else SetUpdateStatus(Localization::Get(L"settings.update_failed"), false, true);
+ case 4:
+  if (!m_updateQuery.Busy()) StartUpdateCheck();
   break;
- }
  }
 }
 void CPage5::OnTimer(UINT_PTR id)
 {
- if (id != 0x2506) { CModernDialog::OnTimer(id); return; }
+ if (id != kUpdateTimer) { CModernDialog::OnTimer(id); return; }
  auto result = m_updateQuery.Take(); if (!result && m_updateQuery.Busy()) return;
  KillTimer(id); m_settingsButtons[4].EnableWindow(TRUE);
- UpdateRelease::VersionParts latest, current;
- if (!result || !result->succeeded || !UpdateRelease::Version((LPCSTR)CStringA(result->value), latest) || !UpdateRelease::Version((LPCSTR)CStringA(AppVersion::DisplayVersion()), current)) {
-  SetUpdateStatus(Localization::Get(L"settings.update_failed"), false, true); return;
- }
- const bool found = latest > current;
- SetUpdateStatus(found ? Localization::Format(L"settings.update_found", (LPCWSTR)result->value) : Localization::Get(L"settings.up_to_date"), found);
+ if (m_updateStage == UPDATE_DOWNLOADING) FinishInstallerDownload(std::move(result));
+ else FinishUpdateCheck(std::move(result));
 }
 void CPage5::SwitchStorage()
 {

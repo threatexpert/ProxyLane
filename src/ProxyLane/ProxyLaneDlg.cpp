@@ -724,15 +724,36 @@ BOOL CProxyLaneDlg::OnInitDialog()
 
 void CProxyLaneDlg::OnCancel()
 {
+	if (PrepareExit())
+		CModernDialog::OnCancel();
+}
+
+BOOL CProxyLaneDlg::ExitForUpdate(const std::function<BOOL()>& launchInstaller)
+{
+	if (!PrepareExit())
+		return FALSE;
+	if (!launchInstaller())
+	{
+		m_confirmingExit = FALSE;
+		return FALSE;
+	}
+	CModernDialog::OnCancel();
+	return TRUE;
+}
+
+// Runs every exit confirmation. On TRUE the caller must close the dialog;
+// m_confirmingExit stays set so that no second close request starts meanwhile.
+BOOL CProxyLaneDlg::PrepareExit()
+{
 	// Modal dialogs pump messages; ignore another close request while confirming.
-	if (m_confirmingExit) return;
+	if (m_confirmingExit) return FALSE;
 	m_confirmingExit = TRUE;
 	CPage1* page1 = m_MainTab.GetPage1();
 	if (page1 && !theApp.GetAutomationOptions().enabled
 		&& !page1->ConfirmDiscardUnsavedChanges())
 	{
 		m_confirmingExit = FALSE;
-		return;
+		return FALSE;
 	}
 	// A user can close a GUI originally launched with --auto too. Explicit
 	// automation failures use EndDialog directly and remain non-interactive.
@@ -743,7 +764,7 @@ void CProxyLaneDlg::OnCancel()
 			MessageBox(Localization::Format(_T("exit.cleanup_error"), ERROR_RETRY),
 				Localization::Get(_T("exit.processes_title")), MB_OK | MB_ICONWARNING);
 			m_confirmingExit = FALSE;
-			return;
+			return FALSE;
 		}
 		if (!processes.empty())
 		{
@@ -761,7 +782,7 @@ void CProxyLaneDlg::OnCancel()
 			{
 				m_confirmingExit = FALSE;
 				ShowWindow(SW_HIDE);
-				return;
+				return FALSE;
 			}
 			if (choice != IDOK)
 			{
@@ -785,11 +806,11 @@ void CProxyLaneDlg::OnCancel()
 					MessageBox(message, Localization::Get(_T("exit.processes_title")), MB_OK | MB_ICONWARNING);
 				}
 				m_confirmingExit = FALSE;
-				return;
+				return FALSE;
 			}
 		}
 	}
-	CModernDialog::OnCancel();
+	return TRUE;
 }
 
 LRESULT CProxyLaneDlg::OnConfigImportRestart(WPARAM, LPARAM)
