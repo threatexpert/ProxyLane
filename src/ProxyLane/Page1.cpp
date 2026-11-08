@@ -265,6 +265,16 @@ BOOL CPage1::OnInitDialog()
 		SetProfileDirty(TRUE);
 	}
 
+	// A freshly created settings file holds only the Test placeholder
+	// (127.0.0.1:1080) and Direct. Point the user at the server fields until a
+	// profile is saved or enabled; MainTab opens this page while the guide is on.
+	if (ConfigStorage::CreatedDefaults() || m_cfgls.GetCount() == 0)
+	{
+		m_firstRunGuide = TRUE;
+		UpdateTransportEnable();
+		LayoutSettingsPage();
+	}
+
 	return TRUE;
 }
 
@@ -938,7 +948,8 @@ void CPage1::UpdateTransportEnable()
 	const BOOL direct = proxyType.CompareNoCase(_T("NOPROXY")) == 0;
 	const CString group = Localization::Get(direct ? L"page1.direct_group" : L"page1.proxy_group");
 	const CString hint = typeIndex == CB_ERR ? Localization::Get(L"profile.unsupported_type") :
-		(direct ? Localization::Get(L"page1.direct_hint") : CString());
+		direct ? Localization::Get(L"page1.direct_hint") :
+		m_firstRunGuide ? Localization::Get(L"page1.first_run_hint") : CString();
 	CString previousHint, previousGroup;
 	GetDlgItemText(IDC_STATIC_UPSTREAM_HINT, previousHint);
 	GetDlgItemText(IDC_STATIC_PROXY_GROUP, previousGroup);
@@ -1064,7 +1075,17 @@ BOOL CPage1::SaveCurrentProfile(LPCTSTR profileName)
 	m_loadedProfileName = item.strName;
 	m_draftProfileName = item.strName;
 	SetProfileDirty(FALSE);
+	EndFirstRunGuide();
 	return TRUE;
+}
+
+void CPage1::EndFirstRunGuide()
+{
+	if (!m_firstRunGuide)
+		return;
+	m_firstRunGuide = FALSE;
+	UpdateTransportEnable();
+	LayoutSettingsPage();
 }
 
 void CPage1::RestoreProfileSelection()
@@ -2155,6 +2176,8 @@ void CPage1::UpdateProxyStateUi()
 {
 	if (g_MainTab) g_MainTab->RefreshSidebarStatus();
 	BOOL running = m_proxyController.IsRunning();
+	if (running)
+		EndFirstRunGuide();
 	m_OK.SetWindowText(Localization::Get(_T("action.start_proxy")));
 	m_OK.EnableWindow(!running);
 	m_Cancel.EnableWindow(running);

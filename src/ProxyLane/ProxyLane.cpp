@@ -159,7 +159,14 @@ BOOL CProxyLaneApp::InitInstance()
 	InitCommonControlsEx(&InitCtrls);
 
 	CWinApp::InitInstance();
-	const bool storageReady = ConfigStorage::Initialize();
+#ifndef _WIN64
+	// On 64-bit Windows this process only forwards to ProxyLane64.exe, which sets
+	// up storage itself; creating the INI here would hide the first run from it.
+	const bool forwardsToX64 = IsWow64(GetCurrentProcess()) != FALSE;
+#else
+	const bool forwardsToX64 = false;
+#endif
+	const bool storageReady = forwardsToX64 || ConfigStorage::Initialize();
 	const DWORD storageError = GetLastError();
 	Localization::Initialize();
 	if (!storageReady)

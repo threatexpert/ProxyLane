@@ -12,6 +12,7 @@
   "launch.profile_direct": "直连（NOPROXY）",
   "page1.direct_group": "直连模式",
   "page1.direct_hint": "不经过上游代理，仍可对应用进行流量监视和解密。",
+  "page1.first_run_hint": "欢迎使用！Test 配置只是示例，请填写你的代理服务器地址和端口，然后点击“测试连接”并“启用配置”。如果只想监视流量而不使用代理，请选择 Direct 配置。",
   "test.direct_connection_failed": "无法连接测试目标，请检查网络及目标服务状态。",
   "page3.accessible_process_list": "运行中的进程",
   "profile.actions": "配置操作 ▾",
