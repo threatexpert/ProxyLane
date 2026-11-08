@@ -78,9 +78,9 @@ private:
 
 	CAsyncProxySocketLayer *m_pProxyLayer;
 	CAsyncSecureSocketLayer *m_pSecureLayer;
-	// Owns every layer of a chain; m_pProxyLayer then points at its last hop.
-	CProxyChainLayers m_chainLayers;
-	ProxyChain m_chain;
+	// Allocated only for a chained connection; it owns every layer of the
+	// chain, and m_pProxyLayer then points at its last hop.
+	CProxyChainLayers *m_pChain;
 	BOOL m_chainFailureLogged;
 	CTcpProxyTask *m_pNotify;
 	CProxyDataHandle *m_pProxyDataHandle;

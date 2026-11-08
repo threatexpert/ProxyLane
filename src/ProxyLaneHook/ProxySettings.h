@@ -12,6 +12,6 @@ public:
 
 	BOOL GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI);
 	BOOL GetProxySettings(LPProxySettingsInfo lpPSI);
-	BOOL GetProxyChain(const LPPRCClient pPRCC, LPProxyChain lpChain);
+	INT GetProxyChain(const LPPRCClient pPRCC, LPProxyInfo lpHops, INT nCapacity);
 
 };

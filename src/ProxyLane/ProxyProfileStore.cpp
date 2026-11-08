@@ -87,7 +87,8 @@ BOOL CProxyProfileStore::Load(CfgProxyItem& item) const
 	item.chainHops.clear();
 	if (item.bChain)
 	{
-		for (int i = 1; i <= PROXY_CHAIN_MAX_HOPS; ++i)
+		// Hop1, Hop2, ... up to the first missing key; there is no hop limit.
+		for (int i = 1; ; ++i)
 		{
 			CString key;
 			key.Format(_T("Hop%d"), i);
@@ -199,13 +200,20 @@ BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 		// in the profile, as selected by the user.
 		if (!ini.SetString(section, _T("PSK"), item.strTransportPsk)) return false;
 	}
-	for (int i = 1; i <= PROXY_CHAIN_MAX_HOPS; ++i)
+	// Write the hops, then drop the keys a longer chain (or a chain this profile
+	// never was) may have left behind.
+	const int hopCount = item.bChain ? (int)item.chainHops.size() : 0;
+	for (int i = 1; ; ++i)
 	{
 		CString key;
 		key.Format(_T("Hop%d"), i);
-		if (!(item.bChain && i <= (int)item.chainHops.size()
-			? ini.SetString(section, key, item.chainHops[i - 1])
-			: ini.DeleteKeyName(section, key))) return false;
+		if (i <= hopCount)
+		{
+			if (!ini.SetString(section, key, item.chainHops[i - 1])) return false;
+		}
+		else if (ini.GetString(section, key).IsEmpty())
+			break;
+		else if (!ini.DeleteKeyName(section, key)) return false;
 	}
 	return ini.SetString(L"options", L"lastselected", item.strName) != FALSE;
 	});
@@ -256,18 +264,14 @@ BOOL CProxyProfileStore::ListChainUsers(LPCTSTR name, std::vector<CString>& user
 BOOL CProxyProfileStore::ResolveChain(const std::vector<CString>& hops, ProxyChain& chain,
 	CString& errorKey, CString& errorName) const
 {
-	memset(&chain, 0, sizeof(chain));
+	chain.clear();
 	errorName.Empty();
 	if (hops.size() < 2)
 	{
 		errorKey = _T("profile.chain_too_short");
 		return FALSE;
 	}
-	if (hops.size() > PROXY_CHAIN_MAX_HOPS)
-	{
-		errorKey = _T("profile.chain_too_long");
-		return FALSE;
-	}
+	ProxyChain resolved(hops.size());
 	for (size_t i = 0; i < hops.size(); ++i)
 	{
 		errorName = hops[i];
@@ -292,7 +296,7 @@ BOOL CProxyProfileStore::ResolveChain(const std::vector<CString>& hops, ProxyCha
 			return FALSE;
 		}
 
-		ProxyInfo& hop = chain.hops[i];
+		ProxyInfo& hop = resolved[i];
 		hop = item.pi;
 		hop.szItemName = hops[i];
 		hop.reserved = item.nTransportMode == PROXY_TRANSPORT_GONC_TLS_PSK
@@ -313,7 +317,7 @@ BOOL CProxyProfileStore::ResolveChain(const std::vector<CString>& hops, ProxyCha
 			hop.strTransportPsk.szbuf[required] = '\0';
 		}
 	}
-	chain.nHops = (INT)hops.size();
+	chain.swap(resolved);
 	errorName.Empty();
 	return TRUE;
 }

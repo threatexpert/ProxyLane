@@ -59,8 +59,8 @@ public:
 	void SetChainMode(BOOL chain);
 	void RefreshChainList(int select = -1);
 	void UpdateChainButtons();
-	// The current UI's route: hops[0] in `first`; chain->nHops is 0 for one server.
-	BOOL GetRoute(LPProxyInfo first, LPProxyChain chain);
+	// The current UI's route: the first hop in `first`; chain is empty for one server.
+	BOOL GetRoute(LPProxyInfo first, ProxyChain* chain);
  afx_msg void OnNewProfile();
 	afx_msg void OnNewChainProfile();
 	void NewProfile(BOOL chain);
@@ -92,7 +92,7 @@ private:
 	};
 
 	ProxyInfo m_ProxyInfo;
-	ProxyChain m_runtimeChain;	// nHops 0 = single upstream; guarded by m_runtimeLock
+	ProxyChain m_runtimeChain;	// empty = single upstream; guarded by m_runtimeLock
 	ProxySettingsInfo m_runtimeSettings;
 	CCriticalSection m_runtimeLock;
 	BOOL m_runtimeSettingsValid;
@@ -110,7 +110,7 @@ private:
 	CString m_testIpv6Address;
 	BOOL m_testUdpRequested;
 	ProxyInfo m_testProxyInfo;
-	ProxyChain m_testChain;	// nHops 0 = testing a single upstream
+	ProxyChain m_testChain;	// empty = testing a single upstream
 	std::vector<CString> m_testChainNames;
 	BOOL m_profileDirty;
 	BOOL m_loadingProfile;
@@ -172,7 +172,7 @@ public:
 	//重载IProxySettings的成员函数////////////////////////////////////////////
 	BOOL GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI);
 	BOOL GetProxySettings(LPProxySettingsInfo lpPSI);
-	BOOL GetProxyChain(const LPPRCClient pPRCC, LPProxyChain lpChain);
+	INT GetProxyChain(const LPPRCClient pPRCC, LPProxyInfo lpHops, INT nCapacity);
 
 	//IProxyTesterCallback
 	void OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM wParam, LPARAM lParam);

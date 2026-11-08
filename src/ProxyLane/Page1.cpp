@@ -88,8 +88,6 @@ CPage1::CPage1(CWnd* pParent /*=NULL*/)
 	m_testIpv6Result = IPV6_TEST_NOT_RUN;
 	m_testUdpRequested = FALSE;
 	m_ProxyInfo.reserved = 0;
-	memset(&m_runtimeChain, 0, sizeof(m_runtimeChain));
-	memset(&m_testChain, 0, sizeof(m_testChain));
 	memset(&m_runtimeSettings, 0, sizeof(m_runtimeSettings));
 }
 
@@ -815,19 +813,19 @@ BOOL CPage1::GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI)
 	return TRUE;
 }
 
-BOOL CPage1::GetProxyChain(const LPPRCClient pPRCC, LPProxyChain lpChain)
+INT CPage1::GetProxyChain(const LPPRCClient pPRCC, LPProxyInfo lpHops, INT nCapacity)
 {
-	if (!pPRCC || !lpChain || pPRCC->sType != SOCK_STREAM)
-		return FALSE;
-	// The target filter may send this connection direct; a chain never applies then.
-	ProxyInfo first;
-	if (!GetProxyInfo(pPRCC, &first) || first.GetProxyType() == PROXYTYPE_NOPROXY)
-		return FALSE;
+	// The caller asks only for a connection GetProxyInfo routed through a
+	// proxy, so the target filter has already had its say.
+	if (!pPRCC || pPRCC->sType != SOCK_STREAM)
+		return 0;
 	CSingleLock runtimeLock(&m_runtimeLock, TRUE);
-	if (!m_runtimeSettingsValid || m_runtimeChain.nHops < 2)
-		return FALSE;
-	*lpChain = m_runtimeChain;
-	return TRUE;
+	if (!m_runtimeSettingsValid || m_runtimeChain.size() < 2)
+		return 0;
+	const INT hops = (INT)m_runtimeChain.size();
+	if (lpHops && nCapacity >= hops)
+		std::copy(m_runtimeChain.begin(), m_runtimeChain.end(), lpHops);
+	return hops;
 }
 
 BOOL CPage1::GetProxySettings(LPProxySettingsInfo lpPSI)
@@ -968,9 +966,9 @@ BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 	return TRUE;
 }
 
-BOOL CPage1::GetRoute(LPProxyInfo first, LPProxyChain chain)
+BOOL CPage1::GetRoute(LPProxyInfo first, ProxyChain* chain)
 {
-	memset(chain, 0, sizeof(*chain));
+	chain->clear();
 	if (!m_chainMode)
 		return GetSettings(first);
 
@@ -978,16 +976,17 @@ BOOL CPage1::GetRoute(LPProxyInfo first, LPProxyChain chain)
 	if (!m_profileStore.ResolveChain(m_chainHops, *chain, m_settingsValidationKey,
 		m_settingsValidationName))
 		return FALSE;
-	for (int i = 0; i < chain->nHops; ++i)
+	for (size_t i = 0; i < chain->size(); ++i)
 	{
-		if (chain->hops[i].reserved == PROXY_TRANSPORT_GONC_TLS_PSK && !ProxySupportsOptionalModules())
+		if ((*chain)[i].reserved == PROXY_TRANSPORT_GONC_TLS_PSK && !ProxySupportsOptionalModules())
 		{
 			m_settingsValidationKey = _T("profile.secure_transport_unavailable");
 			m_settingsValidationName = m_chainHops[i];
+			chain->clear();
 			return FALSE;
 		}
 	}
-	*first = chain->hops[0];
+	*first = chain->front();
 	return TRUE;
 }
 
@@ -1319,7 +1318,7 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 	if (!GetProxySettingsFromUi(&runtimeSettings))
 		return FALSE;
 	// UDP never goes through a chain: it stays unhooked (direct or blocked).
-	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()) || chain.nHops)
+	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()) || !chain.empty())
 		runtimeSettings.bHookUDP = FALSE;
 
 	PublishProfileSnapshots();
@@ -1424,7 +1423,7 @@ BOOL CPage1::ApplyRuntimeSettings()
 
 	if (!GetProxySettingsFromUi(&runtimeSettings))
 		return FALSE;
-	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()) || chain.nHops)
+	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()) || !chain.empty())
 		runtimeSettings.bHookUDP = FALSE;
 
 	PublishProfileSnapshots();
@@ -1571,9 +1570,9 @@ void CPage1::OnBnClickedTestproxy()
 		return;
 	}
 	m_testProxyInfo = testProxyInfo;
-	m_testChainNames = m_testChain.nHops ? m_chainHops : std::vector<CString>();
+	m_testChainNames = !m_testChain.empty() ? m_chainHops : std::vector<CString>();
 	m_testUdpRequested = m_btnHookUDP.GetCheck() == BST_CHECKED &&
-		testProxyInfo.GetProxyType() == PROXYTYPE_SOCKS5 && !m_testChain.nHops;
+		testProxyInfo.GetProxyType() == PROXYTYPE_SOCKS5 && m_testChain.empty();
 
 	PRCClient client;
 
@@ -1630,8 +1629,8 @@ BOOL CPage1::StartProxyTestPhase(const PRCClient& client, int phase,
 
 	m_proxyTestPhase = phase;
 	PRCClient mutableClient = client;
-	const BOOL started = m_testChain.nHops > 1
-		? m_pProxyTester->StartChain(this, &mutableClient, &m_testChain)
+	const BOOL started = m_testChain.size() > 1
+		? m_pProxyTester->StartChain(this, &mutableClient, &m_testChain[0], (INT)m_testChain.size())
 		: m_pProxyTester->Start(this, &mutableClient, &m_testProxyInfo);
 	if (!started)
 	{
@@ -1959,7 +1958,7 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 				break;
 			}
 			// In a chain, say which hop the failure belongs to.
-			const int failedHop = m_testChain.nHops > 1 ? pTester->GetFailedHop() : -1;
+			const int failedHop = m_testChain.size() > 1 ? pTester->GetFailedHop() : -1;
 			if (failedHop >= 0 && failedHop < (int)m_testChainNames.size())
 				szText = Localization::Format(_T("test.chain_hop"), failedHop + 1,
 					(LPCTSTR)m_testChainNames[failedHop], (LPCTSTR)szText);
@@ -2435,7 +2434,21 @@ void CPage1::NewProfile(BOOL chain)
  CString base = Localization::Get(chain ? L"profile.new_chain_name" : L"profile.new_name"), name = base;
  for (int i = 2; m_cfgls.FindStringExact(-1, name) != CB_ERR; ++i) name.Format(L"%s %d", (LPCWSTR)base, i);
  UILoadCfg(NULL);
- if (chain) SetChainMode(TRUE);
+	if (chain)
+	{
+		// Chain defaults: proxy TCP and child processes, block UDP (it is never
+		// chained), resolve DNS through the chain, redirect private DNS.
+		m_btnHookTCP.SetCheck(BST_CHECKED);
+		m_btnHookChildProcess.SetCheck(BST_CHECKED);
+		m_btnBlockUDP.SetCheck(BST_CHECKED);
+		m_btnDNSLocal.SetCheck(BST_UNCHECKED);
+		m_btnDNSRemote.SetCheck(BST_CHECKED);
+		m_btnRedirectPrivateDNS.SetCheck(BST_CHECKED);
+		m_editRedirectDNS.SetWindowText(_T("8.8.8.8"));
+		UpdateChildFilterEnable();
+		UpdateDnsRedirectEnable();
+		SetChainMode(TRUE);
+	}
  m_loadingProfile = TRUE; m_cfgls.SetCurSel(-1); m_cfgls.SetWindowText(name); m_loadingProfile = FALSE;
  m_draftProfileName = name; SetProfileDirty(TRUE); SetRuntimeDirty(TRUE);
  m_scrollY = 0; LayoutSettingsPage(); m_cfgls.SetFocus(); m_cfgls.SetEditSel(0, -1);
@@ -2555,7 +2568,7 @@ void CPage1::UpdateChainButtons()
 		return;
 	const int selected = m_listChain.GetNextItem(-1, LVNI_SELECTED);
 	const int count = (int)m_chainHops.size();
-	m_btnChainAdd.EnableWindow(!m_bIsTesting && count < PROXY_CHAIN_MAX_HOPS);
+	m_btnChainAdd.EnableWindow(!m_bIsTesting);
 	m_btnChainUp.EnableWindow(!m_bIsTesting && selected > 0);
 	m_btnChainDown.EnableWindow(!m_bIsTesting && selected >= 0 && selected < count - 1);
 	m_btnChainRemove.EnableWindow(!m_bIsTesting && selected >= 0);
@@ -2569,8 +2582,6 @@ void CPage1::OnChainItemChanged(NMHDR*, LRESULT* result)
 
 void CPage1::OnChainAdd()
 {
-	if (m_chainHops.size() >= PROXY_CHAIN_MAX_HOPS)
-		return;
 	// Offer saved Server-mode SOCKS5/HTTP profiles that are not already hops
 	// (and not this profile itself).
 	std::vector<CString> names, offered;

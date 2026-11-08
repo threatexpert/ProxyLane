@@ -28,7 +28,6 @@
   "page1.chain_hop_missing": "（配置已不存在）",
   "page1.chain_hop_invalid": "（不是 SOCKS5 或 HTTP 服务器配置）",
   "profile.chain_too_short": "代理链至少需要两个配置。",
-  "profile.chain_too_long": "代理链最多只能有四个配置。",
   "profile.chain_duplicate": "“%s”在此代理链中出现了不止一次。",
   "profile.chain_missing": "此代理链中的配置“%s”已不存在。",
   "profile.chain_invalid_hop": "“%s”不能加入代理链，只能使用已保存的 SOCKS5 或 HTTP 服务器配置。",

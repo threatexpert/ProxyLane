@@ -3,9 +3,11 @@
 #include "asynsocket\AsyncSocketEx.h"
 #include "asynsocket\AsyncProxySocketLayer.h"
 #include "asynsocket\AsyncSecureSocketLayer.h"
+#include "ProxyModule.h"
 #include "ProxyTransportPolicy.h"
 
-// The layers of a strict proxy chain on one socket.
+// The layers of a strict proxy chain on one socket. Owners allocate it only
+// for a chained connection, so a single upstream pays nothing for it.
 //
 // CAsyncSocketEx puts the first-added layer nearest the application, so the
 // hops are added from the last to the first: the socket connects to hops[0],
@@ -18,23 +20,19 @@
 class CProxyChainLayers
 {
 public:
-	CProxyChainLayers() : m_count(0)
+	BOOL Add(CAsyncSocketEx& socket, const ProxyInfo* hops, int count)
 	{
-		ZeroMemory(m_proxy, sizeof(m_proxy));
-		ZeroMemory(m_secure, sizeof(m_secure));
-	}
-
-	BOOL Add(CAsyncSocketEx& socket, const ProxyChain& chain)
-	{
-		if (m_count || chain.nHops < 2 || chain.nHops > PROXY_CHAIN_MAX_HOPS)
+		if (!m_hops.empty() || !hops || count < 2)
 		{
 			WSASetLastError(WSAEINVAL);
 			return FALSE;
 		}
-		m_count = chain.nHops;
-		for (int i = chain.nHops - 1; i >= 0; --i)
+		m_hops.assign(hops, hops + count);
+		m_proxy.assign(count, NULL);
+		m_secure.assign(count, NULL);
+		for (int i = count - 1; i >= 0; --i)
 		{
-			ProxyInfo hop = chain.hops[i];
+			ProxyInfo& hop = m_hops[i];
 			const int type = hop.GetProxyType();
 			const bool secure = ProxyTransportPolicy::UsesGoncTlsPsk(&hop);
 			if ((type != PROXYTYPE_SOCKS5 && type != PROXYTYPE_HTTP10 && type != PROXYTYPE_HTTP11) ||
@@ -74,28 +72,29 @@ public:
 
 	void Free()
 	{
-		for (int i = 0; i < PROXY_CHAIN_MAX_HOPS; ++i)
+		for (size_t i = 0; i < m_proxy.size(); ++i)
 		{
 			delete m_proxy[i];
 			delete m_secure[i];
-			m_proxy[i] = NULL;
-			m_secure[i] = NULL;
 		}
-		m_count = 0;
+		m_proxy.clear();
+		m_secure.clear();
+		m_hops.clear();
 	}
 
-	BOOL IsActive() const { return m_count > 0; }
+	int Count() const { return (int)m_hops.size(); }
+	const ProxyInfo& Hop(int index) const { return m_hops[index]; }
 
 	// The last hop's proxy layer: the one nearest the application.
-	CAsyncProxySocketLayer* Top() const { return m_count ? m_proxy[m_count - 1] : NULL; }
+	CAsyncProxySocketLayer* Top() const { return m_proxy.empty() ? NULL : m_proxy.back(); }
 
 	// The hop a proxy or TLS layer belongs to, or -1.
 	int HopOf(const CAsyncSocketExLayer* layer) const
 	{
-		for (int i = 0; layer && i < m_count; ++i)
+		for (size_t i = 0; layer && i < m_proxy.size(); ++i)
 		{
 			if (layer == m_proxy[i] || layer == m_secure[i])
-				return i;
+				return (int)i;
 		}
 		return -1;
 	}
@@ -105,17 +104,17 @@ public:
 	// on a timeout the lowest unfinished hop is the one that stalled.
 	int StalledHop() const
 	{
-		for (int i = 0; i < m_count; ++i)
+		for (size_t i = 0; i < m_proxy.size(); ++i)
 		{
 			if (m_proxy[i] && m_proxy[i]->GetProxyOpID() != 0)
-				return i;
+				return (int)i;
 		}
 		return -1;
 	}
 
 	BOOL HasPendingSecureRead() const
 	{
-		for (int i = 0; i < m_count; ++i)
+		for (size_t i = 0; i < m_secure.size(); ++i)
 		{
 			if (m_secure[i] && m_secure[i]->HasPendingRead())
 				return TRUE;
@@ -124,7 +123,7 @@ public:
 	}
 
 private:
-	int m_count;
-	CAsyncProxySocketLayer* m_proxy[PROXY_CHAIN_MAX_HOPS];
-	CAsyncSecureSocketLayer* m_secure[PROXY_CHAIN_MAX_HOPS];
+	ProxyChain m_hops;
+	std::vector<CAsyncProxySocketLayer*> m_proxy;
+	std::vector<CAsyncSecureSocketLayer*> m_secure;
 };

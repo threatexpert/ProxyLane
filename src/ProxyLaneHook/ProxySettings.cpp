@@ -22,17 +22,18 @@ BOOL CProxySettings::GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI)
 	return FALSE;
 }
 
-BOOL CProxySettings::GetProxyChain(const LPPRCClient pPRCC, LPProxyChain lpChain)
+INT CProxySettings::GetProxyChain(const LPPRCClient pPRCC, LPProxyInfo lpHops, INT nCapacity)
 {
 	IProxySettings *p = IProxySettings::m_pNext;
 	while(p)
 	{
-		if(p->GetProxyChain(pPRCC, lpChain))
-			return TRUE;
+		const INT hops = p->GetProxyChain(pPRCC, lpHops, nCapacity);
+		if(hops)
+			return hops;
 		p = p->m_pNext;
 	}
 
-	return FALSE;
+	return 0;
 }
 
 BOOL CProxySettings::GetProxySettings(LPProxySettingsInfo lpPSI)

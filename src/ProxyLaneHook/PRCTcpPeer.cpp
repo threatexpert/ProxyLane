@@ -16,7 +16,7 @@ CPRCTcpPeer::CPRCTcpPeer(CTcpProxyTask *pNotify)
 {
 	m_pProxyLayer = NULL;
 	m_pSecureLayer = NULL;
-	memset(&m_chain, 0, sizeof(m_chain));
+	m_pChain = NULL;
 	m_chainFailureLogged = FALSE;
 	m_pNotify = pNotify;
 	m_pProxyDataHandle = (CProxyDataHandle*)pNotify->m_pTaskmgr->m_pPRC->GetPDHInstance();
@@ -42,7 +42,8 @@ CPRCTcpPeer::CPRCTcpPeer(CTcpProxyTask *pNotify)
 
 CPRCTcpPeer::~CPRCTcpPeer(void)
 {
-	//???
+	// The layers themselves go with RemoveAllLayers, as for a single upstream.
+	delete m_pChain;
 }
 
 DWORD CPRCTcpPeer::GetLastError()
@@ -111,12 +112,12 @@ BOOL CPRCTcpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
 
 BOOL CPRCTcpPeer::AddProxyLayer(LPProxyInfo lpProxyInfo, const ProxyChain *lpChain)
 {
-	if (lpChain && lpChain->nHops > 1)
+	if (lpChain && lpChain->size() > 1)
 	{
-		m_chain = *lpChain;
-		if (!m_chainLayers.Add(*this, m_chain))
+		m_pChain = new CProxyChainLayers;
+		if (!m_pChain->Add(*this, &(*lpChain)[0], (int)lpChain->size()))
 			return FALSE;
-		m_pProxyLayer = m_chainLayers.Top();
+		m_pProxyLayer = m_pChain->Top();
 		m_pSecureLayer = NULL;
 		return TRUE;
 	}
@@ -184,10 +185,12 @@ BOOL CPRCTcpPeer::AddProxyLayer(LPProxyInfo lpProxyInfo, const ProxyChain *lpCha
 void CPRCTcpPeer::RemoveAllLayers()
 {
 	CAsyncSocketEx::RemoveAllLayers();
-	if (m_chainLayers.IsActive())
+	if (m_pChain)
 	{
 		// The chain owns every layer, including the one m_pProxyLayer names.
-		m_chainLayers.Free();
+		m_pChain->Free();
+		delete m_pChain;
+		m_pChain = NULL;
 		m_pProxyLayer = NULL;
 		m_pSecureLayer = NULL;
 		return;
@@ -200,8 +203,8 @@ void CPRCTcpPeer::RemoveAllLayers()
 
 BOOL CPRCTcpPeer::HasPendingSecureRead() const
 {
-	if (m_chainLayers.IsActive())
-		return m_chainLayers.HasPendingSecureRead();
+	if (m_pChain)
+		return m_pChain->HasPendingSecureRead();
 	return m_pSecureLayer && m_pSecureLayer->HasPendingRead();
 }
 
@@ -714,7 +717,7 @@ PROXYERROR_CANTRESOLVEHOST 7
 	}
 	else if (nType == LAYERCALLBACK_LAYERSPECIFIC)
 	{
-		const int hop = m_chainLayers.HopOf(pLayer);
+		const int hop = m_pChain ? m_pChain->HopOf(pLayer) : -1;
 		if (hop >= 0)
 		{
 			// Only the first failing hop is logged: the layers above it merely
@@ -726,8 +729,9 @@ PROXYERROR_CANTRESOLVEHOST 7
 			{
 				m_chainFailureLogged = TRUE;
 				CStringA detail;
-				detail.Format("hop %d of %d (%s:%d)", hop + 1, m_chain.nHops,
-					m_chain.hops[hop].strProxyHost.szbuf, m_chain.hops[hop].nProxyPort);
+				const ProxyInfo& failed = m_pChain->Hop(hop);
+				detail.Format("hop %d of %d (%s:%d)", hop + 1, m_pChain->Count(),
+					failed.strProxyHost.szbuf, failed.nProxyPort);
 				if (nCode == PROXYERROR_REQUESTFAILED && lParam)
 					detail += CStringA(": ") + CStringA((LPCSTR)lParam, (int)strnlen_s((LPCSTR)lParam, 200));
 				else if (nCode != PROXYERROR_NOCONN && nCode != PROXYERROR_REQUESTFAILED)

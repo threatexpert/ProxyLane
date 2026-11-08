@@ -18,15 +18,18 @@ CProxyTester::CProxyTester(CProxyTesterMgr *pNotify)
 	m_completed = FALSE;
 	m_dnsTransactionId = 0;
 	m_failedHop = -1;
+	m_pChain = NULL;
 }
 
 CProxyTester::~CProxyTester(void)
 {
 	Close();
-	if (m_chainLayers.IsActive())
+	if (m_pChain)
 	{
 		// The chain owns every layer, including the one m_pProxyLayer names.
-		m_chainLayers.Free();
+		m_pChain->Free();
+		delete m_pChain;
+		m_pChain = NULL;
 		m_pProxyLayer = NULL;
 		m_pSecureLayer = NULL;
 		return;
@@ -119,7 +122,8 @@ BOOL CProxyTester::ConnectTcp(const LPPRCClient lpPRCClient)
 	return TRUE;
 }
 
-BOOL CProxyTester::StartChain(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient, const LPProxyChain lpChain)
+BOOL CProxyTester::StartChain(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient,
+	const ProxyInfo *lpHops, INT nHops)
 {
 	m_pCallback = pCallback;
 	m_client = *lpPRCClient;
@@ -127,18 +131,19 @@ BOOL CProxyTester::StartChain(IProxyTesterCallback *pCallback, const LPPRCClient
 	m_failedHop = -1;
 
 	// A chain carries TCP only; UDP never goes through one.
-	if (!lpChain || lpChain->nHops < 2 || lpPRCClient->sType != SOCK_STREAM)
+	if (!lpHops || nHops < 2 || m_pChain || lpPRCClient->sType != SOCK_STREAM)
 	{
 		WSASetLastError(WSAEINVAL);
 		return FALSE;
 	}
-	m_proxyinfo = lpChain->hops[0];
+	m_proxyinfo = lpHops[0];
 
 	// Each hop adds a handshake; allow a little more than a single upstream.
-	m_pNotify->ArmTester(this, 10000 + 2500 * (lpChain->nHops - 1));
-	if (!m_chainLayers.Add(*this, *lpChain))
+	m_pNotify->ArmTester(this, 10000 + 2500 * (nHops - 1));
+	m_pChain = new CProxyChainLayers;
+	if (!m_pChain->Add(*this, lpHops, nHops))
 		return FALSE;
-	m_pProxyLayer = m_chainLayers.Top();
+	m_pProxyLayer = m_pChain->Top();
 
 	if (!Create(0, SOCK_STREAM,
 		FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE,
@@ -230,8 +235,8 @@ void CProxyTester::Complete(int nCode, WPARAM wParam, LPARAM lParam)
 	m_completed = TRUE;
 	// A failure no hop reported itself (a timeout, a socket error) belongs to
 	// the first hop that never finished its handshake.
-	if (nCode != 0 && m_failedHop < 0 && m_chainLayers.IsActive())
-		m_failedHop = m_chainLayers.StalledHop();
+	if (nCode != 0 && m_failedHop < 0 && m_pChain)
+		m_failedHop = m_pChain->StalledHop();
 	m_pNotify->DisarmTester(this);
 	m_pCallback->OnProxyTesterCallback(this,
 		MAKEWPARAM(nCode, LAYERCALLBACK_LAYERSPECIFIC), wParam, lParam);
@@ -313,7 +318,7 @@ void CProxyTester::OnSend(int nErrorCode)
 
 int CProxyTester::OnLayerCallback(const CAsyncSocketExLayer *pLayer, int nType, int nCode, WPARAM wParam, LPARAM lParam)
 {
-	const int hop = m_chainLayers.HopOf(pLayer);
+	const int hop = m_pChain ? m_pChain->HopOf(pLayer) : -1;
 	if (m_pProxyLayer != pLayer && hop < 0)
 	{
 		return 0;

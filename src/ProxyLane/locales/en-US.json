@@ -28,7 +28,6 @@
   "page1.chain_hop_missing": "(profile no longer exists)",
   "page1.chain_hop_invalid": "(not a SOCKS5 or HTTP server profile)",
   "profile.chain_too_short": "A chain needs at least two profiles.",
-  "profile.chain_too_long": "A chain can have at most four profiles.",
   "profile.chain_duplicate": "\"%s\" appears more than once in this chain.",
   "profile.chain_missing": "The profile \"%s\" in this chain no longer exists.",
   "profile.chain_invalid_hop": "\"%s\" can't be part of a chain. Only saved SOCKS5 or HTTP server profiles can.",

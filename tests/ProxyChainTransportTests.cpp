@@ -1,5 +1,6 @@
-// Local-only proxy chain regression: route a PRC connection through two or three
-// in-process proxies (SOCKS5 and HTTP CONNECT) to an echo server, and check
+// Local-only proxy chain regression: route a PRC connection through chains of
+// in-process proxies (SOCKS5 and HTTP CONNECT, up to eight hops) to an echo
+// server, check that a single upstream keeps its one-layer path, and check
 // the tester's per-hop failure reporting.
 #define WIN32_LEAN_AND_MEAN
 #define _WIN32_WINNT 0x0600
@@ -12,6 +13,8 @@
 #include <thread>
 #include <mutex>
 #include <vector>
+#include <memory>
+#include <algorithm>
 #include "../src/ProxyLaneHook/ProxyModule.h"
 
 static void Check(bool ok, const char* message)
@@ -278,15 +281,20 @@ public:
 		settings->nDNSOption = PSI_DNSOPT_REMOTE;
 		return TRUE;
 	}
+	LONG chainQueries = 0;
 	BOOL GetProxyInfo(const LPPRCClient, LPProxyInfo result) override
 	{
-		*result = chain.hops[0];
+		*result = chain[0];
 		return TRUE;
 	}
-	BOOL GetProxyChain(const LPPRCClient, LPProxyChain result) override
+	INT GetProxyChain(const LPPRCClient, LPProxyInfo hops, INT capacity) override
 	{
-		*result = chain;
-		return chain.nHops > 1;
+		++chainQueries;
+		if (chain.size() < 2)
+			return 0;
+		if (hops && capacity >= (INT)chain.size())
+			std::copy(chain.begin(), chain.end(), hops);
+		return (INT)chain.size();
 	}
 };
 
@@ -420,8 +428,7 @@ static int TestChain(const ProxyChain& chain, WORD targetPort, int& code)
 	strcpy_s(client.szDomainName, "localhost");
 	client.dstAddr.SetPort(targetPort);
 	TesterResult result;
-	ProxyChain copy = chain;
-	Check(tester->StartChain(&result, &client, &copy) != FALSE, "start chain test");
+	Check(tester->StartChain(&result, &client, &chain[0], (INT)chain.size()) != FALSE, "start chain test");
 	const DWORD started = GetTickCount();
 	while (!result.done && GetTickCount() - started < 20000)
 	{
@@ -470,9 +477,8 @@ int main()
 		Server a(Server::SOCKS5), b(Server::SOCKS5);
 		a.Start(); b.Start();
 		Settings settings; Log log;
-		settings.chain.nHops = 2;
-		settings.chain.hops[0] = Hop(TEXT("SOCKS5"), a.Port());
-		settings.chain.hops[1] = Hop(TEXT("SOCKS5"), b.Port());
+		settings.chain.push_back(Hop(TEXT("SOCKS5"), a.Port()));
+		settings.chain.push_back(Hop(TEXT("SOCKS5"), b.Port()));
 		const bool ok = Through(settings, log, target, false);
 		passed &= Report(ok && a.Target() == "127.0.0.1:" + std::to_string(b.Port()) &&
 			b.Target() == targetIp && log.proxyFailures == 0,
@@ -482,9 +488,8 @@ int main()
 		Server a(Server::HTTP), b(Server::SOCKS5);
 		a.Start(); b.Start();
 		Settings settings; Log log;
-		settings.chain.nHops = 2;
-		settings.chain.hops[0] = Hop(TEXT("HTTP"), a.Port());
-		settings.chain.hops[1] = Hop(TEXT("SOCKS5"), b.Port());
+		settings.chain.push_back(Hop(TEXT("HTTP"), a.Port()));
+		settings.chain.push_back(Hop(TEXT("SOCKS5"), b.Port()));
 		const bool ok = Through(settings, log, target, true);
 		passed &= Report(ok && a.Target() == "127.0.0.1:" + std::to_string(b.Port()) &&
 			b.Target() == targetName,
@@ -494,10 +499,9 @@ int main()
 		Server a(Server::SOCKS5), b(Server::HTTP), c(Server::SOCKS5);
 		a.Start(); b.Start(); c.Start();
 		Settings settings; Log log;
-		settings.chain.nHops = 3;
-		settings.chain.hops[0] = Hop(TEXT("SOCKS5"), a.Port());
-		settings.chain.hops[1] = Hop(TEXT("HTTP"), b.Port());
-		settings.chain.hops[2] = Hop(TEXT("SOCKS5"), c.Port());
+		settings.chain.push_back(Hop(TEXT("SOCKS5"), a.Port()));
+		settings.chain.push_back(Hop(TEXT("HTTP"), b.Port()));
+		settings.chain.push_back(Hop(TEXT("SOCKS5"), c.Port()));
 		const bool ok = Through(settings, log, target, true);
 		passed &= Report(ok && b.Target() == "127.0.0.1:" + std::to_string(c.Port()) &&
 			c.Target() == targetName, "SOCKS5 -> HTTP -> SOCKS5, three hops");
@@ -507,9 +511,8 @@ int main()
 		b.user = "alice"; b.pass = "secret";
 		a.Start(); b.Start();
 		Settings settings; Log log;
-		settings.chain.nHops = 2;
-		settings.chain.hops[0] = Hop(TEXT("SOCKS5"), a.Port());
-		settings.chain.hops[1] = Hop(TEXT("SOCKS5"), b.Port(), TEXT("alice"), TEXT("secret"));
+		settings.chain.push_back(Hop(TEXT("SOCKS5"), a.Port()));
+		settings.chain.push_back(Hop(TEXT("SOCKS5"), b.Port(), TEXT("alice"), TEXT("secret")));
 		passed &= Report(Through(settings, log, target, false) && b.Target() == targetIp,
 			"per-hop credentials on hop 2");
 	}
@@ -518,9 +521,8 @@ int main()
 		b.reject = true;
 		a.Start(); b.Start();
 		Settings settings; Log log;
-		settings.chain.nHops = 2;
-		settings.chain.hops[0] = Hop(TEXT("SOCKS5"), a.Port());
-		settings.chain.hops[1] = Hop(TEXT("SOCKS5"), b.Port());
+		settings.chain.push_back(Hop(TEXT("SOCKS5"), a.Port()));
+		settings.chain.push_back(Hop(TEXT("SOCKS5"), b.Port()));
 		const bool ok = Through(settings, log, target, false);
 		const bool named = log.description.find(L"hop 2 of 2") != std::wstring::npos;
 		passed &= Report(!ok && log.proxyFailures == 1 && named,
@@ -529,10 +531,9 @@ int main()
 	{
 		Server a(Server::SOCKS5), b(Server::SOCKS5);
 		a.Start(); b.Start();
-		ProxyChain chain = {};
-		chain.nHops = 2;
-		chain.hops[0] = Hop(TEXT("SOCKS5"), a.Port());
-		chain.hops[1] = Hop(TEXT("SOCKS5"), b.Port());
+		ProxyChain chain(2);
+		chain[0] = Hop(TEXT("SOCKS5"), a.Port());
+		chain[1] = Hop(TEXT("SOCKS5"), b.Port());
 		int code = -1;
 		const int hop = TestChain(chain, target, code);
 		passed &= Report(code == 0 && hop == -1, "tester: two hops succeed",
@@ -542,10 +543,9 @@ int main()
 		Server a(Server::SOCKS5), b(Server::SOCKS5);
 		b.reject = true;
 		a.Start(); b.Start();
-		ProxyChain chain = {};
-		chain.nHops = 2;
-		chain.hops[0] = Hop(TEXT("SOCKS5"), a.Port());
-		chain.hops[1] = Hop(TEXT("SOCKS5"), b.Port());
+		ProxyChain chain(2);
+		chain[0] = Hop(TEXT("SOCKS5"), a.Port());
+		chain[1] = Hop(TEXT("SOCKS5"), b.Port());
 		int code = -1;
 		const int hop = TestChain(chain, target, code);
 		passed &= Report(code != 0 && hop == 1, "tester: hop 2 rejection names hop 2",
@@ -556,10 +556,9 @@ int main()
 		b.user = "alice"; b.pass = "secret";
 		Server a(Server::SOCKS5);
 		a.Start(); b.Start();
-		ProxyChain chain = {};
-		chain.nHops = 2;
-		chain.hops[0] = Hop(TEXT("SOCKS5"), a.Port());
-		chain.hops[1] = Hop(TEXT("SOCKS5"), b.Port(), TEXT("alice"), TEXT("wrong"));
+		ProxyChain chain(2);
+		chain[0] = Hop(TEXT("SOCKS5"), a.Port());
+		chain[1] = Hop(TEXT("SOCKS5"), b.Port(), TEXT("alice"), TEXT("wrong"));
 		int code = -1;
 		const int hop = TestChain(chain, target, code);
 		passed &= Report(code == PROXYERROR_AUTHFAILED && hop == 1, "tester: bad hop 2 password names hop 2",
@@ -578,13 +577,59 @@ int main()
 		closesocket(reserve);
 		Server b(Server::SOCKS5);
 		b.Start();
-		ProxyChain chain = {};
-		chain.nHops = 2;
-		chain.hops[0] = Hop(TEXT("SOCKS5"), closedPort);
-		chain.hops[1] = Hop(TEXT("SOCKS5"), b.Port());
+		ProxyChain chain(2);
+		chain[0] = Hop(TEXT("SOCKS5"), closedPort);
+		chain[1] = Hop(TEXT("SOCKS5"), b.Port());
 		int code = -1;
 		const int hop = TestChain(chain, target, code);
 		passed &= Report(code != 0 && hop == 0, "tester: unreachable hop 1 names hop 1",
+			"code " + std::to_string(code) + ", hop " + std::to_string(hop));
+	}
+
+	{
+		// A single upstream: one chain query, then the old one-layer path.
+		Server a(Server::SOCKS5);
+		a.Start();
+		Settings settings; Log log;
+		settings.chain.push_back(Hop(TEXT("SOCKS5"), a.Port()));
+		const bool ok = Through(settings, log, target, false);
+		passed &= Report(ok && a.Target() == targetIp && settings.chainQueries == 1 && log.proxyFailures == 0,
+			"single upstream still uses one layer", "hop saw " + a.Target() +
+			", chain queries " + std::to_string(settings.chainQueries));
+	}
+	{
+		// No hop limit: eight hops, alternating SOCKS5 and HTTP.
+		const int count = 8;
+		std::vector<std::unique_ptr<Server>> hops;
+		Settings settings; Log log;
+		for (int i = 0; i < count; ++i)
+		{
+			hops.emplace_back(new Server(i % 2 ? Server::HTTP : Server::SOCKS5));
+			hops.back()->Start();
+			settings.chain.push_back(Hop(i % 2 ? TEXT("HTTP") : TEXT("SOCKS5"), hops.back()->Port()));
+		}
+		const bool ok = Through(settings, log, target, true);
+		bool linked = true;
+		for (int i = 0; i + 1 < count; ++i)
+			linked &= hops[i]->Target() == "127.0.0.1:" + std::to_string(hops[i + 1]->Port());
+		passed &= Report(ok && linked && hops.back()->Target() == targetName && log.proxyFailures == 0,
+			"eight hops, each tunnels to the next", "last hop saw " + hops.back()->Target());
+	}
+	{
+		// The tester with six hops, the fifth rejecting.
+		const int count = 6;
+		std::vector<std::unique_ptr<Server>> hops;
+		ProxyChain chain;
+		for (int i = 0; i < count; ++i)
+		{
+			hops.emplace_back(new Server(Server::SOCKS5));
+			hops.back()->reject = i == 4;
+			hops.back()->Start();
+			chain.push_back(Hop(TEXT("SOCKS5"), hops.back()->Port()));
+		}
+		int code = -1;
+		const int hop = TestChain(chain, target, code);
+		passed &= Report(code != 0 && hop == 4, "tester: six hops, hop 5 rejection names hop 5",
 			"code " + std::to_string(code) + ", hop " + std::to_string(hop));
 	}
 

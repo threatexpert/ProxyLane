@@ -7,6 +7,13 @@
 #pragma once
 
 #include "structinfo.h"
+#include <vector>
+
+// A strict chain of upstream proxies, first hop first: [0] is the server the
+// socket connects to and the ProxyInfo every other component still sees. The
+// host and this DLL link separate C runtimes, so each keeps its own copy and
+// the interfaces pass plain ProxyInfo arrays. No hop limit.
+typedef std::vector<ProxyInfo> ProxyChain;
 
 #define CLSID_PROXYMODULE L"{FAB59DC1-C950-4699-9647-085143BCD67C}"
 
@@ -172,13 +179,16 @@ public:
 	virtual BOOL GetProxySettings(LPProxySettingsInfo lpPSI) = 0;
 	virtual BOOL GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI) = 0;
 
-	// Append only. The whole route when this connection goes through a chain of
-	// two or more proxies (hops[0] matches GetProxyInfo); FALSE = single upstream.
-	virtual BOOL GetProxyChain(const LPPRCClient pPRCC, LPProxyChain lpChain)
+	// Append only. The number of hops when this connection goes through a chain
+	// of two or more proxies, 0 for a single upstream. The hops are copied to
+	// lpHops only when nCapacity holds them all; otherwise call again with room
+	// for the returned count. hops[0] matches GetProxyInfo.
+	virtual INT GetProxyChain(const LPPRCClient pPRCC, LPProxyInfo lpHops, INT nCapacity)
 	{
 		UNREFERENCED_PARAMETER(pPRCC);
-		UNREFERENCED_PARAMETER(lpChain);
-		return FALSE;
+		UNREFERENCED_PARAMETER(lpHops);
+		UNREFERENCED_PARAMETER(nCapacity);
+		return 0;
 	}
 };
 
@@ -347,8 +357,10 @@ public:
 	virtual BOOL Start(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient, const LPProxyInfo lpPI) = 0;
 	virtual void Stop() = 0;
 
-	// Append only. Tests a TCP connection through every hop of lpChain.
-	virtual BOOL StartChain(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient, const LPProxyChain lpChain) = 0;
+	// Append only. Tests a TCP connection through nHops (two or more) proxies
+	// in order; the tester keeps its own copy of the hops.
+	virtual BOOL StartChain(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient,
+		const ProxyInfo *lpHops, INT nHops) = 0;
 	// Index into the chain of the hop a failure belongs to, or -1.
 	virtual int GetFailedHop() = 0;
 };

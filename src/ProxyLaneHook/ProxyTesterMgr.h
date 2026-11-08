@@ -25,7 +25,8 @@ public:
 
 	BOOL Start(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient, const LPProxyInfo lpPI);
 	void Stop();
-	BOOL StartChain(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient, const LPProxyChain lpChain);
+	BOOL StartChain(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient,
+		const ProxyInfo *lpHops, INT nHops);
 	int GetFailedHop();
 
 	BOOL AddProxyLayer(LPProxyInfo lpProxyInfo);
@@ -44,8 +45,9 @@ private:
 	BOOL ConnectTcp(const LPPRCClient lpPRCClient);
 	CAsyncProxySocketLayer *m_pProxyLayer;
 	CAsyncSecureSocketLayer *m_pSecureLayer;
-	// Owns every layer of a chain; m_pProxyLayer then points at its last hop.
-	CProxyChainLayers m_chainLayers;
+	// Allocated only for a chain test; it owns every layer of the chain, and
+	// m_pProxyLayer then points at its last hop.
+	CProxyChainLayers *m_pChain;
 	int m_failedHop;
 
 	PRCClient m_client;
