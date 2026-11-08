@@ -209,6 +209,7 @@ BOOL CPage1::OnInitDialog()
  UpdateAdvancedCaption();
 	m_OK.SetVisualStyle(CModernButton::STYLE_PRIMARY);
 	m_Cancel.SetVisualStyle(CModernButton::STYLE_DANGER);
+	m_staticTestProxy.SetInlineStyle(TRUE);
 	m_btnTest.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	m_btnSaveProfile.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	m_btnProfileMenu.SetVisualStyle(CModernButton::STYLE_SECONDARY);
@@ -463,11 +464,11 @@ void CPage1::LayoutSettingsPage()
 		row += S(2);
 		const int buttonH = S(30);
 		const int testW = max(S(110), textWidth(IDC_TestProxy) + S(24));
-		const int startW = max(S(88), textWidth(IDOK) + S(24));
-		const int stopW = max(S(88), textWidth(IDCANCEL) + S(24));
-		const int stopX = innerX + innerW - stopW;
-		const int startX = stopX - gap - startW;
-		const int testX = startX - gap - testW;
+		// Enable and Disable share one slot (only the one matching the state is
+		// shown), sized for the wider caption so the row does not shift on toggle.
+		const int stateW = max(S(88), max(textWidth(IDOK), textWidth(IDCANCEL)) + S(24));
+		const int stateX = innerX + innerW - stateW;
+		const int testX = stateX - gap - testW;
 		// On a narrow page the test status gets its own line above the buttons.
 		const BOOL statusOwnRow = testX - gap - innerX < S(120);
 		if (statusOwnRow)
@@ -480,8 +481,8 @@ void CPage1::LayoutSettingsPage()
 			place(IDC_STATIC_TestProxy, innerX, row, testX - gap - innerX, buttonH);
 		}
 		place(IDC_TestProxy, max(innerX, testX), row, testW, buttonH);
-		place(IDOK, max(innerX, startX), row, startW, buttonH);
-		place(IDCANCEL, max(innerX, stopX), row, stopW, buttonH);
+		place(IDOK, max(innerX, stateX), row, stateW, buttonH);
+		place(IDCANCEL, max(innerX, stateX), row, stateW, buttonH);
 		y = row + buttonH + S(14);
 		place(IDC_STATIC_PROXY_GROUP, x0, serverTop, contentW, y - serverTop);
 		y += S(12);
@@ -2157,6 +2158,13 @@ void CPage1::UpdateProxyStateUi()
 	m_OK.SetWindowText(Localization::Get(_T("action.start_proxy")));
 	m_OK.EnableWindow(!running);
 	m_Cancel.EnableWindow(running);
+	// One state button: Enable while inactive, Disable while active. Both stay
+	// real controls (IDOK/IDCANCEL) so automation and handlers are unchanged.
+	CWnd* focus = GetFocus();
+	m_OK.ShowWindow(running ? SW_HIDE : SW_SHOW);
+	m_Cancel.ShowWindow(running ? SW_SHOW : SW_HIDE);
+	if (focus == &m_OK || focus == &m_Cancel)
+		(running ? m_Cancel : m_OK).SetFocus();
 	if (m_btnSaveProfile.GetSafeHwnd())
 	{
 		m_btnSaveProfile.SetWindowText(Localization::Get(running

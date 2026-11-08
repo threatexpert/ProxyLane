@@ -234,6 +234,10 @@
     <ClCompile>
       <AdditionalOptions>/source-charset:utf-8 /execution-charset:.936 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
+    <Manifest>
+      <EnableDpiAwareness>false</EnableDpiAwareness>
+      <AdditionalManifestFiles>res\ProxyLane.dpi.manifest;%(AdditionalManifestFiles)</AdditionalManifestFiles>
+    </Manifest>
     <PostBuildEvent>
       <Command Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
       </Command>

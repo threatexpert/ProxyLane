@@ -220,13 +220,30 @@ namespace UiTheme
 		}
 	}
 
-	int ScaleForWindow(HWND hWnd, int value)
+	int WindowDpi(HWND hWnd)
 	{
+		// Resolved at run time: the XP-compatible SDK has no declaration and
+		// older systems have no export.
+		typedef UINT(WINAPI* GetDpiForWindowFn)(HWND);
+		static const GetDpiForWindowFn getDpiForWindow = reinterpret_cast<GetDpiForWindowFn>(
+			::GetProcAddress(::GetModuleHandle(_T("user32.dll")), "GetDpiForWindow"));
+		if (getDpiForWindow && hWnd)
+		{
+			const UINT dpi = getDpiForWindow(hWnd);
+			if (dpi)
+				return static_cast<int>(dpi);
+		}
+
 		HDC dc = ::GetDC(hWnd);
 		int dpi = dc ? ::GetDeviceCaps(dc, LOGPIXELSX) : 96;
 		if (dc)
 			::ReleaseDC(hWnd, dc);
-		return MulDiv(value, dpi, 96);
+		return dpi;
+	}
+
+	int ScaleForWindow(HWND hWnd, int value)
+	{
+		return MulDiv(value, WindowDpi(hWnd), 96);
 	}
 
 	namespace
@@ -277,25 +294,117 @@ namespace UiTheme
 			}
 			return chineseFace;
 		}
+
+		struct UiFontRecord
+		{
+			CFont* font;
+			HWND owner;
+			int pointSize;
+			int weight;
+			CString faceName;
+		};
+
+		std::vector<UiFontRecord>& UiFontRecords()
+		{
+			static std::vector<UiFontRecord> records;
+			return records;
+		}
+
+		BOOL IsWithin(HWND root, HWND hWnd)
+		{
+			return hWnd == root || ::IsChild(root, hWnd);
+		}
+
+		HFONT MakeUiFont(const UiFontRecord& record)
+		{
+			return ::CreateFont(
+				-MulDiv(record.pointSize, WindowDpi(record.owner), 72), 0, 0, 0, record.weight,
+				FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+				OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+				DEFAULT_PITCH | FF_DONTCARE, record.faceName);
+		}
+
+		struct FontSwap
+		{
+			HFONT oldFont;
+			HFONT newFont;
+		};
+
+		void SwapWindowFont(HWND hWnd, const std::vector<FontSwap>& swaps)
+		{
+			const HFONT current = reinterpret_cast<HFONT>(::SendMessage(hWnd, WM_GETFONT, 0, 0));
+			if (!current)
+				return;
+			for (size_t i = 0; i < swaps.size(); ++i)
+			{
+				if (swaps[i].oldFont == current)
+				{
+					::SendMessage(hWnd, WM_SETFONT, reinterpret_cast<WPARAM>(swaps[i].newFont), FALSE);
+					return;
+				}
+			}
+		}
+
+		BOOL CALLBACK SwapChildFont(HWND child, LPARAM swaps)
+		{
+			SwapWindowFont(child, *reinterpret_cast<const std::vector<FontSwap>*>(swaps));
+			return TRUE;
+		}
 	}
 
 	BOOL CreateUiFont(CFont& font, HWND hWnd, int pointSize, int weight, LPCTSTR faceName)
 	{
 		if (font.GetSafeHandle())
 			font.DeleteObject();
-		if (!faceName)
-			faceName = DefaultFaceName();
 
-		HDC dc = ::GetDC(hWnd);
-		int dpi = dc ? ::GetDeviceCaps(dc, LOGPIXELSY) : 96;
-		if (dc)
-			::ReleaseDC(hWnd, dc);
+		UiFontRecord spec = { &font, hWnd, pointSize, weight, faceName ? faceName : DefaultFaceName() };
+		std::vector<UiFontRecord>& records = UiFontRecords();
+		size_t index = 0;
+		while (index < records.size() && records[index].font != &font)
+			++index;
+		if (index == records.size())
+			records.push_back(spec);
+		else
+			records[index] = spec;
 
-		return font.CreateFont(
-			-MulDiv(pointSize, dpi, 72), 0, 0, 0, weight,
-			FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-			OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
-			DEFAULT_PITCH | FF_DONTCARE, faceName);
+		return font.Attach(MakeUiFont(spec));
+	}
+
+	void RescaleUiFonts(HWND root)
+	{
+		std::vector<FontSwap> swaps;
+		std::vector<UiFontRecord>& records = UiFontRecords();
+		for (size_t i = 0; i < records.size(); ++i)
+		{
+			UiFontRecord& record = records[i];
+			if (!::IsWindow(record.owner) || !IsWithin(root, record.owner) || !record.font->GetSafeHandle())
+				continue;
+			const HFONT newFont = MakeUiFont(record);
+			if (!newFont)
+				continue;
+			FontSwap swap = { static_cast<HFONT>(record.font->Detach()), newFont };
+			record.font->Attach(newFont);
+			swaps.push_back(swap);
+		}
+		if (swaps.empty())
+			return;
+
+		// Controls keep the HFONT they were given, so hand each one its replacement
+		// before the old fonts are deleted.
+		SwapWindowFont(root, swaps);
+		::EnumChildWindows(root, SwapChildFont, reinterpret_cast<LPARAM>(&swaps));
+		for (size_t i = 0; i < swaps.size(); ++i)
+			::DeleteObject(swaps[i].oldFont);
+	}
+
+	void ForgetUiFonts(HWND root)
+	{
+		std::vector<UiFontRecord>& records = UiFontRecords();
+		for (size_t i = records.size(); i-- > 0;)
+		{
+			if (!::IsWindow(records[i].owner) || IsWithin(root, records[i].owner))
+				records.erase(records.begin() + i);
+		}
 	}
 
 	void ApplyFontToChildren(CWnd* parent, CFont* font)
@@ -316,6 +425,7 @@ IMPLEMENT_DYNAMIC(CModernDialog, CDialog)
 CModernDialog::CModernDialog(UINT templateId, CWnd* parent)
 	: CDialog(templateId, parent)
 	, m_templateId(templateId)
+	, m_dpi(96)
 {
 }
 
@@ -326,6 +436,17 @@ CModernDialog::~CModernDialog()
 BOOL CModernDialog::OnInitDialog()
 {
 	CDialog::OnInitDialog();
+
+	m_dpi = UiTheme::WindowDpi(m_hWnd);
+	// Per-monitor v2 would otherwise rescale template dialogs on its own and fight
+	// the pixel layouts below; OnDpiChanged does the whole job instead.
+	typedef BOOL(WINAPI* SetDialogDpiChangeBehaviorFn)(HWND, int, int);
+	static const SetDialogDpiChangeBehaviorFn setDialogDpiChangeBehavior =
+		reinterpret_cast<SetDialogDpiChangeBehaviorFn>(::GetProcAddress(
+			::GetModuleHandle(_T("user32.dll")), "SetDialogDpiChangeBehavior"));
+	const int DDC_DISABLE_ALL = 0x0001;
+	if (setDialogDpiChangeBehavior)
+		setDialogDpiChangeBehavior(m_hWnd, DDC_DISABLE_ALL, DDC_DISABLE_ALL);
 
 	m_backgroundBrush.DeleteObject();
 	m_backgroundBrush.CreateSolidBrush(UiTheme::PageBackground());
@@ -386,11 +507,113 @@ BOOL CModernDialog::OnInitDialog()
 	return TRUE;
 }
 
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0
+#endif
+
 BEGIN_MESSAGE_MAP(CModernDialog, CDialog)
 	ON_WM_SIZE()
 	ON_WM_ERASEBKGND()
 	ON_WM_CTLCOLOR()
+	ON_WM_DESTROY()
+	ON_MESSAGE(WM_DPICHANGED, OnDpiChanged)
 END_MESSAGE_MAP()
+
+namespace
+{
+	struct DpiChange
+	{
+		HWND root;
+		int oldDpi;
+		int newDpi;
+	};
+
+	BOOL CALLBACK RefreshChildForDpi(HWND child, LPARAM param)
+	{
+		const DpiChange& change = *reinterpret_cast<const DpiChange*>(param);
+		TCHAR className[32] = {};
+		::GetClassName(child, className, _countof(className));
+
+		// Controls placed only by the dialog template (secondary dialogs) keep their
+		// pixel rectangles; scale them. Pages with their own layout re-place theirs.
+		if (::GetParent(child) == change.root)
+		{
+			CRect rect;
+			::GetWindowRect(child, &rect);
+			::MapWindowPoints(NULL, change.root, reinterpret_cast<LPPOINT>(&rect), 2);
+			::SetWindowPos(child, NULL,
+				MulDiv(rect.left, change.newDpi, change.oldDpi), MulDiv(rect.top, change.newDpi, change.oldDpi),
+				MulDiv(rect.Width(), change.newDpi, change.oldDpi), MulDiv(rect.Height(), change.newDpi, change.oldDpi),
+				SWP_NOZORDER | SWP_NOACTIVATE);
+		}
+
+		if (_tcsicmp(className, WC_LISTVIEW) == 0)
+		{
+			const HWND header = reinterpret_cast<HWND>(::SendMessage(child, LVM_GETHEADER, 0, 0));
+			const int columns = header ? static_cast<int>(::SendMessage(header, HDM_GETITEMCOUNT, 0, 0)) : 0;
+			for (int column = 0; column < columns; ++column)
+			{
+				const int width = static_cast<int>(::SendMessage(child, LVM_GETCOLUMNWIDTH, column, 0));
+				::SendMessage(child, LVM_SETCOLUMNWIDTH, column,
+					MAKELPARAM(MulDiv(width, change.newDpi, change.oldDpi), 0));
+			}
+		}
+
+		// Non-client padding (rounded edits) is computed from the window DPI.
+		::SetWindowPos(child, NULL, 0, 0, 0, 0,
+			SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+		return TRUE;
+	}
+
+	// Containers and embedded pages lay out on WM_SIZE; a move to the same pixel
+	// size sends none, so give them one. Parents are visited before children.
+	BOOL CALLBACK RelayoutChildForDpi(HWND child, LPARAM root)
+	{
+		TCHAR className[32] = {};
+		::GetClassName(child, className, _countof(className));
+		if (::GetParent(child) != reinterpret_cast<HWND>(root) && _tcscmp(className, _T("#32770")) != 0)
+			return TRUE;
+		CRect client;
+		::GetClientRect(child, &client);
+		::SendMessage(child, WM_SIZE, SIZE_RESTORED, MAKELPARAM(client.Width(), client.Height()));
+		return TRUE;
+	}
+}
+
+void CModernDialog::OnDestroy()
+{
+	UiTheme::ForgetUiFonts(m_hWnd);
+	CDialog::OnDestroy();
+}
+
+LRESULT CModernDialog::OnDpiChanged(WPARAM wParam, LPARAM lParam)
+{
+	const int oldDpi = m_dpi;
+	const int newDpi = LOWORD(wParam);
+	if (newDpi <= 0 || oldDpi <= 0)
+		return 0;
+	m_dpi = newDpi;
+
+	UiTheme::RescaleUiFonts(m_hWnd);
+	if (newDpi != oldDpi)
+	{
+		DpiChange change = { m_hWnd, oldDpi, newDpi };
+		::EnumChildWindows(m_hWnd, RefreshChildForDpi, reinterpret_cast<LPARAM>(&change));
+	}
+
+	const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
+	if (suggested)
+		SetWindowPos(NULL, suggested->left, suggested->top,
+			suggested->right - suggested->left, suggested->bottom - suggested->top,
+			SWP_NOZORDER | SWP_NOACTIVATE);
+	// The pixel size may not change, so run the layouts with the new metrics anyway.
+	CRect client;
+	GetClientRect(&client);
+	SendMessage(WM_SIZE, SIZE_RESTORED, MAKELPARAM(client.Width(), client.Height()));
+	::EnumChildWindows(m_hWnd, RelayoutChildForDpi, reinterpret_cast<LPARAM>(m_hWnd));
+	RedrawWindow(NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+	return 0;
+}
 
 void CModernDialog::OnOK()
 {
@@ -840,8 +1063,18 @@ IMPLEMENT_DYNAMIC(CStatusLabel, CStatic)
 CStatusLabel::CStatusLabel()
 	: m_tone(TONE_NEUTRAL),
 	m_backdrop(UiTheme::PageBackground()),
-	m_twoLine(FALSE), m_compact(FALSE)
+	m_twoLine(FALSE), m_compact(FALSE), m_inline(FALSE)
 {
+}
+
+void CStatusLabel::SetInlineStyle(BOOL inlineStyle)
+{
+	m_inline = inlineStyle;
+	if (GetSafeHwnd())
+	{
+		Invalidate(FALSE);
+		UpdateOverflowTooltip();
+	}
 }
 
 void CStatusLabel::SetBackdropColor(COLORREF color)
@@ -998,8 +1231,9 @@ void CStatusLabel::UpdateOverflowTooltip()
 	{
 		GetWindowText(fullText);
 		const int horizontalPadding = UiTheme::ScaleForWindow(m_hWnd, 8);
-		const int availableWidth = max(0, client.Width() -
-			UiTheme::ScaleForWindow(m_hWnd, 2) - horizontalPadding * 2);
+		const int availableWidth = m_inline
+			? max(0, client.Width() - UiTheme::ScaleForWindow(m_hWnd, 14))
+			: max(0, client.Width() - UiTheme::ScaleForWindow(m_hWnd, 2) - horizontalPadding * 2);
 		truncated = dc.GetTextExtent(fullText).cx > availableWidth;
 	}
 
@@ -1072,14 +1306,14 @@ void CStatusLabel::DrawItem(LPDRAWITEMSTRUCT info)
 	}
 
 	dc.FillSolidRect(rect, m_backdrop);
-	rect.DeflateRect(1, 1);
-	CPen pen(PS_SOLID, 1, border);
-	CBrush brush(fill);
-	CPen* oldPen = dc.SelectObject(&pen);
-	CBrush* oldBrush = dc.SelectObject(&brush);
-	UiTheme::FillRoundRect(dc.m_hDC, rect, UiTheme::ScaleForWindow(m_hWnd, 9), fill, border);
-	dc.SelectObject(oldBrush);
-	dc.SelectObject(oldPen);
+	const BOOL inlineStatus = m_inline && !m_twoLine;
+	CPen* oldPen = NULL;
+	CBrush* oldBrush = NULL;
+	if (!inlineStatus)
+	{
+		rect.DeflateRect(1, 1);
+		UiTheme::FillRoundRect(dc.m_hDC, rect, UiTheme::ScaleForWindow(m_hWnd, 9), fill, border);
+	}
 
 	dc.SetBkMode(TRANSPARENT);
 	CFont* font = GetFont();
@@ -1134,6 +1368,28 @@ void CStatusLabel::DrawItem(LPDRAWITEMSTRUCT info)
 			dc.DrawText(m_downloadText, rateRect,
 				DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 		}
+	}
+	else if (inlineStatus)
+	{
+		CString caption;
+		GetWindowText(caption);
+		const int dotSize = UiTheme::ScaleForWindow(m_hWnd, 6);
+		const int dotGap = UiTheme::ScaleForWindow(m_hWnd, 8);
+		const int dotLeft = UiTheme::ScaleForWindow(m_hWnd, 2);
+		const int dotTop = rect.CenterPoint().y - dotSize / 2;
+		CPen dotPen(PS_SOLID, 1, text);
+		CBrush dotBrush(text);
+		oldPen = dc.SelectObject(&dotPen);
+		oldBrush = dc.SelectObject(&dotBrush);
+		dc.Ellipse(dotLeft, dotTop, dotLeft + dotSize, dotTop + dotSize);
+		dc.SelectObject(oldBrush);
+		dc.SelectObject(oldPen);
+
+		dc.SetTextColor(text);
+		CRect textRect(rect);
+		textRect.left = dotLeft + dotSize + dotGap;
+		dc.DrawText(caption, textRect,
+			DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 	}
 	else
 	{
@@ -1339,11 +1595,45 @@ CSoftCombo::CSoftCombo()
 {
 }
 
+namespace
+{
+	// An editable combo creates its edit child with ES_NOHIDESEL and selects the
+	// whole text whenever it updates it (selection change, resize), so an
+	// unfocused combo showed highlighted text. Keep a selection only while the
+	// edit has focus.
+	LRESULT CALLBACK ComboEditSubclassProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam,
+		UINT_PTR id, DWORD_PTR)
+	{
+		if (message == EM_SETSEL && ::GetFocus() != hWnd)
+		{
+			wParam = static_cast<WPARAM>(-1);
+			lParam = 0;
+		}
+		else if (message == WM_NCDESTROY)
+		{
+			::RemoveWindowSubclass(hWnd, ComboEditSubclassProc, id);
+		}
+		const LRESULT result = ::DefSubclassProc(hWnd, message, wParam, lParam);
+		if (message == WM_KILLFOCUS)
+			::DefSubclassProc(hWnd, EM_SETSEL, static_cast<WPARAM>(-1), 0);
+		return result;
+	}
+}
+
 void CSoftCombo::PreSubclassWindow()
 {
 	// The edit child of an editable combo paints itself; keep it out of our DC.
 	ModifyStyle(0, WS_CLIPCHILDREN);
 	CComboBox::PreSubclassWindow();
+	if ((GetStyle() & 0x3) == CBS_DROPDOWN)
+	{
+		if (CWnd* edit = GetWindow(GW_CHILD))
+		{
+			::SetWindowSubclass(edit->m_hWnd, ComboEditSubclassProc, 0, 0);
+			if (::GetFocus() != edit->m_hWnd)
+				edit->SendMessage(EM_SETSEL, static_cast<WPARAM>(-1), 0);
+		}
+	}
 }
 
 BOOL CSoftCombo::OnEraseBkgnd(CDC*)

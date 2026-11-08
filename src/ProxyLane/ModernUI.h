@@ -43,11 +43,19 @@ namespace UiTheme
 	COLORREF Danger();
 	COLORREF DangerSoft();
 
+	// Per-monitor DPI where the OS provides it (Windows 10 1607+), otherwise system DPI.
+	int WindowDpi(HWND hWnd);
 	int ScaleForWindow(HWND hWnd, int value);
-	// faceName NULL picks the UI face for the current language.
+	// faceName NULL picks the UI face for the current language. The font is
+	// remembered so RescaleUiFonts can recreate it after a DPI change.
 	BOOL CreateUiFont(CFont& font, HWND hWnd, int pointSize,
 		int weight = FW_NORMAL, LPCTSTR faceName = NULL);
 	void ApplyFontToChildren(CWnd* parent, CFont* font);
+	// Recreates the CreateUiFont fonts owned by `root` or its descendants at their
+	// current DPI and hands the new fonts to every window under `root` that used them.
+	void RescaleUiFonts(HWND root);
+	// Drops remembered fonts owned by `root` or its descendants (call before they go away).
+	void ForgetUiFonts(HWND root);
 }
 
 class CModernDialog : public CDialog
@@ -65,6 +73,8 @@ protected:
 	afx_msg void OnSize(UINT type, int cx, int cy);
 	afx_msg BOOL OnEraseBkgnd(CDC* dc);
 	afx_msg HBRUSH OnCtlColor(CDC* dc, CWnd* wnd, UINT ctlColor);
+	afx_msg void OnDestroy();
+	afx_msg LRESULT OnDpiChanged(WPARAM wParam, LPARAM lParam);
 	void LayoutPageHeader();
 	// Static texts that should be drawn in the secondary (muted) colour.
 	virtual BOOL UsesSecondaryText(UINT controlId) const;
@@ -74,6 +84,7 @@ protected:
 	CFont m_uiFont;
 	CFont m_titleFont;
 	UINT m_templateId;
+	int m_dpi;
 
 	DECLARE_MESSAGE_MAP()
 };
@@ -160,6 +171,9 @@ public:
 	};
 
 	CStatusLabel();
+	// Inline: a single-line status draws as a tone dot plus text instead of a
+	// boxed badge, so it does not read as a (disabled) button next to buttons.
+	void SetInlineStyle(BOOL inlineStyle);
 	void SetStatus(LPCTSTR text, Tone tone);
 	void SetTwoLineStatus(LPCTSTR primaryText, LPCTSTR secondaryText, Tone tone, BOOL compact = FALSE);
 	void SetDetailText(const CString& text);
@@ -178,6 +192,7 @@ protected:
 	COLORREF m_backdrop;
 	BOOL m_twoLine;
 	BOOL m_compact;
+	BOOL m_inline;
 	CString m_detailText;
 	CFont m_detailFont;
 	CString m_primaryText;
