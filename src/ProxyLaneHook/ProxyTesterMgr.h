@@ -5,6 +5,7 @@
 #include "asynsocket\AsyncSocketEx.h"
 #include "asynsocket\AsyncProxySocketLayer.h"
 #include "asynsocket\AsyncSecureSocketLayer.h"
+#include "ProxyChainLayers.h"
 #include "TimerQueue.h"
 
 class CProxyTesterMgr;
@@ -24,6 +25,8 @@ public:
 
 	BOOL Start(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient, const LPProxyInfo lpPI);
 	void Stop();
+	BOOL StartChain(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient, const LPProxyChain lpChain);
+	int GetFailedHop();
 
 	BOOL AddProxyLayer(LPProxyInfo lpProxyInfo);
 	void RemoveAllLayers();
@@ -38,8 +41,12 @@ public:
 
 private:
 	void Complete(int nCode, WPARAM wParam = 0, LPARAM lParam = 0);
+	BOOL ConnectTcp(const LPPRCClient lpPRCClient);
 	CAsyncProxySocketLayer *m_pProxyLayer;
 	CAsyncSecureSocketLayer *m_pSecureLayer;
+	// Owns every layer of a chain; m_pProxyLayer then points at its last hop.
+	CProxyChainLayers m_chainLayers;
+	int m_failedHop;
 
 	PRCClient m_client;
 	ProxyInfo m_proxyinfo;

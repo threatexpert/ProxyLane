@@ -389,6 +389,7 @@
     <ClInclude Include="DirectIpv6Route.h" />
     <ClInclude Include="ProxyReceptionCentre.h" />
     <ClInclude Include="ProxySettings.h" />
+    <ClInclude Include="ProxyChainLayers.h" />
     <ClInclude Include="ProxyTaskMgr.h" />
     <ClInclude Include="ProxyTesterMgr.h" />
     <ClInclude Include="StdAfx.h" />

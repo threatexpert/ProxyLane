@@ -172,6 +172,14 @@ public:
 	virtual BOOL GetProxySettings(LPProxySettingsInfo lpPSI) = 0;
 	virtual BOOL GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI) = 0;
 
+	// Append only. The whole route when this connection goes through a chain of
+	// two or more proxies (hops[0] matches GetProxyInfo); FALSE = single upstream.
+	virtual BOOL GetProxyChain(const LPPRCClient pPRCC, LPProxyChain lpChain)
+	{
+		UNREFERENCED_PARAMETER(pPRCC);
+		UNREFERENCED_PARAMETER(lpChain);
+		return FALSE;
+	}
 };
 
 
@@ -339,6 +347,10 @@ public:
 	virtual BOOL Start(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient, const LPProxyInfo lpPI) = 0;
 	virtual void Stop() = 0;
 
+	// Append only. Tests a TCP connection through every hop of lpChain.
+	virtual BOOL StartChain(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient, const LPProxyChain lpChain) = 0;
+	// Index into the chain of the hop a failure belongs to, or -1.
+	virtual int GetFailedHop() = 0;
 };
 
 

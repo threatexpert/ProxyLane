@@ -231,6 +231,14 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 
 	DnsRedirectPolicy::Apply(PRCC, psi, pisetting);
 
+	// A chain is read once with the route above; a direct (bypassed) connection
+	// never uses one. hops[0] must be the upstream GetProxyInfo just returned.
+	ProxyChain chain;
+	memset(&chain, 0, sizeof(chain));
+	if (pisetting.GetProxyType() == PROXYTYPE_NOPROXY ||
+		!pProxySettings->GetProxyChain(&PRCC, &chain) || chain.nHops < 2)
+		chain.nHops = 0;
+
 	if (psi.bDisableLLMNR)
 	{
 		if (isLLMNR(PRCC.szDomainName))
@@ -242,7 +250,8 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 	}
 
 	IProxyLog::ConnectionStage stage = IProxyLog::STAGE_ALLOCATE;
-	if(!m_pProxyTaskMgr->OnNewTask(sClient, &PRCC, &pisetting, stage))
+	if(!m_pProxyTaskMgr->OnNewTask(sClient, &PRCC, &pisetting, stage,
+		chain.nHops ? &chain : NULL))
 	{
 		const DWORD error = WSAGetLastError();
 		LogConnectionFailure(&PRCC, ppszName, stage, error);

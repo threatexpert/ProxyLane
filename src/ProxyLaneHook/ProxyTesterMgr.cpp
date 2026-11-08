@@ -17,11 +17,20 @@ CProxyTester::CProxyTester(CProxyTesterMgr *pNotify)
 	m_pCallback = NULL;
 	m_completed = FALSE;
 	m_dnsTransactionId = 0;
+	m_failedHop = -1;
 }
 
 CProxyTester::~CProxyTester(void)
 {
 	Close();
+	if (m_chainLayers.IsActive())
+	{
+		// The chain owns every layer, including the one m_pProxyLayer names.
+		m_chainLayers.Free();
+		m_pProxyLayer = NULL;
+		m_pSecureLayer = NULL;
+		return;
+	}
 	delete m_pProxyLayer;
 	delete m_pSecureLayer;
 	m_pProxyLayer = NULL;
@@ -40,6 +49,7 @@ BOOL CProxyTester::Start(IProxyTesterCallback *pCallback, const LPPRCClient lpPR
 	m_client = *lpPRCClient;
 	m_proxyinfo = *lpPI;
 	m_completed = FALSE;
+	m_failedHop = -1;
 
 	if (!AddProxyLayer(lpPI))
 		return FALSE;
@@ -58,20 +68,7 @@ BOOL CProxyTester::Start(IProxyTesterCallback *pCallback, const LPPRCClient lpPR
 
 	if (lpPRCClient->sType == SOCK_STREAM)
 	{
-		BOOL bConnect = FALSE;
-
-		if(lpPRCClient->IsDNValid())
-			bConnect = CAsyncSocketEx::Connect(lpPRCClient->szDomainName, lpPRCClient->dstAddr.GetPort());
-		else
-			bConnect = CAsyncSocketEx::Connect(&lpPRCClient->dstAddr, lpPRCClient->dstAddr.Size());
-
-		if(!bConnect)
-		{
-			if(WSAGetLastError() != WSAEWOULDBLOCK)
-				return FALSE;
-		}
-
-		return TRUE;
+		return ConnectTcp(lpPRCClient);
 	}else if (lpPRCClient->sType == SOCK_DGRAM)
 	{
 		if (m_pProxyLayer)
@@ -103,6 +100,57 @@ BOOL CProxyTester::Start(IProxyTesterCallback *pCallback, const LPPRCClient lpPR
 
 }
 
+
+BOOL CProxyTester::ConnectTcp(const LPPRCClient lpPRCClient)
+{
+	BOOL bConnect = FALSE;
+
+	if(lpPRCClient->IsDNValid())
+		bConnect = CAsyncSocketEx::Connect(lpPRCClient->szDomainName, lpPRCClient->dstAddr.GetPort());
+	else
+		bConnect = CAsyncSocketEx::Connect(&lpPRCClient->dstAddr, lpPRCClient->dstAddr.Size());
+
+	if(!bConnect)
+	{
+		if(WSAGetLastError() != WSAEWOULDBLOCK)
+			return FALSE;
+	}
+
+	return TRUE;
+}
+
+BOOL CProxyTester::StartChain(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient, const LPProxyChain lpChain)
+{
+	m_pCallback = pCallback;
+	m_client = *lpPRCClient;
+	m_completed = FALSE;
+	m_failedHop = -1;
+
+	// A chain carries TCP only; UDP never goes through one.
+	if (!lpChain || lpChain->nHops < 2 || lpPRCClient->sType != SOCK_STREAM)
+	{
+		WSASetLastError(WSAEINVAL);
+		return FALSE;
+	}
+	m_proxyinfo = lpChain->hops[0];
+
+	// Each hop adds a handshake; allow a little more than a single upstream.
+	m_pNotify->ArmTester(this, 10000 + 2500 * (lpChain->nHops - 1));
+	if (!m_chainLayers.Add(*this, *lpChain))
+		return FALSE;
+	m_pProxyLayer = m_chainLayers.Top();
+
+	if (!Create(0, SOCK_STREAM,
+		FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE,
+		NULL, FALSE, AF_INET))
+		return FALSE;
+	return ConnectTcp(lpPRCClient);
+}
+
+int CProxyTester::GetFailedHop()
+{
+	return m_failedHop;
+}
 
 BOOL CProxyTester::AddProxyLayer(LPProxyInfo lpProxyInfo)
 {
@@ -180,6 +228,10 @@ void CProxyTester::Complete(int nCode, WPARAM wParam, LPARAM lParam)
 	if (m_completed || !m_pCallback)
 		return;
 	m_completed = TRUE;
+	// A failure no hop reported itself (a timeout, a socket error) belongs to
+	// the first hop that never finished its handshake.
+	if (nCode != 0 && m_failedHop < 0 && m_chainLayers.IsActive())
+		m_failedHop = m_chainLayers.StalledHop();
 	m_pNotify->DisarmTester(this);
 	m_pCallback->OnProxyTesterCallback(this,
 		MAKEWPARAM(nCode, LAYERCALLBACK_LAYERSPECIFIC), wParam, lParam);
@@ -261,7 +313,8 @@ void CProxyTester::OnSend(int nErrorCode)
 
 int CProxyTester::OnLayerCallback(const CAsyncSocketExLayer *pLayer, int nType, int nCode, WPARAM wParam, LPARAM lParam)
 {
-	if (m_pProxyLayer != pLayer)
+	const int hop = m_chainLayers.HopOf(pLayer);
+	if (m_pProxyLayer != pLayer && hop < 0)
 	{
 		return 0;
 	}
@@ -269,11 +322,17 @@ int CProxyTester::OnLayerCallback(const CAsyncSocketExLayer *pLayer, int nType, 
 	//nType: LAYERCALLBACK_STATECHANGE | LAYERCALLBACK_LAYERSPECIFIC
 	if (nType == LAYERCALLBACK_LAYERSPECIFIC && nCode != 0 &&
 		nCode != PROXYSTATUS_LISTENSOCKETCREATED)
+	{
+		// The first hop to report explains the failure; the layers above it
+		// only learn afterwards that their tunnel never opened.
+		if (hop >= 0 && m_failedHop < 0)
+			m_failedHop = hop;
 		Complete(m_client.sType == SOCK_DGRAM &&
 			nCode == PROXYERROR_REQUESTFAILED
 				? PROXYERROR_UDP_RELAY_FAILED : nCode,
 			wParam, lParam);
-	else if (!m_completed)
+	}
+	else if (!m_completed && pLayer == m_pProxyLayer)
 		m_pCallback->OnProxyTesterCallback(this, MAKEWPARAM(nCode, nType),
 			wParam, lParam);
 

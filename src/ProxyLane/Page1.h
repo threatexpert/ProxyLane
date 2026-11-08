@@ -27,7 +27,7 @@ public:
 // 对话框数据
 	enum { IDD = IDD_Page1 };
 
-	CSoftCombo m_cfgls;
+	CProfileCombo m_cfgls;
 	CSoftCombo m_cbProxyType;
 	CSoftEdit     m_edit_HostName;
 	CSoftEdit     m_edit_Port;
@@ -41,7 +41,32 @@ public:
 	CModernButton m_btnProfileMenu;
  CModernButton m_btnAdvanced;
  bool m_advancedOpen = false;
+	// Profile type, fixed when the profile is created: one server, or a chain
+	// of saved server profiles in order.
+	BOOL m_chainMode = FALSE;
+	std::vector<CString> m_chainHops;
+	CListCtrl m_listChain;
+	CModernButton m_btnChainAdd;
+	CModernButton m_btnChainUp;
+	CModernButton m_btnChainDown;
+	CModernButton m_btnChainRemove;
+	CStatic m_staticChainRoute;
+	afx_msg void OnChainAdd();
+	afx_msg void OnChainUp();
+	afx_msg void OnChainDown();
+	afx_msg void OnChainRemove();
+	afx_msg void OnChainItemChanged(NMHDR* header, LRESULT* result);
+	void SetChainMode(BOOL chain);
+	void RefreshChainList(int select = -1);
+	void UpdateChainButtons();
+	// The current UI's route: hops[0] in `first`; chain->nHops is 0 for one server.
+	BOOL GetRoute(LPProxyInfo first, LPProxyChain chain);
  afx_msg void OnNewProfile();
+	afx_msg void OnNewChainProfile();
+	void NewProfile(BOOL chain);
+	// Type tags and detail lines of the picker rows, and the edited profile's tag.
+	void RefreshProfileEntries();
+	void UpdateProfileTag();
  afx_msg void OnToggleAdvanced();
  void ExpandConfiguredOptions();
  void UpdateAdvancedCaption();
@@ -67,10 +92,13 @@ private:
 	};
 
 	ProxyInfo m_ProxyInfo;
+	ProxyChain m_runtimeChain;	// nHops 0 = single upstream; guarded by m_runtimeLock
 	ProxySettingsInfo m_runtimeSettings;
 	CCriticalSection m_runtimeLock;
 	BOOL m_runtimeSettingsValid;
 	CString m_settingsValidationKey;
+	CString m_settingsValidationName;	// the chain hop a validation error is about
+	CString SettingsValidationMessage() const;
 	BOOL m_runtimeDirty;
 
 	IGlobalProxy* m_pTestProxy;
@@ -82,6 +110,8 @@ private:
 	CString m_testIpv6Address;
 	BOOL m_testUdpRequested;
 	ProxyInfo m_testProxyInfo;
+	ProxyChain m_testChain;	// nHops 0 = testing a single upstream
+	std::vector<CString> m_testChainNames;
 	BOOL m_profileDirty;
 	BOOL m_loadingProfile;
 	CString m_loadedProfileName;
@@ -142,6 +172,7 @@ public:
 	//重载IProxySettings的成员函数////////////////////////////////////////////
 	BOOL GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI);
 	BOOL GetProxySettings(LPProxySettingsInfo lpPSI);
+	BOOL GetProxyChain(const LPPRCClient pPRCC, LPProxyChain lpChain);
 
 	//IProxyTesterCallback
 	void OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM wParam, LPARAM lParam);

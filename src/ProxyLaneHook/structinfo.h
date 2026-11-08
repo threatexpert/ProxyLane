@@ -246,6 +246,16 @@ typedef struct _tagProxyInfo
 
 }ProxyInfo, *LPProxyInfo;
 
+// A strict chain of upstream proxies, used only inside the ProxyLane host.
+// hops[0] is the first hop: the server the socket connects to, and the
+// ProxyInfo that every other component (and the hook pipe) still sees.
+#define PROXY_CHAIN_MAX_HOPS 4
+typedef struct _tagProxyChain
+{
+	INT nHops;
+	ProxyInfo hops[PROXY_CHAIN_MAX_HOPS];
+}ProxyChain, *LPProxyChain;
+
 
 #define PRC_PIPESERVER_NAME _T("{1237C887-49E0-4a29-8FFA-2B4220B5BC99}")
 

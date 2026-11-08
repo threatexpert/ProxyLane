@@ -18,7 +18,7 @@ public:
 
 	VOID EndTask();
 	BOOL SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
-	IProxyLog::ConnectionStage& stage);
+	IProxyLog::ConnectionStage& stage, const ProxyChain *lpChain = NULL);
 
 	VOID OnPeerClosed(CPRCTcpPeer *pPeer);
 	BOOL IsDeletePending() const { return m_bDeletePending; }

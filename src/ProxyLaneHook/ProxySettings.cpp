@@ -22,6 +22,19 @@ BOOL CProxySettings::GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI)
 	return FALSE;
 }
 
+BOOL CProxySettings::GetProxyChain(const LPPRCClient pPRCC, LPProxyChain lpChain)
+{
+	IProxySettings *p = IProxySettings::m_pNext;
+	while(p)
+	{
+		if(p->GetProxyChain(pPRCC, lpChain))
+			return TRUE;
+		p = p->m_pNext;
+	}
+
+	return FALSE;
+}
+
 BOOL CProxySettings::GetProxySettings(LPProxySettingsInfo lpPSI)
 {
 	IProxySettings *p = IProxySettings::m_pNext;

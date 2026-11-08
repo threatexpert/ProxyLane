@@ -1869,7 +1869,188 @@ void CSoftCombo::OnPaint()
 		dc.DrawText(text, textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 		if (oldFont) dc.SelectObject(oldFont);
 	}
+	PaintField(dc, client);
 
 	paint.BitBlt(0, 0, client.Width(), client.Height(), &dc, 0, 0, SRCCOPY);
 	dc.SelectObject(oldBuffer);
+}
+
+namespace
+{
+	CString EntryKey(const CString& name)
+	{
+		CString key(name);
+		key.MakeLower();
+		return key;
+	}
+
+	// The drop-down list of a profile combo gets the soft border of the fields.
+	LRESULT CALLBACK ComboListSubclassProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam,
+		UINT_PTR id, DWORD_PTR)
+	{
+		if (message == WM_NCDESTROY)
+			::RemoveWindowSubclass(hWnd, ComboListSubclassProc, id);
+		const LRESULT result = ::DefSubclassProc(hWnd, message, wParam, lParam);
+		if (message == WM_NCPAINT)
+		{
+			if (HDC dc = ::GetWindowDC(hWnd))
+			{
+				CRect frame;
+				::GetWindowRect(hWnd, &frame);
+				frame.OffsetRect(-frame.left, -frame.top);
+				HBRUSH brush = ::CreateSolidBrush(RGB(208, 214, 223));
+				::FrameRect(dc, &frame, brush);
+				::DeleteObject(brush);
+				::ReleaseDC(hWnd, dc);
+			}
+		}
+		return result;
+	}
+}
+
+CProfileCombo::CProfileCombo()
+	: m_fieldAccent(FALSE)
+{
+}
+
+void CProfileCombo::PreSubclassWindow()
+{
+	CSoftCombo::PreSubclassWindow();
+	COMBOBOXINFO info = { sizeof(info) };
+	if (::GetComboBoxInfo(m_hWnd, &info) && info.hwndList)
+		::SetWindowSubclass(info.hwndList, ComboListSubclassProc, 0, 0);
+}
+
+void CProfileCombo::ClearEntries()
+{
+	m_entries.clear();
+}
+
+void CProfileCombo::SetEntry(const CString& name, const Entry& entry)
+{
+	m_entries[EntryKey(name)] = entry;
+}
+
+void CProfileCombo::SetFieldTag(LPCTSTR tag, BOOL accent)
+{
+	if (m_fieldTag == tag && m_fieldAccent == accent)
+		return;
+	m_fieldTag = tag;
+	m_fieldAccent = accent;
+	PlaceEdit();
+	Invalidate(FALSE);
+}
+
+LRESULT CProfileCombo::WindowProc(UINT message, WPARAM wParam, LPARAM lParam)
+{
+	const LRESULT result = CSoftCombo::WindowProc(message, wParam, lParam);
+	// The combo puts its edit child back to full width on these.
+	if (message == WM_SIZE || message == WM_SETFONT || message == CB_SETITEMHEIGHT)
+		PlaceEdit();
+	return result;
+}
+
+void CProfileCombo::PlaceEdit()
+{
+	COMBOBOXINFO info = { sizeof(info) };
+	if (!m_hWnd || !::GetComboBoxInfo(m_hWnd, &info) || !info.hwndItem || info.hwndItem == m_hWnd)
+		return;
+	CRect item(info.rcItem);
+	if (!m_fieldTag.IsEmpty())
+		item.right = max(item.left + S(24), item.right - TagWidth(m_fieldTag) - S(8));
+	CRect current;
+	::GetWindowRect(info.hwndItem, &current);
+	ScreenToClient(&current);
+	if (current != item)
+		::SetWindowPos(info.hwndItem, NULL, item.left, item.top, item.Width(), item.Height(),
+			SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+int CProfileCombo::TagWidth(const CString& tag)
+{
+	if (tag.IsEmpty())
+		return 0;
+	if (!m_tagFont.GetSafeHandle()) UiTheme::CreateUiFont(m_tagFont, m_hWnd, 8, FW_SEMIBOLD);
+	CClientDC dc(this);
+	CFont* oldFont = dc.SelectObject(&m_tagFont);
+	const int width = dc.GetTextExtent(tag).cx + S(14);
+	dc.SelectObject(oldFont);
+	return width;
+}
+
+int CProfileCombo::DrawTag(CDC& dc, const CString& tag, BOOL accent, int right, int centerY)
+{
+	if (tag.IsEmpty())
+		return right;
+	const int height = S(18);
+	CRect pill(right - TagWidth(tag), centerY - height / 2, right, centerY - height / 2 + height);
+	UiTheme::FillRoundRect(dc.m_hDC, pill, height / 2,
+		accent ? UiTheme::AccentSoft() : RGB(241, 243, 246),
+		accent ? UiTheme::AccentSoftBorder() : UiTheme::Border());
+	CFont* oldFont = dc.SelectObject(&m_tagFont);
+	dc.SetBkMode(TRANSPARENT);
+	dc.SetTextColor(accent ? UiTheme::Accent() : UiTheme::TextSecondary());
+	dc.DrawText(tag, pill, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+	dc.SelectObject(oldFont);
+	return pill.left;
+}
+
+void CProfileCombo::PaintField(CDC& dc, const CRect& client)
+{
+	COMBOBOXINFO info = { sizeof(info) };
+	if (!m_fieldTag.IsEmpty() && ::GetComboBoxInfo(m_hWnd, &info))
+		DrawTag(dc, m_fieldTag, m_fieldAccent && IsWindowEnabled(), info.rcItem.right - S(2), client.CenterPoint().y);
+}
+
+void CProfileCombo::MeasureItem(LPMEASUREITEMSTRUCT measureItem)
+{
+	measureItem->itemHeight = S(40);
+}
+
+void CProfileCombo::DrawItem(LPDRAWITEMSTRUCT drawItem)
+{
+	CDC* dc = CDC::FromHandle(drawItem->hDC);
+	const CRect row(drawItem->rcItem);
+	dc->FillSolidRect(row, RGB(255, 255, 255));
+	if (drawItem->itemID == static_cast<UINT>(-1))
+		return;
+
+	if (drawItem->itemState & ODS_SELECTED)
+	{
+		CRect highlight(row);
+		highlight.DeflateRect(S(4), S(2));
+		UiTheme::FillRoundRect(dc->m_hDC, highlight, S(6), UiTheme::AccentSoft(), CLR_NONE);
+	}
+
+	CString name;
+	GetLBText(drawItem->itemID, name);
+	Entry entry;
+	const auto found = m_entries.find(EntryKey(name));
+	if (found != m_entries.end())
+		entry = found->second;
+
+	CRect text(row);
+	text.DeflateRect(S(12), 0);
+	text.right = DrawTag(*dc, entry.tag, entry.accent, text.right, row.CenterPoint().y) - S(10);
+
+	dc->SetBkMode(TRANSPARENT);
+	CFont* oldFont = dc->SelectObject(GetFont());
+	dc->SetTextColor(UiTheme::TextPrimary());
+	const UINT format = DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
+	if (entry.detail.IsEmpty())
+	{
+		dc->DrawText(name, text, format | DT_VCENTER);
+	}
+	else
+	{
+		const int middle = row.CenterPoint().y + S(1);
+		CRect nameRect(text.left, row.top, text.right, middle);
+		CRect detailRect(text.left, middle, text.right, row.bottom);
+		dc->DrawText(name, nameRect, format | DT_BOTTOM);
+		if (!m_detailFont.GetSafeHandle()) UiTheme::CreateUiFont(m_detailFont, m_hWnd, 8);
+		dc->SelectObject(&m_detailFont);
+		dc->SetTextColor(UiTheme::TextSecondary());
+		dc->DrawText(entry.detail, detailRect, format | DT_TOP);
+	}
+	dc->SelectObject(oldFont);
 }
