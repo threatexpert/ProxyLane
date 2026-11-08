@@ -684,6 +684,20 @@ BOOL CProxyLaneDlg::OnInitDialog()
 	s_uTaskbarRestart = RegisterWindowMessage(TEXT("TaskbarCreated"));
 
 	AddTaskbarIcons();
+	// The dialog template is smaller than the pages need (Settings scrolled at
+	// the default size). Open roomier, but never beyond the monitor's work area.
+	{
+		CRect window;
+		GetWindowRect(&window);
+		MONITORINFO monitor = { sizeof(monitor) };
+		if (::GetMonitorInfo(::MonitorFromWindow(m_hWnd, MONITOR_DEFAULTTONEAREST), &monitor))
+		{
+			const CRect work(monitor.rcWork);
+			const int width = min(max(window.Width(), UiTheme::ScaleForWindow(m_hWnd, 900)), work.Width() * 9 / 10);
+			const int height = min(max(window.Height(), UiTheme::ScaleForWindow(m_hWnd, 620)), work.Height() * 9 / 10);
+			SetWindowPos(NULL, 0, 0, width, height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+		}
+	}
 	m_MainTab.FinalizeLayout(FALSE);
 	// The dialog is hidden while its child pages are initialized, so explicitly
 	// apply the normal dialog centering before its first visible frame.
