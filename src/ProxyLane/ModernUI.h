@@ -44,8 +44,9 @@ namespace UiTheme
 	COLORREF DangerSoft();
 
 	int ScaleForWindow(HWND hWnd, int value);
+	// faceName NULL picks the UI face for the current language.
 	BOOL CreateUiFont(CFont& font, HWND hWnd, int pointSize,
-		int weight = FW_NORMAL, LPCTSTR faceName = _T("Segoe UI"));
+		int weight = FW_NORMAL, LPCTSTR faceName = NULL);
 	void ApplyFontToChildren(CWnd* parent, CFont* font);
 }
 

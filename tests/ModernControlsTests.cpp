@@ -7,6 +7,7 @@
 namespace Localization {
 void ApplyDialog(CWnd*, UINT) {}
 CString Get(LPCTSTR key) { return key; }
+CString CurrentLanguage() { return _T("en-US"); }
 }
 CWinApp application;
 void TestLaunchPanelInteractions();
