@@ -229,10 +229,62 @@ namespace UiTheme
 		return MulDiv(value, dpi, 96);
 	}
 
+	namespace
+	{
+		int CALLBACK MarkFontFound(const LOGFONT*, const TEXTMETRIC*, DWORD, LPARAM found)
+		{
+			*reinterpret_cast<BOOL*>(found) = TRUE;
+			return 0;
+		}
+
+		BOOL IsFontInstalled(LPCTSTR faceName)
+		{
+			LOGFONT query = { 0 };
+			query.lfCharSet = DEFAULT_CHARSET;
+			_tcsncpy_s(query.lfFaceName, faceName, _TRUNCATE);
+			BOOL found = FALSE;
+			HDC dc = ::GetDC(NULL);
+			if (dc)
+			{
+				::EnumFontFamiliesEx(dc, &query, MarkFontFound, reinterpret_cast<LPARAM>(&found), 0);
+				::ReleaseDC(NULL, dc);
+			}
+			return found;
+		}
+
+		// Segoe UI has no CJK glyphs, so GDI font linking fills them from the first
+		// linked font that has them. On systems whose link chain lists Meiryo UI first,
+		// Chinese text comes out with Japanese glyph forms, so name a Chinese face.
+		LPCTSTR DefaultFaceName()
+		{
+			if (Localization::CurrentLanguage().CompareNoCase(_T("zh-CN")) != 0)
+				return _T("Segoe UI");
+
+			static LPCTSTR chineseFace = NULL;
+			if (!chineseFace)
+			{
+				static const LPCTSTR candidates[] = {
+					_T("Microsoft YaHei UI"), _T("Microsoft YaHei"), _T("SimSun") };
+				chineseFace = candidates[_countof(candidates) - 1];
+				for (int i = 0; i < _countof(candidates); ++i)
+				{
+					if (IsFontInstalled(candidates[i]))
+					{
+						chineseFace = candidates[i];
+						break;
+					}
+				}
+			}
+			return chineseFace;
+		}
+	}
+
 	BOOL CreateUiFont(CFont& font, HWND hWnd, int pointSize, int weight, LPCTSTR faceName)
 	{
 		if (font.GetSafeHandle())
 			font.DeleteObject();
+		if (!faceName)
+			faceName = DefaultFaceName();
 
 		HDC dc = ::GetDC(hWnd);
 		int dpi = dc ? ::GetDeviceCaps(dc, LOGPIXELSY) : 96;
@@ -312,6 +364,15 @@ BOOL CModernDialog::OnInitDialog()
 			}
 			control = CWnd::FromHandlePermanent(child);
 		}
+		// Localized labels contain a literal "&" (e.g. "Settings & About"); a static
+		// without SS_NOPREFIX would treat it as a mnemonic and drop it.
+		TCHAR className[32] = {};
+		::GetClassName(child, className, _countof(className));
+		const DWORD style = ::GetWindowLong(child, GWL_STYLE);
+		const DWORD staticType = style & SS_TYPEMASK;
+		if (_tcsicmp(className, _T("Static")) == 0
+			&& (staticType <= SS_RIGHT || staticType == SS_SIMPLE || staticType == SS_LEFTNOWORDWRAP))
+			::SetWindowLong(child, GWL_STYLE, style | SS_NOPREFIX);
 		// Subclassing is now complete, so our non-client padding participates.
 		if (control && control->IsKindOf(RUNTIME_CLASS(CSoftEdit)))
 			control->SetWindowPos(NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
