@@ -12,6 +12,7 @@
   "launch.profile_direct": "Direct (NOPROXY)",
   "page1.direct_group": "Direct Mode",
   "page1.direct_hint": "Connect directly without an upstream proxy while still allowing application traffic monitoring and decryption.",
+  "page1.first_run_hint": "Welcome! The Test profile is only a placeholder. Enter your proxy server address and port, then click Test Connection and Enable Profile. To monitor traffic without a proxy, choose the Direct profile.",
   "test.direct_connection_failed": "Cannot connect to the test destination. Check the network and destination service.",
   "page3.accessible_process_list": "Running processes",
   "profile.actions": "Actions ▾",

@@ -150,6 +150,8 @@ CString ConfigStorage::ErrorText(DWORD error)
     if (text.IsEmpty()) text.Format(L"Windows error %lu", error);
     return text;
 }
+static bool g_createdDefaults = false;
+bool ConfigStorage::CreatedDefaults() { return g_createdDefaults; }
 bool ConfigStorage::Initialize()
 {
     const CString path = Path();
@@ -158,7 +160,7 @@ bool ConfigStorage::Initialize()
     Lock lock(path); if (!lock.Valid()) return false;
     if (Exists(path)) return true;
     // The release ZIP contains no active INI, so upgrades cannot overwrite it.
-    return Update(path, [](const CString& staged) {
+    return g_createdDefaults = Update(path, [](const CString& staged) {
         static const wchar_t defaults[] =
             L"[options]\r\nlastselected=Test\r\nDecryptHTTPS=1\r\nDecryptQUIC=1\r\n"
             L"[proxy_Test]\r\nType=SOCKS5\r\nHost=127.0.0.1\r\nPort=1080\r\nHookChildProcess=1\r\nHookTCP=1\r\nHookUDP=0\r\nBlockUDP=1\r\nTargetFilterMode=1\r\n"

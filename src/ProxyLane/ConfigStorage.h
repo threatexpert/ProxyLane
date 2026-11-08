@@ -19,6 +19,8 @@ CString PortablePath();
 CString UserPath();
 CString Directory(const CString& path);
 bool Initialize();
+// True when Initialize wrote the first-run defaults during this run.
+bool CreatedDefaults();
 bool EnsureDirectory(const CString& directory);
 bool SetPortable(bool enabled); // Changes only portable.flag; takes effect on restart.
 // Edits a private staging copy, then atomically replaces the original.

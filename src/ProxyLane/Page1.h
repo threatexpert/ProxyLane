@@ -86,6 +86,9 @@ private:
 	BOOL m_loadingProfile;
 	CString m_loadedProfileName;
 	CString m_draftProfileName;
+	// Fresh settings file: guide the user until a profile is saved or enabled.
+	BOOL m_firstRunGuide = FALSE;
+	void EndFirstRunGuide();
 
 	BOOL m_bDisableLLMNR;
 	BOOL m_bDisableMDNS;
@@ -127,6 +130,7 @@ public:
 	CString QuicUdpWarning(); // UI thread: active settings, or selected draft while stopped.
 	BOOL ConfirmDiscardUnsavedChanges();
 	BOOL HasUnsavedProfileChanges() const { return m_profileDirty; }
+	BOOL IsFirstRunGuideActive() const { return m_firstRunGuide; }
 	CString GetSelectedProfileName() { return GetCurrentProfileName(); }
 	CString GetSelectedProfileSummary();
 	CString GetSelectedRecentProfileId();
