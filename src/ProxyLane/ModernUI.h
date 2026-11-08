@@ -21,6 +21,9 @@ namespace UiTheme
 	// fill/border may be CLR_NONE to skip that part. `radius` is in pixels.
 	void FillRoundRect(HDC dc, const CRect& rect, int radius, COLORREF fill, COLORREF border);
 	void DrawElevationBadge(HDC dc, const CRect& rect);
+	// Round "remove" badge: a red disc with a white ring and cross, drawn over a
+	// tile corner. `pressed` darkens it while the pointer is held on it.
+	void DrawRemoveBadge(HDC dc, const CRect& rect, BOOL pressed);
 	// Transparent image-list overlay; caller owns the returned icon.
 	HICON CreateElevationOverlay(int iconSize);
 
@@ -99,11 +102,22 @@ public:
 		STYLE_SECONDARY,
 		STYLE_PRIMARY,
 		STYLE_DANGER,
-		STYLE_GHOST
+		STYLE_GHOST,
+		// Accent-tinted secondary action: as visible as a primary button beside it.
+		STYLE_SOFT
+	};
+	enum Icon
+	{
+		ICON_NONE,
+		ICON_POWER, // enable / start
+		ICON_GAUGE  // test a connection (speedometer)
 	};
 
 	CModernButton();
 	void SetVisualStyle(VisualStyle style);
+	// Line icon drawn before the caption; callers add IconWidth() to the width.
+	void SetIcon(Icon icon);
+	int IconWidth() const;
 	// Colour behind the rounded corners; defaults to the page background.
 	void SetBackdropColor(COLORREF color);
 
@@ -114,6 +128,7 @@ protected:
 	afx_msg LRESULT OnMouseLeave(WPARAM, LPARAM);
 
 	VisualStyle m_visualStyle;
+	Icon m_icon;
 	COLORREF m_backdrop;
 	BOOL m_hot;
 
@@ -175,8 +190,11 @@ public:
 	// boxed badge, so it does not read as a (disabled) button next to buttons.
 	void SetInlineStyle(BOOL inlineStyle);
 	void SetStatus(LPCTSTR text, Tone tone);
+	Tone GetTone() const { return m_tone; }
 	void SetTwoLineStatus(LPCTSTR primaryText, LPCTSTR secondaryText, Tone tone, BOOL compact = FALSE);
 	void SetDetailText(const CString& text);
+	// Two-line status only: rates as values (for example "1.2 KB/s"); the card
+	// draws the arrows and the localized Upload/Download labels itself.
 	void SetTrafficRates(LPCTSTR uploadText, LPCTSTR downloadText);
 	void SetBackdropColor(COLORREF color);
 

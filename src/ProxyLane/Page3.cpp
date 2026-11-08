@@ -851,6 +851,13 @@ BOOL CPage3::OnInitDialog()
 	m_btnStopProxy.SetFont(&m_uiFont, FALSE);
 	m_btnStopProxy.SetVisualStyle(CModernButton::STYLE_DANGER);
 	m_btnStopProxy.SetBackdropColor(UiTheme::Surface());
+	// Lets the user check the selected profile before enabling it.
+	m_btnTestProxy.Create(Localization::Get(_T("action.test_current")),
+		WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_TEST_PROXY_APP);
+	m_btnTestProxy.SetFont(&m_uiFont, FALSE);
+	m_btnTestProxy.SetVisualStyle(CModernButton::STYLE_SOFT);
+	m_btnTestProxy.SetIcon(CModernButton::ICON_GAUGE);
+	m_btnTestProxy.SetBackdropColor(UiTheme::Surface());
 	if (m_launchPanel.Create(this, IDC_LAUNCH_PANEL))
 		m_launchPanel.SetWindowPos(&wndBottom, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 	SetTimer(TIMER_LAUNCH_PANEL, 500, NULL);
@@ -1256,6 +1263,7 @@ BEGIN_MESSAGE_MAP(CPage3, CModernDialog)
 	ON_MESSAGE(WM_LAUNCH_PANEL_SHORTCUT, &CPage3::OnLaunchPanelShortcut)
 	ON_BN_CLICKED(IDC_PROCESS_TOGGLE, &CPage3::OnBnClickedProcessToggle)
 	ON_BN_CLICKED(IDC_STOP_PROXY_APP, &CPage3::OnBnClickedStopProxy)
+	ON_BN_CLICKED(IDC_TEST_PROXY_APP, &CPage3::OnBnClickedTestProxy)
 	ON_MESSAGE(WM_RECENT_APPLICATIONS_CHANGED, &CPage3::OnRecentApplicationsChanged)
 	ON_MESSAGE(WM_WINDOW_FINDER_BEGIN, &CPage3::OnWindowFinderBegin)
 	ON_MESSAGE(WM_WINDOW_FINDER_UPDATE, &CPage3::OnWindowFinderUpdate)
@@ -1305,10 +1313,15 @@ void CPage3::LayoutProcessPage()
 	if (m_launchPanel.GetSafeHwnd())
 	{
 		m_launchPanel.SetCompact(m_processesExpanded);
-		const int actionWidth = textWidth(m_btnSelectApp, 150);
+		// The short "Enable" (with icon) does not need the wide primary slot.
+		const int actionWidth = m_btnSelectApp.IconWidth()
+			? textWidth(m_btnSelectApp, 96) + m_btnSelectApp.IconWidth() : textWidth(m_btnSelectApp, 150);
 		const BOOL running = g_MainTab && g_MainTab->IsProxyRunning();
 		const int stopWidth = running ? textWidth(m_btnStopProxy, 96) : 0;
-		m_launchPanel.SetActionWidth(actionWidth + (running ? stopWidth + UiTheme::ScaleForWindow(m_hWnd, 10) : 0));
+		const BOOL testing = !running && HasConfiguredProxy();
+		const int testWidth = testing ? textWidth(m_btnTestProxy, 88) + m_btnTestProxy.IconWidth() : 0;
+		const int secondaryWidth = running ? stopWidth : testWidth;
+		m_launchPanel.SetActionWidth(actionWidth + (secondaryWidth ? secondaryWidth + UiTheme::ScaleForWindow(m_hWnd, 10) : 0));
 		const int panelHeight = m_launchPanel.PreferredHeight(rcClient.Width() - margin * 2);
 		CRect panel(margin, top, rcClient.right - margin, top + panelHeight);
 		m_launchPanel.MoveWindow(&panel);
@@ -1320,6 +1333,11 @@ void CPage3::LayoutProcessPage()
 		{
 			m_btnStopProxy.MoveWindow(panel.left + slot.left - stopWidth - UiTheme::ScaleForWindow(m_hWnd, 10),
 				panel.top + slot.top, stopWidth, actionHeight);
+		}
+		if (m_btnTestProxy.GetSafeHwnd() && testing)
+		{
+			m_btnTestProxy.MoveWindow(panel.left + slot.left - testWidth - UiTheme::ScaleForWindow(m_hWnd, 10),
+				panel.top + slot.top, testWidth, actionHeight);
 		}
 		top = panel.bottom + UiTheme::ScaleForWindow(m_hWnd, 16);
 	}
@@ -1539,6 +1557,7 @@ void CPage3::ReloadRecentApplications(BOOL force)
 		tile.elevated = m_recentEntries[i].elevated;
 		tile.pinned = m_recentEntries[i].pinned;
 		tile.available = m_recentEntries[i].available;
+		tile.packaged = m_recentEntries[i].app.IsPackaged();
 		tiles.push_back(tile);
 	}
 	const int oldPanelHeight = m_launchPanel.PreferredHeight();
@@ -1612,16 +1631,52 @@ void CPage3::RefreshLaunchPanel()
 		(m_recentReadFailed ? L"recent.read_failed" : L"recent.empty"));
 	LPCTSTR titleKey = running ? _T("launch.title_ready") : (configured ? _T("launch.title_offline") : _T("launch.title_unconfigured"));
 	LPCTSTR bodyKey = running ? _T("launch.body_ready") : (configured ? _T("launch.body_offline") : _T("launch.body_unconfigured"));
-	m_launchPanel.SetText(Localization::Get(titleKey), Localization::Get(bodyKey),
+	CString body = Localization::Get(bodyKey);
+	COLORREF bodyColor = CLR_NONE;
+	CPage1* settings = g_MainTab ? g_MainTab->GetPage1() : NULL;
+	const BOOL testAvailable = !running && configured && settings;
+	if (!testAvailable) m_showTestStatus = FALSE;
+	if (m_showTestStatus)
+	{
+		CStatusLabel::Tone tone;
+		const CString status = settings->GetProxyTestStatus(tone);
+		// Editing or switching the profile resets Page1 to a neutral status.
+		if (settings->IsProxyTesting() || (tone != CStatusLabel::TONE_NEUTRAL && !status.IsEmpty()))
+		{
+			body = status;
+			bodyColor = tone == CStatusLabel::TONE_SUCCESS ? UiTheme::Success() :
+				tone == CStatusLabel::TONE_DANGER ? UiTheme::Danger() :
+				tone == CStatusLabel::TONE_WARNING ? RGB(180, 83, 9) :
+				tone == CStatusLabel::TONE_INFO ? UiTheme::Accent() : CLR_NONE;
+		}
+		else if (!settings->IsProxyTesting())
+			m_showTestStatus = FALSE;
+	}
+	m_launchPanel.SetText(Localization::Get(titleKey), body,
 		Localization::Get(_T("recent.title")), empty);
+	m_launchPanel.SetBodyColor(bodyColor);
 	m_launchPanel.SetEnabledState(running);
 	m_launchPanel.SetProfileSummary(!running && configured ?
 		g_MainTab->GetPage1()->GetSelectedProfileSummary() : CString());
 	if (m_btnStopProxy.GetSafeHwnd())
 		m_btnStopProxy.ShowWindow(running ? SW_SHOW : SW_HIDE);
+	BOOL relayout = FALSE;
+	if (m_btnTestProxy.GetSafeHwnd())
+	{
+		const BOOL wasVisible = m_btnTestProxy.IsWindowVisible();
+		m_btnTestProxy.ShowWindow(testAvailable ? SW_SHOW : SW_HIDE);
+		const CString testText = Localization::Get(testAvailable && settings->IsProxyTesting()
+			? _T("launch.action_cancel_test") : _T("launch.action_test"));
+		CString currentTest;
+		m_btnTestProxy.GetWindowText(currentTest);
+		if (currentTest != testText) { m_btnTestProxy.SetWindowText(testText); relayout = TRUE; }
+		if (wasVisible != testAvailable) relayout = TRUE;
+	}
 
 	// One action button whose meaning follows the state of the proxy.
-	LPCTSTR actionKey = running ? _T("apps.select") : (configured ? _T("action.start_proxy") : _T("launch.goto_proxy"));
+	// Beside the header that names the profile, short verbs are enough.
+	LPCTSTR actionKey = running ? _T("apps.select") : (configured ? _T("launch.action_enable") : _T("launch.goto_proxy"));
+	m_btnSelectApp.SetIcon(!running && configured ? CModernButton::ICON_POWER : CModernButton::ICON_NONE);
 	const CString actionText = Localization::Get(actionKey);
 	CString current;
 	m_btnSelectApp.GetWindowText(current);
@@ -1630,8 +1685,19 @@ void CPage3::RefreshLaunchPanel()
 		m_btnSelectApp.SetWindowText(actionText);
 		LayoutProcessPage();
 	}
-	else if (oldPanelHeight != m_launchPanel.PreferredHeight())
+	else if (relayout || oldPanelHeight != m_launchPanel.PreferredHeight())
 		LayoutProcessPage();
+}
+
+void CPage3::OnBnClickedTestProxy()
+{
+	CPage1* settings = g_MainTab ? g_MainTab->GetPage1() : NULL;
+	if (!settings || g_MainTab->IsProxyRunning()) return;
+	// Same test as the proxy page: it uses the selected profile, including
+	// unsaved edits, and a second click cancels a running test.
+	settings->OnBnClickedTestproxy();
+	m_showTestStatus = TRUE;
+	RefreshLaunchPanel();
 }
 
 void CPage3::OnBnClickedStopProxy()
@@ -1689,10 +1755,14 @@ LRESULT CPage3::OnLaunchPanelProfile(WPARAM, LPARAM)
 	return 0;
 }
 
-LRESULT CPage3::OnLaunchPanelTile(WPARAM index, LPARAM)
+LRESULT CPage3::OnLaunchPanelTile(WPARAM index, LPARAM elevate)
 {
 	if (m_recentLaunching || !g_MainTab || index >= m_recentEntries.size()) return 0;
-	const RecentApplications::Entry entry = m_recentEntries[index];
+	RecentApplications::Entry entry = m_recentEntries[index];
+	// "Start as administrator" from the tile menu. Elevation is part of a recent
+	// entry's identity, so this adds an elevated tile beside the ordinary one,
+	// as choosing administrator in the application picker already does.
+	if (elevate && !entry.app.IsPackaged()) entry.elevated = TRUE;
 	m_recentLaunching = TRUE;
 	struct Reset {
 		BOOL& flag; CLaunchPanel& panel;

@@ -239,6 +239,10 @@ private:
 	CLaunchPanel m_launchPanel;
 	CModernButton m_processToggle;
 	CModernButton m_btnStopProxy;
+	CModernButton m_btnTestProxy;
+	// Set by the test button: the launch header shows the test result in place
+	// of its explanation until the proxy starts or the test status resets.
+	BOOL m_showTestStatus = FALSE;
 	BOOL m_processesExpanded;
 	std::vector<RecentApplications::Entry> m_recentEntries;
 	RecentApplications::Load* m_recentLoad;
@@ -323,6 +327,7 @@ public:
 	afx_msg LRESULT OnLaunchPanelShortcut(WPARAM, LPARAM);
 	afx_msg void OnBnClickedProcessToggle();
 	afx_msg void OnBnClickedStopProxy();
+	afx_msg void OnBnClickedTestProxy();
 	afx_msg LRESULT OnRecentApplicationsChanged(WPARAM, LPARAM);
 	afx_msg void OnLvnColumnClickProcessList(NMHDR* notifyHeader, LRESULT* result);
 	afx_msg void OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result);
