@@ -536,12 +536,16 @@ void CPage4::SetMonitorControls(bool busy)
 }
 void CPage4::OnOptions() {
     if(!m_mitmSupported || m_job || m_stopJob || IsViewingRecording())return;
-    CMenu menu;menu.CreatePopupMenu();
+    CModernPopupMenu menu;menu.CreatePopupMenu();
     menu.AppendMenu(MF_STRING,1,Localization::Get(L"mitm.ca"));
     menu.AppendMenu(MF_STRING,2,Localization::Get(L"recording.options"));
     menu.AppendMenu(MF_SEPARATOR);
     menu.AppendMenu(MF_STRING|(!m_openRecording.IsWindowEnabled()?MF_GRAYED:0),3,Localization::Get(L"recording.view_open"));
     menu.AppendMenu(MF_STRING,4,Localization::Get(L"recording.open_root"));
+    menu.SetItemIcon(1,CModernPopupMenu::CERTIFICATE);
+    menu.SetItemIcon(2,CModernPopupMenu::SETTINGS);
+    menu.SetItemIcon(3,CModernPopupMenu::FOLDER);
+    menu.SetItemIcon(4,CModernPopupMenu::FOLDER);
     CRect rect;m_options.GetWindowRect(rect);
     switch(menu.TrackPopupMenu(TPM_RETURNCMD|TPM_RIGHTALIGN|TPM_RIGHTBUTTON,rect.right,rect.bottom,this)) {
         case 1:OnCA();break;

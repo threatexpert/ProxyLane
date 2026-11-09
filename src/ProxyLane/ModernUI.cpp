@@ -445,6 +445,176 @@ namespace UiTheme
 	}
 }
 
+namespace
+{
+	void DrawMenuIcon(HDC dc, CModernPopupMenu::Icon icon, const CRect& box, COLORREF color)
+	{
+		if (icon == CModernPopupMenu::NONE) return;
+		if (icon == CModernPopupMenu::SHIELD) { UiTheme::DrawElevationBadge(dc, box); return; }
+		UiTheme::EnsureGdiplus();
+		Gdiplus::Graphics g(dc);
+		g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+		g.TranslateTransform((float)box.left, (float)box.top);
+		g.ScaleTransform(box.Width() / 16.0f, box.Height() / 16.0f);
+		Gdiplus::Pen pen(Gdiplus::Color(255, GetRValue(color), GetGValue(color), GetBValue(color)), 1.35f);
+		pen.SetStartCap(Gdiplus::LineCapRound); pen.SetEndCap(Gdiplus::LineCapRound);
+		pen.SetLineJoin(Gdiplus::LineJoinRound);
+		auto line = [&](float x1, float y1, float x2, float y2) { g.DrawLine(&pen, x1, y1, x2, y2); };
+		switch (icon)
+		{
+		case CModernPopupMenu::ADD: line(8,3,8,13); line(3,8,13,8); break;
+		case CModernPopupMenu::COPY:
+			g.DrawRectangle(&pen, 5,5,8,8); line(3,10,2,10); line(2,10,2,2); line(2,2,10,2); break;
+		case CModernPopupMenu::PASTE:
+			g.DrawRectangle(&pen, 3,4,10,10); g.DrawRectangle(&pen, 5,2,6,3); line(6,8,10,8); line(6,11,10,11); break;
+		case CModernPopupMenu::REMOVE:
+			line(2,4,14,4); line(6,2,10,2); line(4,6,5,14); line(5,14,11,14); line(11,14,12,6);
+			line(7,7,7,11); line(9,7,9,11); break;
+		case CModernPopupMenu::LAUNCH: line(5,3,13,8); line(13,8,5,13); line(5,13,5,3); break;
+		case CModernPopupMenu::LINK:
+			line(8,3,13,3); line(13,3,13,8); line(13,3,6,10);
+			line(5,4,3,4); line(3,4,3,13); line(3,13,12,13); line(12,13,12,11); break;
+		case CModernPopupMenu::REORDER:
+			for (int y=4;y<=12;y+=4) { line(3,(float)y,4,(float)y); line(7,(float)y,13,(float)y); } break;
+		case CModernPopupMenu::MOVE_UP:
+			line(8,13,8,3); line(4,7,8,3); line(8,3,12,7); break;
+		case CModernPopupMenu::MOVE_DOWN:
+			line(8,3,8,13); line(4,9,8,13); line(8,13,12,9); break;
+		case CModernPopupMenu::PIN:
+		case CModernPopupMenu::UNPIN:
+			line(5,2,11,2); line(6,2,6,6); line(10,2,10,6);
+			line(6,6,3,10); line(10,6,13,10); line(3,10,13,10); line(8,10,8,14);
+			if (icon == CModernPopupMenu::UNPIN) line(2,2,14,14);
+			break;
+		case CModernPopupMenu::SETTINGS:
+			line(2,5,5,5); line(9,5,14,5); g.DrawEllipse(&pen,5,3,4,4);
+			line(2,11,8,11); line(12,11,14,11); g.DrawEllipse(&pen,8,9,4,4); break;
+		case CModernPopupMenu::CERTIFICATE:
+			g.DrawRectangle(&pen,2,2,11,10); line(5,5,10,5); g.DrawEllipse(&pen,7,8,5,5);
+			line(8,13,8,15); line(11,13,11,15); break;
+		case CModernPopupMenu::FOLDER:
+			line(2,4,6,4); line(6,4,8,6); line(8,6,14,6); line(14,6,14,13);
+			line(14,13,2,13); line(2,13,2,4); break;
+		default: break;
+		}
+	}
+}
+
+CModernPopupMenu::CModernPopupMenu() : m_dpi(96), m_width(0), m_rowHeight(0) {}
+CModernPopupMenu::~CModernPopupMenu()
+{
+	// Destroy while the brush and owner-draw item data are still alive.
+	if (GetSafeHmenu()) DestroyMenu();
+}
+int CModernPopupMenu::Scale(int value) const { return MulDiv(value, m_dpi, 96); }
+void CModernPopupMenu::SetItemIcon(UINT command, Icon icon) { m_icons[command] = icon; }
+
+BOOL CModernPopupMenu::TrackPopupMenu(UINT flags, int x, int y, CWnd* owner, LPCRECT exclude)
+{
+	HIGHCONTRAST contrast = { sizeof(contrast) };
+	if (::SystemParametersInfo(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0) &&
+		(contrast.dwFlags & HCF_HIGHCONTRASTON))
+		return CMenu::TrackPopupMenu(flags, x, y, owner, exclude);
+
+	m_dpi = UiTheme::WindowDpi(owner->GetSafeHwnd());
+	LOGFONT font = { 0 };
+	font.lfHeight = -MulDiv(9, m_dpi, 72);
+	font.lfCharSet = DEFAULT_CHARSET;
+	_tcsncpy_s(font.lfFaceName, UiTheme::DefaultFaceName(), _TRUNCATE);
+	m_font.DeleteObject(); m_font.CreateFontIndirect(&font);
+	font.lfWeight = FW_BOLD;
+	m_defaultFont.DeleteObject(); m_defaultFont.CreateFontIndirect(&font);
+	m_background.DeleteObject(); m_background.CreateSolidBrush(UiTheme::WindowBackground());
+	MENUINFO info = { sizeof(info) };
+	info.fMask = MIM_BACKGROUND;
+	info.hbrBack = (HBRUSH)m_background.GetSafeHandle();
+	::SetMenuInfo(m_hMenu, &info);
+
+	const int count = GetMenuItemCount();
+	m_items.resize(count);
+	CClientDC dc(owner);
+	CFont* previous = dc.SelectObject(&m_defaultFont);
+	m_width = Scale(200);
+	m_rowHeight = Scale(28);
+	for (int i=0; i<count; ++i)
+	{
+		Item& item = m_items[i];
+		// Retain strings in the native menu for accessibility and mnemonic lookup.
+		GetMenuString(i, item.text, MF_BYPOSITION);
+		MENUITEMINFO native = { sizeof(native) };
+		native.fMask = MIIM_FTYPE | MIIM_ID;
+		::GetMenuItemInfo(m_hMenu, i, TRUE, &native);
+		item.type = native.fType;
+		auto icon = m_icons.find(native.wID);
+		item.icon = icon == m_icons.end() ? NONE : icon->second;
+		CRect text(0,0,0,0);
+		dc.DrawText(item.text, &text, DT_CALCRECT | DT_SINGLELINE);
+		m_width = max(m_width, text.Width() + Scale(64));
+		m_rowHeight = max(m_rowHeight, text.Height() + Scale(6));
+		native.fMask = MIIM_FTYPE | MIIM_DATA;
+		native.fType |= MFT_OWNERDRAW;
+		native.dwItemData = reinterpret_cast<ULONG_PTR>(&item);
+		::SetMenuItemInfo(m_hMenu, i, TRUE, &native);
+	}
+	dc.SelectObject(previous);
+	const BOOL result = CMenu::TrackPopupMenu(flags, x, y, owner, exclude);
+	// Allow the same menu object to be shown again without losing its text/type.
+	for (int i=0; i<count; ++i)
+	{
+		MENUITEMINFO native = { sizeof(native) };
+		native.fMask = MIIM_FTYPE | MIIM_DATA;
+		native.fType = m_items[i].type; native.dwItemData = 0;
+		::SetMenuItemInfo(m_hMenu, i, TRUE, &native);
+	}
+	return result;
+}
+
+void CModernPopupMenu::MeasureItem(LPMEASUREITEMSTRUCT measure)
+{
+	const Item& item = *reinterpret_cast<const Item*>(measure->itemData);
+	measure->itemWidth = m_width;
+	measure->itemHeight = (item.type & MFT_SEPARATOR) ? Scale(5) : m_rowHeight;
+}
+
+void CModernPopupMenu::DrawItem(LPDRAWITEMSTRUCT draw)
+{
+	const Item& item = *reinterpret_cast<const Item*>(draw->itemData);
+	CDC* dc = CDC::FromHandle(draw->hDC);
+	const int saved = dc->SaveDC();
+	CRect row(draw->rcItem);
+	dc->FillSolidRect(row, UiTheme::WindowBackground());
+	if (item.type & MFT_SEPARATOR)
+	{
+		dc->FillSolidRect(row.left+Scale(12), row.CenterPoint().y, row.Width()-Scale(24), max(1,Scale(1)), UiTheme::BorderSoft());
+	}
+	else
+	{
+		const bool disabled = (draw->itemState & (ODS_DISABLED | ODS_GRAYED)) != 0;
+		const bool selected = (draw->itemState & ODS_SELECTED) != 0 && !disabled;
+		const bool danger = item.icon == REMOVE;
+		CRect highlight(row); highlight.DeflateRect(Scale(4), Scale(2));
+		if (selected) UiTheme::FillRoundRect(draw->hDC, highlight, Scale(5),
+			danger ? UiTheme::DangerSoft() : UiTheme::AccentSoft(), CLR_NONE);
+		const COLORREF color = disabled ? RGB(163,170,182) : danger ? UiTheme::Danger() :
+			selected ? UiTheme::Accent() : UiTheme::TextPrimary();
+		CRect icon(row.left+Scale(12), row.CenterPoint().y-Scale(8), row.left+Scale(28), row.CenterPoint().y+Scale(8));
+		// A native checked item takes priority over the optional decorative icon.
+		if (draw->itemState & ODS_CHECKED)
+		{
+			CPen pen(PS_SOLID, max(1,Scale(2)), color); CPen* old = dc->SelectObject(&pen);
+			dc->MoveTo(icon.left+Scale(2), icon.CenterPoint().y);
+			dc->LineTo(icon.left+Scale(6), icon.bottom-Scale(3)); dc->LineTo(icon.right-Scale(1), icon.top+Scale(3));
+			dc->SelectObject(old);
+		}
+		else if (!(disabled && item.icon == SHIELD)) DrawMenuIcon(draw->hDC, item.icon, icon, color);
+		dc->SelectObject((draw->itemState & ODS_DEFAULT) ? &m_defaultFont : &m_font);
+		dc->SetBkMode(TRANSPARENT); dc->SetTextColor(color);
+		CRect text(row); text.left += Scale(40); text.right -= Scale(16);
+		dc->DrawText(item.text, &text, DT_SINGLELINE | DT_VCENTER | ((draw->itemState & ODS_NOACCEL) ? DT_HIDEPREFIX : 0));
+	}
+	dc->RestoreDC(saved);
+}
+
 IMPLEMENT_DYNAMIC(CModernDialog, CDialog)
 
 CModernDialog::CModernDialog(UINT templateId, CWnd* parent)

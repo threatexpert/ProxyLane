@@ -114,7 +114,7 @@ void CPage1::ShowProfileNotice(LPCTSTR primary, LPCTSTR secondary, CStatusLabel:
 
 void CPage1::OnProfileMenu()
 {
-    CMenu menu;
+    CModernPopupMenu menu;
     if (!menu.CreatePopupMenu()) return;
     menu.AppendMenu(MF_STRING | (m_bIsTesting ? MF_GRAYED : 0), 0x2401, Localization::Get(L"profile.new"));
     menu.AppendMenu(MF_STRING | (m_bIsTesting ? MF_GRAYED : 0), 0x240B, Localization::Get(L"profile.new_chain"));
@@ -125,6 +125,11 @@ void CPage1::OnProfileMenu()
     menu.AppendMenu(MF_SEPARATOR);
     menu.AppendMenu(MF_STRING | (m_cfgls.GetCurSel() == CB_ERR ? MF_GRAYED : 0),
         IDC_BUTTON_DELETE_PROFILE, Localization::Get(_T("profile.delete_action")));
+    menu.SetItemIcon(0x2401, CModernPopupMenu::ADD);
+    menu.SetItemIcon(0x240B, CModernPopupMenu::ADD);
+    menu.SetItemIcon(IDC_BUTTON_COPY_PROFILE, CModernPopupMenu::COPY);
+    menu.SetItemIcon(IDC_BUTTON_PASTE_PROFILE, CModernPopupMenu::PASTE);
+    menu.SetItemIcon(IDC_BUTTON_DELETE_PROFILE, CModernPopupMenu::REMOVE);
     CRect anchor;
     m_btnProfileMenu.GetWindowRect(&anchor);
     const UINT selected = menu.TrackPopupMenu(TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_RIGHTBUTTON,

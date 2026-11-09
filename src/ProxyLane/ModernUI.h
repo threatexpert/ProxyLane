@@ -2,6 +2,7 @@
 
 #include <afxwin.h>
 #include <map>
+#include <vector>
 
 namespace UiTheme
 {
@@ -61,6 +62,29 @@ namespace UiTheme
 	// Drops remembered fonts owned by `root` or its descendants (call before they go away).
 	void ForgetUiFonts(HWND root);
 }
+
+// Native popup tracking with theme-aware item painting. Populate as a CMenu,
+// then TrackPopupMenu; command ids, strings and native menu states are retained.
+class CModernPopupMenu : public CMenu
+{
+public:
+	enum Icon { NONE, ADD, COPY, PASTE, REMOVE, LAUNCH, SHIELD, LINK, REORDER, SETTINGS, CERTIFICATE, FOLDER,
+		MOVE_UP, MOVE_DOWN, PIN, UNPIN };
+	CModernPopupMenu();
+	~CModernPopupMenu();
+	void SetItemIcon(UINT command, Icon icon);
+	BOOL TrackPopupMenu(UINT flags, int x, int y, CWnd* owner, LPCRECT exclude = NULL);
+	virtual void MeasureItem(LPMEASUREITEMSTRUCT item);
+	virtual void DrawItem(LPDRAWITEMSTRUCT item);
+private:
+	struct Item { CString text; UINT type; Icon icon; };
+	std::vector<Item> m_items;
+	std::map<UINT, Icon> m_icons;
+	CFont m_font, m_defaultFont;
+	CBrush m_background;
+	int m_dpi, m_width, m_rowHeight;
+	int Scale(int value) const;
+};
 
 class CModernDialog : public CDialog
 {

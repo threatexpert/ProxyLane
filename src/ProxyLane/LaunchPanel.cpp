@@ -1119,7 +1119,7 @@ void CLaunchPanel::ShowTileMenu(int index, CPoint screenPoint)
 	enum { CMD_OPEN = 1, CMD_OPEN_ADMIN, CMD_SHORTCUT, CMD_REORDER, CMD_REMOVE };
 	const Tile tile = m_tiles[index];
 	FinishOrganizing();
-	CMenu menu;
+	CModernPopupMenu menu;
 	if (!menu.CreatePopupMenu()) return;
 	const UINT unavailable = tile.available ? 0 : MF_GRAYED;
 	menu.AppendMenu(MF_STRING | unavailable, CMD_OPEN, Localization::Get(L"launch.menu_open"));
@@ -1131,6 +1131,11 @@ void CLaunchPanel::ShowTileMenu(int index, CPoint screenPoint)
 	menu.AppendMenu(MF_STRING | (m_tiles.size() > 1 ? 0 : MF_GRAYED), CMD_REORDER, Localization::Get(L"launch.menu_reorder"));
 	menu.AppendMenu(MF_SEPARATOR);
 	menu.AppendMenu(MF_STRING, CMD_REMOVE, Localization::Get(L"recent.remove"));
+	menu.SetItemIcon(CMD_OPEN, CModernPopupMenu::LAUNCH);
+	menu.SetItemIcon(CMD_OPEN_ADMIN, CModernPopupMenu::SHIELD);
+	menu.SetItemIcon(CMD_SHORTCUT, CModernPopupMenu::LINK);
+	menu.SetItemIcon(CMD_REORDER, CModernPopupMenu::REORDER);
+	menu.SetItemIcon(CMD_REMOVE, CModernPopupMenu::REMOVE);
 	if (tile.available) menu.SetDefaultItem(tile.elevated && !tile.packaged ? CMD_OPEN_ADMIN : CMD_OPEN);
 	const UINT command = menu.TrackPopupMenu(TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
 		screenPoint.x, screenPoint.y, this);

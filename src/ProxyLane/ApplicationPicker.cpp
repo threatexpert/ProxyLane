@@ -719,7 +719,7 @@ void CApplicationPicker::ShowRecentMenu(size_t index, CPoint point)
 	if (index >= m_recentEntries.size()) return;
 	const RecentApplications::Entry entry = m_recentEntries[index];
 	const CString profileId = m_profileId;
-	CMenu menu; menu.CreatePopupMenu();
+	CModernPopupMenu menu; menu.CreatePopupMenu();
 	const BOOL canUp = index > 0 && m_recentEntries[index - 1].pinned == entry.pinned;
 	const BOOL canDown = index + 1 < m_recentEntries.size() && m_recentEntries[index + 1].pinned == entry.pinned;
 	menu.AppendMenu(MF_STRING | (canUp ? 0 : MF_GRAYED), 3, Localization::Get(L"recent.move_up"));
@@ -729,6 +729,11 @@ void CApplicationPicker::ShowRecentMenu(size_t index, CPoint point)
 	menu.AppendMenu(MF_STRING, 2, Localization::Get(L"recent.remove"));
 	menu.AppendMenu(MF_SEPARATOR);
 	menu.AppendMenu(MF_STRING | (entry.available ? 0 : MF_GRAYED), 6, Localization::Get(L"shortcut.create"));
+	menu.SetItemIcon(3, CModernPopupMenu::MOVE_UP);
+	menu.SetItemIcon(4, CModernPopupMenu::MOVE_DOWN);
+	menu.SetItemIcon(entry.pinned ? 5 : 1, entry.pinned ? CModernPopupMenu::UNPIN : CModernPopupMenu::PIN);
+	menu.SetItemIcon(2, CModernPopupMenu::REMOVE);
+	menu.SetItemIcon(6, CModernPopupMenu::LINK);
 	const UINT command = menu.TrackPopupMenu(TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, this);
 	// Popup menus pump messages: use a stable identity, never a possibly moved row.
 	if (command && profileId == m_profileId) ChangeRecent(entry.id, command);
