@@ -166,7 +166,7 @@ namespace
 	}
 	BOOL SameLaunch(const RecentApplications::Entry& a, const RecentApplications::Entry& b)
 	{
-		if (a.elevated != b.elevated) return FALSE;
+		// Elevation is the default launch preference of a target, not its identity.
 		if (!a.shortcut.IsEmpty() && a.shortcut.CompareNoCase(b.shortcut) == 0) return TRUE;
 		return a.app.path.CompareNoCase(b.app.path) == 0 && a.app.aumid.CompareNoCase(b.app.aumid) == 0 &&
 			a.app.arguments == b.app.arguments && a.app.workingDirectory.CompareNoCase(b.app.workingDirectory) == 0;
@@ -176,6 +176,32 @@ namespace
 		std::stable_sort(entries.begin(), entries.end(), [](const RecentApplications::Entry& a, const RecentApplications::Entry& b) {
 			return a.pinned != b.pinned ? a.pinned > b.pinned : a.lastUsed > b.lastUsed;
 		});
+	}
+	void MergeLaunchModes(std::vector<RecentApplications::Entry>& entries)
+	{
+		// Old versions stored ordinary/elevated launches separately. Choose the
+		// first displayed tile as the stable anchor (pinned tiles come first),
+		// but take the launch data and preference from the most recently used one.
+		RecentApplications::SortForDisplay(entries);
+		for (size_t i = 0; i < entries.size(); ++i)
+		{
+			for (size_t j = i + 1; j < entries.size();)
+			{
+				if (!SameLaunch(entries[i], entries[j])) { ++j; continue; }
+				if (entries[j].lastUsed > entries[i].lastUsed)
+				{
+					const CString id = entries[i].id;
+					const BOOL pinned = entries[i].pinned;
+					const ULONGLONG order = entries[i].displayOrder;
+					entries[i] = entries[j];
+					entries[i].id = id;
+					entries[i].pinned = pinned;
+					entries[i].displayOrder = order;
+				}
+				entries.erase(entries.begin() + j);
+			}
+		}
+		Sort(entries);
 	}
 }
 
@@ -309,6 +335,9 @@ BOOL RecentApplications::Store::ReadBound(std::vector<Entry>& entries, CString& 
 		Sort(loaded);
 	}
 	for (size_t i = 0; i < loaded.size(); ++i) if (!loaded[i].displayOrder) loaded[i].displayOrder = ++order;
+	// Read-only migration also keeps old duplicates out of both UI consumers.
+	// The next history mutation writes the merged records and removes old sections.
+	MergeLaunchModes(loaded);
 	entries.swap(loaded);
 	return TRUE;
 }

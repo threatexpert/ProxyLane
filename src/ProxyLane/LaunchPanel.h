@@ -36,6 +36,9 @@ class CLaunchPanel : public CWnd
 	DECLARE_DYNAMIC(CLaunchPanel)
 
 public:
+	// WM_LAUNCH_PANEL_TILE lParam: clicks retain the saved preference;
+	// context-menu actions explicitly choose the next successful default.
+	enum LaunchMode { LAUNCH_DEFAULT = 0, LAUNCH_ADMIN, LAUNCH_NORMAL };
 	struct Tile
 	{
 		CString id;

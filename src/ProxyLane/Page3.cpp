@@ -1755,14 +1755,14 @@ LRESULT CPage3::OnLaunchPanelProfile(WPARAM, LPARAM)
 	return 0;
 }
 
-LRESULT CPage3::OnLaunchPanelTile(WPARAM index, LPARAM elevate)
+LRESULT CPage3::OnLaunchPanelTile(WPARAM index, LPARAM mode)
 {
 	if (m_recentLaunching || !g_MainTab || index >= m_recentEntries.size()) return 0;
 	RecentApplications::Entry entry = m_recentEntries[index];
-	// "Start as administrator" from the tile menu. Elevation is part of a recent
-	// entry's identity, so this adds an elevated tile beside the ordinary one,
-	// as choosing administrator in the application picker already does.
-	if (elevate && !entry.app.IsPackaged()) entry.elevated = TRUE;
+	// Change only the launch copy. Remember() commits this preference after a
+	// successful launch, retaining the tile's identity, pin and position.
+	if (mode == CLaunchPanel::LAUNCH_NORMAL) entry.elevated = FALSE;
+	else if (mode == CLaunchPanel::LAUNCH_ADMIN && !entry.app.IsPackaged()) entry.elevated = TRUE;
 	m_recentLaunching = TRUE;
 	struct Reset {
 		BOOL& flag; CLaunchPanel& panel;

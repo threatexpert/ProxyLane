@@ -9,6 +9,11 @@ or launch/inject user applications. It covers:
 - Persistence of Unicode arguments, working directory, elevation and AUMID.
 - Target deduplication, case-sensitive arguments, pinning, unpinning, removal
   and the 20-unpinned-entry limit.
+- One tile per launch target, with the last successful ordinary/administrator
+  preference; fresh drops and existing-tile launches update the same record.
+- Legacy ordinary/administrator duplicates merge on read using the latest
+  launch preference, retaining a stable ID, pin and display position. The next
+  history write removes duplicate sections; deleting a merged tile removes both.
 - Stable home-screen positions across launches/restarts, legacy-order migration,
   append/pin/unpin/remove behavior, and independent MRU eviction.
 - Shared picker/Home display order on cold load, ready-cache updates, reload,
@@ -36,6 +41,11 @@ Manual UI acceptance (window capture timed out in the implementation session):
    start neither the proxy nor the app. Yes starts the selected proxy and then the
    app; invalid targets or failed proxy startup must not launch an app. Changing
    profiles during confirmation must never silently launch using another profile.
+   Right-click offers Start normally and Start as administrator, even for a
+   shield tile (Store apps omit administrator). The saved default is bold.
+   A successful explicit launch/drop changes the default and shield without
+   adding or moving a tile; failure or UAC cancellation leaves it unchanged.
+   Left-click/Enter uses that default. Normal retains AUTO elevation behavior.
 3. With at least seven recent apps and a narrow window, drag horizontally across
    tiles or gaps. Check smooth snap, small-drag snap-back, boundary resistance,
    no looping, and no accidental launch after a swipe/capture loss/Escape.
@@ -63,6 +73,11 @@ History is stored in the existing `ProxyLane.ini`, shared by both architectures.
 The optional `DisplayOrder` field preserves home-screen placement independently
 of `LastUsed`; older records inherit their previous initial order and are migrated
 on the next history write. The picker shares the home-screen display order; eviction still uses recency.
+`Elevated` is a saved launch preference, not part of target identity. Legacy
+duplicates retain the first tile in display order (a pinned tile takes priority),
+with launch data and preference taken from the record with the latest `LastUsed`.
+Arguments and working directories still distinguish different launch targets;
+existing shortcut-origin matching is retained. The INI schema remains version 1.
 Each `[recent_app_<profile-id>_<record-id>]` section stores a complete record,
 written with one `WritePrivateProfileSection` call. Text fields with the
 `Utf8Base64` suffix use standard UTF-8 + Base64 (not encryption), avoiding ANSI

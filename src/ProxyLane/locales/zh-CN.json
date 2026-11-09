@@ -532,7 +532,7 @@
   "launch.opening": "正在打开…",
   "launch.organize_hint": "右键点击图标：启动、以管理员身份启动、创建快捷方式、调整顺序或移除",
   "launch.organize_active": "拖动调整顺序，停留在左右边缘可翻页；点击 × 移除，按 Esc 或点击空白处完成。",
-  "launch.menu_open": "启动",
+  "launch.menu_open": "普通启动",
   "launch.menu_open_admin": "以管理员身份启动",
   "launch.menu_reorder": "调整顺序",
   "launch.action_enable": "启用",

@@ -532,7 +532,7 @@
   "launch.opening": "Opening…",
   "launch.organize_hint": "Right-click an icon to start it, start it as administrator, create a shortcut, rearrange or remove it",
   "launch.organize_active": "Drag to reorder; hold at either edge to turn pages. Click × to remove; press Esc or click outside to finish.",
-  "launch.menu_open": "Start",
+  "launch.menu_open": "Start normally",
   "launch.menu_open_admin": "Start as administrator",
   "launch.menu_reorder": "Rearrange",
   "launch.action_enable": "Enable",

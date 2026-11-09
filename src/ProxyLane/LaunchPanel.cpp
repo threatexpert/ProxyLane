@@ -517,7 +517,7 @@ void CLaunchPanel::ActivateTile(int index)
 {
 	if (m_organizing || m_busyTile >= 0 || m_animating || m_dragging || index < m_firstTile || index >= m_firstTile + VisibleTileCount()) return;
 	if (CWnd* parent = GetParent())
-		parent->SendMessage(WM_LAUNCH_PANEL_TILE, static_cast<WPARAM>(index), 0);
+		parent->SendMessage(WM_LAUNCH_PANEL_TILE, static_cast<WPARAM>(index), LAUNCH_DEFAULT);
 }
 
 BOOL CLaunchPanel::OnEraseBkgnd(CDC*)
@@ -1123,15 +1123,15 @@ void CLaunchPanel::ShowTileMenu(int index, CPoint screenPoint)
 	if (!menu.CreatePopupMenu()) return;
 	const UINT unavailable = tile.available ? 0 : MF_GRAYED;
 	menu.AppendMenu(MF_STRING | unavailable, CMD_OPEN, Localization::Get(L"launch.menu_open"));
-	// An elevated tile already starts as administrator; Store apps cannot.
-	if (!tile.elevated && !tile.packaged)
+	// Both choices remain available regardless of the saved default.
+	if (!tile.packaged)
 		menu.AppendMenu(MF_STRING | unavailable, CMD_OPEN_ADMIN, Localization::Get(L"launch.menu_open_admin"));
 	menu.AppendMenu(MF_SEPARATOR);
 	menu.AppendMenu(MF_STRING | unavailable, CMD_SHORTCUT, Localization::Get(L"shortcut.create"));
 	menu.AppendMenu(MF_STRING | (m_tiles.size() > 1 ? 0 : MF_GRAYED), CMD_REORDER, Localization::Get(L"launch.menu_reorder"));
 	menu.AppendMenu(MF_SEPARATOR);
 	menu.AppendMenu(MF_STRING, CMD_REMOVE, Localization::Get(L"recent.remove"));
-	if (tile.available) menu.SetDefaultItem(CMD_OPEN);
+	if (tile.available) menu.SetDefaultItem(tile.elevated && !tile.packaged ? CMD_OPEN_ADMIN : CMD_OPEN);
 	const UINT command = menu.TrackPopupMenu(TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
 		screenPoint.x, screenPoint.y, this);
 	// The menu pumps messages: find the tile again by id before acting on it.
@@ -1143,12 +1143,11 @@ void CLaunchPanel::ShowTileMenu(int index, CPoint screenPoint)
 	switch (command)
 	{
 	case CMD_OPEN:
-		m_focusTile = current;
-		ActivateTile(current);
-		break;
 	case CMD_OPEN_ADMIN:
-		if (current >= m_firstTile && current < m_firstTile + VisibleTileCount())
-			parent->SendMessage(WM_LAUNCH_PANEL_TILE, static_cast<WPARAM>(current), 1);
+		m_focusTile = current;
+		if (m_tiles[current].available && current >= m_firstTile && current < m_firstTile + VisibleTileCount())
+			parent->SendMessage(WM_LAUNCH_PANEL_TILE, static_cast<WPARAM>(current),
+				command == CMD_OPEN_ADMIN ? LAUNCH_ADMIN : LAUNCH_NORMAL);
 		break;
 	case CMD_SHORTCUT:
 		parent->SendMessage(WM_LAUNCH_PANEL_SHORTCUT, 0, reinterpret_cast<LPARAM>(&tile.id));

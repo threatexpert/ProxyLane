@@ -11,7 +11,7 @@ namespace RecentApplications
 		CString profileId;
 		InstalledApplications::Application app;
 		CString shortcut;
-		BOOL elevated;
+		BOOL elevated; // Last successful launch preference, not part of target identity.
 		BOOL pinned;
 		BOOL available; // Transient picker validation; never persisted.
 		ULONGLONG lastUsed;
