@@ -605,6 +605,19 @@ int main()
 			", chain queries " + std::to_string(settings.chainQueries));
 	}
 	{
+		// Layers are constructed from the last hop backwards. An invalid first
+		// hop therefore fails after allocating later layers, exercising teardown
+		// of a partially initialized peer rather than the normal EndTask path.
+		Server last(Server::SOCKS5);
+		last.Start();
+		Settings settings; Log log;
+		settings.chain.push_back(Hop(TEXT("SOCKS5"), 0));
+		settings.chain.push_back(Hop(TEXT("SOCKS5"), last.Port()));
+		const bool ok = Through(settings, log, target, false);
+		passed &= Report(!ok && log.failed == 1 && last.Target().empty(),
+			"partial chain initialization fails without launching a later hop");
+	}
+	{
 		// Redirect private DNS: TCP to a LAN resolver (192.168.1.1:53) leaves the
 		// last hop for the public resolver. The last hop rejects, so nothing
 		// leaves this machine; it only records what it was asked for.

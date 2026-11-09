@@ -1539,6 +1539,7 @@ void CPage1::OnBnClickedTestproxy()
 		m_pProxyTester->Release();
 		m_pProxyTester = NULL;
 		m_bIsTesting = FALSE;
+		UpdateChainButtons();
 		m_proxyTestPhase = PROXY_TEST_NONE;
 		m_testIpv6Result = IPV6_TEST_NOT_RUN;
 		m_btnTest.SetWindowText(Localization::Get(_T("action.test_current")));
@@ -1550,6 +1551,7 @@ void CPage1::OnBnClickedTestproxy()
 		m_pProxyTester->Release();
 	m_pProxyTester = NULL;
 	m_bIsTesting = FALSE;
+	UpdateChainButtons();
 	m_proxyTestPhase = PROXY_TEST_NONE;
 	m_testIpv6Result = IPV6_TEST_NOT_RUN;
 	m_testUdpRequested = FALSE;
@@ -1601,6 +1603,7 @@ void CPage1::OnBnClickedTestproxy()
 	}
 	m_btnTest.SetWindowText(Localization::Get(_T("action.cancel_test")));
 	m_bIsTesting = TRUE;
+	UpdateChainButtons();
 
 }
 
@@ -1974,6 +1977,7 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 		}
 		m_btnTest.SetWindowText(Localization::Get(_T("action.test_current")));
 		m_bIsTesting = FALSE;
+		UpdateChainButtons();
 		m_proxyTestPhase = PROXY_TEST_NONE;
 		if (enabledIpv6Blocking)
 			UpdateProxyTestStatus();

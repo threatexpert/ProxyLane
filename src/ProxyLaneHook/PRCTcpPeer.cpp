@@ -42,8 +42,10 @@ CPRCTcpPeer::CPRCTcpPeer(CTcpProxyTask *pNotify)
 
 CPRCTcpPeer::~CPRCTcpPeer(void)
 {
-	// The layers themselves go with RemoveAllLayers, as for a single upstream.
-	delete m_pChain;
+	// SetTaskInfo can delete a partially initialized peer without EndTask.
+	// Close while the derived RemoveAllLayers override is still active so all
+	// proxy/TLS layers are released, including a partially constructed chain.
+	Close();
 }
 
 DWORD CPRCTcpPeer::GetLastError()
