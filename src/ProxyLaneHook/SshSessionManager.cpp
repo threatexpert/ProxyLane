@@ -7,6 +7,7 @@
 #include "../../third_party/libssh2/include/libssh2.h"
 #include <deque>
 #include <algorithm>
+#include <unordered_set>
 #include <errno.h>
 
 namespace {
@@ -14,7 +15,7 @@ const UINT WM_SSH_PUMP = WM_APP + 73;
 const size_t CHANNEL_BUFFER = 256 * 1024;
 const size_t WIRE_HIGH_WATER = 512 * 1024;
 const size_t MAX_PENDING_OPENS = 32;
-const DWORD IDLE_TIMEOUT = 60000, RESPONSE_TIMEOUT = 60000, KEEPALIVE_INTERVAL = 15000;
+const DWORD RESPONSE_TIMEOUT = 60000, KEEPALIVE_INTERVAL = 15000;
 
 // A private, version-pinned backend loaded only when SSH is requested. No
 // import from this DLL is added to the injected hook's loader dependency set.
@@ -128,6 +129,7 @@ Pool& CurrentPool();
 struct SshChannel::State {
     std::weak_ptr<SshSession> session;
     CAsyncSshSocketLayer* observer = NULL;
+    bool internalTransport = false;
     LIBSSH2_CHANNEL* handle = NULL;
     LIBSSH2_CHANNEL_OPEN* openOperation = NULL;
     CStringA target;
@@ -141,19 +143,27 @@ struct SshChannel::State {
 class SshSession : public CAsyncSocketEx, public std::enable_shared_from_this<SshSession>
 {
 public:
-    SshSession(const ProxyChain& route, const std::string& key) : route(route), key(key) {}
+    SshSession(const ProxyChain& route, const std::string& key, SshSessionUse use)
+        : route(route), key(key), use(use), lifetime(use) {}
     ~SshSession() override { Dispose(); if (!key.empty()) SecureZeroMemory(&key[0], key.size()); SecureZeroMemory(route.data(), route.size()*sizeof(ProxyInfo)); }
     ProxyChain route;
     std::string key;
     std::vector<std::shared_ptr<SshChannel>> channels;
     bool failed = false;
-    DWORD idleSince = 0;
+    SshSessionUse use;
+    SshSessionLifetime lifetime;
+    std::weak_ptr<SshSession> lowerSession;
     void Start();
     void Drive();
     void Schedule();
     void Fail(int code, int error, const CStringA& detail, int hop = -1);
     void Dispose();
     bool HasObservers() const { for (const auto& c : channels) if (c->m->observer) return true; return false; }
+    bool HasClients() const {
+        for (const auto& c : channels)
+            if (c->m->observer && !c->m->internalTransport) return true;
+        return false;
+    }
     void OnConnect(int error) override;
     void OnReceive(int error) override;
     void OnSend(int error) override;
@@ -183,24 +193,43 @@ public:
     Pool() { SetTimer(1, 1000); }
     void Schedule() { if (!scheduled) { scheduled = true; PostMessage(GetHwnd(), WM_SSH_PUMP, 0, 0); } }
     void OnTimer(UINT_PTR) override { Schedule(); }
+    void Collect() {
+        // Internal tunnels are dependencies, not business connections. Mark
+        // all ancestors of actual clients, so an unused chain starts ONE idle
+        // period instead of another 30 minutes for each SSH hop.
+        std::unordered_set<SshSession*> needed, expired;
+        for (const auto& candidate : sessions) {
+            if (!candidate->HasClients()) continue;
+            auto current = candidate;
+            while (current && needed.insert(current.get()).second)
+                current = current->lowerSession.lock();
+        }
+        const DWORD now = GetTickCount();
+        std::vector<std::shared_ptr<SshSession>> retiring;
+        for (const auto& session : sessions) {
+            session->lifetime.Observe(needed.count(session.get()) != 0, now);
+            if (session->lifetime.Expired(now) || (session->failed && !session->HasObservers())) {
+                retiring.push_back(session); expired.insert(session.get());
+            }
+        }
+        std::sort(retiring.begin(), retiring.end(), [](const std::shared_ptr<SshSession>& a,
+            const std::shared_ptr<SshSession>& b) { return a->route.size() > b->route.size(); });
+        for (const auto& session : retiring) session->Dispose();
+        sessions.erase(std::remove_if(sessions.begin(), sessions.end(),
+            [&expired](const std::shared_ptr<SshSession>& session) {
+                return expired.count(session.get()) != 0;
+            }), sessions.end());
+    }
     void OnMessage(UINT message, WPARAM, LPARAM, BOOL& handled) override {
         if (message != WM_SSH_PUMP) return;
         handled = TRUE; scheduled = false;
         if (pumping) { deferred = true; return; }
         pumping = true;
+        Collect(); // A completed/cancelled test must not continue its handshake.
         // Opening an SSH lower route can append another session to the pool.
         const auto snapshot = sessions;
         for (auto& session : snapshot) session->Drive();
-        const DWORD now = GetTickCount();
-        for (auto i = sessions.begin(); i != sessions.end();) {
-            auto& session = *i;
-            const bool active = session->HasObservers();
-            if (active) session->idleSince = 0;
-            else if (!session->idleSince) session->idleSince = now;
-            if (!active && (session->failed || now - session->idleSince >= IDLE_TIMEOUT)) {
-                session->Dispose(); i = sessions.erase(i);
-            } else ++i;
-        }
+        Collect();
         pumping = false;
         if (deferred) { deferred = false; Schedule(); }
     }
@@ -235,22 +264,27 @@ Pool& CurrentPool() {
 }
 
 std::shared_ptr<SshChannel> SshSessionManager::Open(const ProxyChain& route,
-    const CStringA& target, int port, CAsyncSshSocketLayer* observer)
+    const CStringA& target, int port, CAsyncSshSocketLayer* observer,
+    SshSessionUse use, SshSession* dependent)
 {
     Pool& owner = CurrentPool();
     const std::string key = RouteKey(route);
     std::shared_ptr<SshSession> session;
-    for (const auto& candidate : owner.sessions)
-        if (!candidate->failed && candidate->key == key) { session = candidate; break; }
+    // Test probes own fresh sessions, including their lower SSH transports.
+    // They never borrow a business session or revive a completed test.
+    if (use == SshSessionUse::Business) for (const auto& candidate : owner.sessions)
+        if (!candidate->failed && candidate->use == use && candidate->key == key) { session = candidate; break; }
     if (!session) {
-        session = std::make_shared<SshSession>(route, key);
+        session = std::make_shared<SshSession>(route, key, use);
         owner.sessions.push_back(session);
     }
     auto channel = std::shared_ptr<SshChannel>(new SshChannel);
     channel->m->session = session; channel->m->observer = observer;
+    channel->m->internalTransport = dependent != NULL;
+    if (dependent) dependent->lowerSession = session;
     channel->m->target = target; channel->m->port = port;
     session->channels.push_back(channel);
-    session->idleSince = 0;
+    session->lifetime.Observe(true, GetTickCount());
     owner.Schedule(); // Never notify synchronously inside layer.Connect().
     return channel;
 }
@@ -301,7 +335,7 @@ void SshSession::Start() {
     if (route.empty()) { Fail(PROXYERROR_REQUESTFAILED, WSAEINVAL, "Empty SSH route"); return; }
     const ProxyInfo& endpoint = route.back();
     if (route.size() > 1) {
-        if (!lower.Add(*this, route.data(), static_cast<int>(route.size()-1))) {
+        if (!lower.Add(*this, route.data(), static_cast<int>(route.size()-1), use, this)) {
             Fail(PROXYERROR_REQUESTFAILED, WSAGetLastError(), "Invalid SSH lower route"); return;
         }
     } else {

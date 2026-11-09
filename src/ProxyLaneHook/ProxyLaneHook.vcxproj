@@ -393,6 +393,7 @@
     <ClInclude Include="ProxySettings.h" />
     <ClInclude Include="ProxyChainLayers.h" />
     <ClInclude Include="SshSessionManager.h" />
+    <ClInclude Include="SshSessionLifetime.h" />
     <ClInclude Include="asynsocket\AsyncSshSocketLayer.h" />
     <ClInclude Include="ProxyTaskMgr.h" />
     <ClInclude Include="ProxyTesterMgr.h" />

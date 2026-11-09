@@ -7,7 +7,8 @@
 class CAsyncSshSocketLayer : public CAsyncProxySocketLayer
 {
 public:
-    explicit CAsyncSshSocketLayer(const ProxyChain& route);
+    explicit CAsyncSshSocketLayer(const ProxyChain& route,
+        SshSessionUse use = SshSessionUse::Business, SshSession* dependent = NULL);
     ~CAsyncSshSocketLayer();
     BOOL Connect(LPCSTR host, UINT port) override;
     BOOL Connect(const SOCKADDR* address, int length) override;
@@ -25,6 +26,8 @@ protected:
     BOOL ShutDown(int how) override;
 private:
     ProxyChain m_route;
+    SshSessionUse m_use;
+    SshSession* m_dependent;
     std::shared_ptr<SshChannel> m_channel;
     bool m_ready = false;
     bool m_failed = false;

@@ -1,13 +1,15 @@
 #include "stdafx.h"
 #include "AsyncSshSocketLayer.h"
 
-CAsyncSshSocketLayer::CAsyncSshSocketLayer(const ProxyChain& route) : m_route(route) {}
+CAsyncSshSocketLayer::CAsyncSshSocketLayer(const ProxyChain& route,
+    SshSessionUse use, SshSession* dependent)
+    : m_route(route), m_use(use), m_dependent(dependent) {}
 CAsyncSshSocketLayer::~CAsyncSshSocketLayer() { Close(); }
 BOOL CAsyncSshSocketLayer::Connect(LPCSTR host, UINT port)
 {
     if (m_channel || !host || !*host || !port || port > 65535) { WSASetLastError(WSAEINVAL); return FALSE; }
     SetLayerState(connecting);
-    m_channel = SshSessionManager::Open(m_route, host, port, this);
+    m_channel = SshSessionManager::Open(m_route, host, port, this, m_use, m_dependent);
     if (!m_channel) { WSASetLastError(WSAENOBUFS); return FALSE; }
     WSASetLastError(WSAEWOULDBLOCK);
     return FALSE;

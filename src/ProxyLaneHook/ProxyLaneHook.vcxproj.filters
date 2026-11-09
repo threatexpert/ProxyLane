@@ -297,6 +297,7 @@
     <ClCompile Include="SshSessionManager.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="asynsocket\AsyncSshSocketLayer.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClInclude Include="SshSessionManager.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="SshSessionLifetime.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="asynsocket\AsyncSshSocketLayer.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
 </Project>

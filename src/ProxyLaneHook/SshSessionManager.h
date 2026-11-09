@@ -1,5 +1,6 @@
 #pragma once
 #include "ProxyModule.h"
+#include "SshSessionLifetime.h"
 #include <memory>
 
 class CAsyncSshSocketLayer;
@@ -31,6 +32,7 @@ class SshSessionManager
 {
 public:
     static std::shared_ptr<SshChannel> Open(const ProxyChain& route,
-        const CStringA& target, int port, CAsyncSshSocketLayer* observer);
+        const CStringA& target, int port, CAsyncSshSocketLayer* observer,
+        SshSessionUse use, SshSession* dependent = NULL);
     static void ShutdownCurrentThread();
 };

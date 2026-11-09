@@ -141,7 +141,7 @@ BOOL CProxyTester::StartChain(IProxyTesterCallback *pCallback, const LPPRCClient
 	// Each hop adds a handshake; allow a little more than a single upstream.
 	m_pNotify->ArmTester(this, 10000 + 2500 * (nHops - 1));
 	m_pChain = new CProxyChainLayers;
-	if (!m_pChain->Add(*this, lpHops, nHops))
+	if (!m_pChain->Add(*this, lpHops, nHops, SshSessionUse::Test))
 		return FALSE;
 	m_pProxyLayer = m_pChain->Top();
 	if (m_pChain->HasSsh()) m_pNotify->ArmTester(this, 60000);
@@ -164,7 +164,7 @@ BOOL CProxyTester::AddProxyLayer(LPProxyInfo lpProxyInfo)
 	{
 		if (m_client.sType != SOCK_STREAM) { WSASetLastError(WSAEOPNOTSUPP); return FALSE; }
 		m_pChain = new CProxyChainLayers;
-		if (!m_pChain->Add(*this, lpProxyInfo, 1)) return FALSE;
+		if (!m_pChain->Add(*this, lpProxyInfo, 1, SshSessionUse::Test)) return FALSE;
 		m_pProxyLayer = m_pChain->Top();
 		m_pNotify->ArmTester(this, 60000);
 		return TRUE;

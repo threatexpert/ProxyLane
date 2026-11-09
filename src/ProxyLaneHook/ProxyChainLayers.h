@@ -21,7 +21,8 @@
 class CProxyChainLayers
 {
 public:
-	BOOL Add(CAsyncSocketEx& socket, const ProxyInfo* hops, int count)
+	BOOL Add(CAsyncSocketEx& socket, const ProxyInfo* hops, int count,
+        SshSessionUse sshUse = SshSessionUse::Business, SshSession* dependent = NULL)
 	{
 		if (!m_hops.empty() || !hops || count < 1)
 		{
@@ -47,7 +48,7 @@ public:
 
 			if (type == PROXYTYPE_SSH)
 			{
-				m_proxy[i] = new CAsyncSshSocketLayer(ProxyChain(hops, hops + i + 1));
+				m_proxy[i] = new CAsyncSshSocketLayer(ProxyChain(hops, hops + i + 1), sshUse, dependent);
 				// The shared session owns all preceding hops. This socket owns
 				// only its channel adapter and the hops above that adapter.
 				return socket.AddLayer(m_proxy[i]);

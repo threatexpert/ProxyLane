@@ -231,6 +231,19 @@ static int Stat(const char* key)
     return atoi(stats.c_str() + start + name.size());
 }
 static void Pass(bool result, const char* name) { Check(result, name); printf("PASS %s\n", name); }
+static void PumpMessages() {
+    MSG msg;
+    while (PeekMessage(&msg,NULL,0,0,PM_REMOVE)) { TranslateMessage(&msg); DispatchMessage(&msg); }
+}
+static bool WaitSessions(int expected) {
+    DWORD start = GetTickCount();
+    do {
+        PumpMessages();
+        if (Stat("active_sessions") == expected) return true;
+        Sleep(10);
+    } while (GetTickCount()-start < 5000);
+    return false;
+}
 static void WaitStat(const char* key, int minimum) {
     DWORD start = GetTickCount();
     while (Stat(key) < minimum && GetTickCount()-start < 10000) Sleep(20);
@@ -282,14 +295,42 @@ int main(int argc, char** argv)
     ProxyInfo unknown = ssh(a); unknown.strTransportPsk = L"";
     TestResult tested = Test(proxy,{unknown},target);
     Pass(tested.code == PROXYERROR_SSH_HOSTKEY_UNKNOWN && tested.detail == argv[7], "tester returns untrusted fingerprint before authentication");
+    Pass(WaitSessions(0), "untrusted test leaves no SSH session");
     unknown = ssh(b); unknown.strTransportPsk = L"SHA256:wrong";
     tested = Test(proxy,{ssh(a),unknown},target);
     Pass(tested.code == PROXYERROR_SSH_HOSTKEY_CHANGED && tested.hop == 1, "tester identifies SSH failed hop in chain");
+    Pass(WaitSessions(0), "failed nested test releases every SSH hop");
     tested = Test(proxy,{ssh(a)},target);
     Pass(tested.code == 0, "tester succeeds after fingerprint confirmation");
+    Pass(WaitSessions(0), "successful test leaves no SSH session");
+    int testAuth = Stat("auth_a");
+    tested = Test(proxy,{ssh(a),ssh(b)},target);
+    Pass(tested.code == 0 && Stat("auth_a") == testAuth+1 && WaitSessions(0),
+        "next test authenticates anew and releases its entire SSH chain");
+
+    // Cancel while a nested test's final OPEN awaits confirmation.
+    Control("hold-opens");
+    PRCClient testClient; testClient.zero(); testClient.sType = SOCK_STREAM;
+    testClient.dstAddr.SetIP("127.0.0.1"); testClient.dstAddr.SetPort(target);
+    strcpy_s(testClient.szDomainName, "hold-open.test");
+    ProxyChain testRoute = {ssh(a),ssh(b)};
+    TestResult cancelled;
+    IProxyTester* pendingTest = proxy->CreateTester();
+    Check(pendingTest->StartChain(&cancelled,&testClient,testRoute.data(),(int)testRoute.size()) != FALSE,"pending tester start");
+    DWORD cancelStart = GetTickCount();
+    while (!Stat("open_held") && GetTickCount()-cancelStart < 10000) { PumpMessages(); Sleep(10); }
+    Check(Stat("open_held") == 1 && !cancelled.done,"test OPEN is pending");
+    pendingTest->Release();
+    Pass(WaitSessions(0), "cancelling pending nested test releases every SSH hop");
+    Control("release-opens");
+    while (Stat("open_held")) Sleep(10);
     int auth = Stat("auth_a");
     SOCKET first = Open(proxy, target);
     Pass(Echo(first), "single SSH TCP echo");
+    tested = Test(proxy,{ssh(a)},target);
+    Pass(tested.code == 0 && WaitSessions(1) && Echo(first),
+        "test cleanup preserves an active business session");
+    ++auth; // The isolated test used its own authentication.
     Control("hold-opens");
     SOCKET pendingOpen = Open(proxy, target, "hold-open.test");
     WaitStat("open_held", 1);
@@ -424,9 +465,11 @@ int main(int argc, char** argv)
         auth = Stat("auth_a");
         Sleep(64000);
         first = Open(proxy,target);
-        Pass(Echo(first) && Stat("auth_a") == auth+1, "idle session expires independently of keepalive");
+        Pass(Echo(first) && Stat("auth_a") == auth, "idle business session survives old 60 second limit and reuses authentication");
     }
     closesocket(first);
-    Check(proxy->DisableProxy() != FALSE,"disable proxy"); settings.Detach(); log.Detach(); ReleaseGlobalProxyInstance();
+    Check(proxy->DisableProxy() != FALSE,"disable proxy");
+    Pass(WaitSessions(0), "stopping proxy closes retained SSH sessions immediately");
+    settings.Detach(); log.Detach(); ReleaseGlobalProxyInstance();
     WSACleanup(); printf("All SSH transport tests passed.\n"); return 0;
 }

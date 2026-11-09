@@ -212,7 +212,9 @@ def control(s):
     elif command == b'respond': reply_keepalive = True
     elif command == b'hold-opens': open_gate.clear()
     elif command == b'release-opens': open_gate.set()
-    with lock: result = dict(stats)
+    with lock:
+        result = dict(stats)
+        result['active_sessions'] = sum(t.is_active() for t in transports)
     s.sendall(json.dumps(result).encode() + b'\n'); s.close()
 
 configuration = {'a': listen(lambda s: ssh(s,'a')), 'b': listen(lambda s: ssh(s,'b')),

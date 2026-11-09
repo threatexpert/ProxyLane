@@ -27,6 +27,7 @@ int UdpBlockLogProbe(const char* output);
 int ExitProcessCleanupTestsMain();
 int ScopedProcessSuspensionTestsMain();
 int TrafficStatisticsTestsMain();
+int SshSessionLifetimeTestsMain();
 
 int DetourHooksTestsMain();
 
@@ -34,6 +35,7 @@ int DetourHooksTestCase(const char* name);
 
 int main(int argc, char** argv)
 {
+    if (SshSessionLifetimeTestsMain() != 0) return 1;
     if (argc == 2 && std::strcmp(argv[1], "--update-release") == 0)
         return UpdateReleaseTestsMain();
     if (UpdateReleaseTestsMain() != 0) return 1;
