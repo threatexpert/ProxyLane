@@ -233,7 +233,6 @@ BOOL CPage1::OnInitDialog()
 		struct { CModernButton* button; UINT id; LPCWSTR key; } buttons[] = {
 			{ &m_btnChainAdd, 0x2406, L"page1.chain_add" }, { &m_btnChainUp, 0x2407, L"page1.chain_up" },
 			{ &m_btnChainDown, 0x2408, L"page1.chain_down" }, { &m_btnChainRemove, 0x2409, L"page1.chain_remove" } };
-		m_staticChainRoute.Create(L"", WS_CHILD | SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS, CRect(), this, 0x240A);
 		m_listChain.SetFont(&m_uiFont);
 		order(m_listChain);
 		for (auto& entry : buttons)
@@ -245,8 +244,6 @@ BOOL CPage1::OnInitDialog()
 			entry.button->SetVisualStyle(CModernButton::STYLE_SECONDARY);
 			order(*entry.button);
 		}
-		m_staticChainRoute.SetFont(&m_uiFont);
-		order(m_staticChainRoute);
 	}
 
 	m_OK.SetVisualStyle(CModernButton::STYLE_PRIMARY);
@@ -473,7 +470,7 @@ void CPage1::LayoutSettingsPage()
 		}
 		const UINT serverIds[] = { IDC_STATIC_TYPE_LABEL, IDC_CB_PROXYTYPE, IDC_STATIC_HOST_LABEL,
 			IDC_EDIT_ADDR, IDC_STATIC_PORT_LABEL, IDC_EDIT_PORT, 0x2402 };
-		const UINT chainIds[] = { 0x2405, 0x2406, 0x2407, 0x2408, 0x2409, 0x240A };
+		const UINT chainIds[] = { 0x2405, 0x2406, 0x2407, 0x2408, 0x2409 };
 		for (int i = 0; i < _countof(serverIds); ++i)
 			if (CWnd* control = GetDlgItem(serverIds[i]))
 				control->ShowWindow(m_chainMode ? SW_HIDE : SW_SHOW);
@@ -487,7 +484,7 @@ void CPage1::LayoutSettingsPage()
 			for (int i = 0; i < _countof(optionalIds); ++i)
 				if (CWnd* control = GetDlgItem(optionalIds[i]))
 					control->ShowWindow(SW_HIDE);
-			// Hop list (header + four rows), its buttons, then the route line.
+			// Hop list (header + four rows), then its buttons.
 			const int listH = S(26) * 5 + S(4);
 			place(0x2405, innerX, row, innerW, listH);
 			row += listH + S(8);
@@ -502,9 +499,7 @@ void CPage1::LayoutSettingsPage()
 			place(0x2408, x, row, downW, fieldH);
 			x -= gap + upW;
 			place(0x2407, x, row, upW, fieldH);
-			row += fieldH + S(10);
-			place(0x240A, innerX, row, innerW, labelH);
-			row += labelH + S(10);
+			row += fieldH + S(12);
 		}
 		const int typeW = S(92), portW = S(64), endpointGap = S(8);
 		const int advancedW = textWidth(0x2402) + S(16);
@@ -727,7 +722,6 @@ BOOL CPage1::UsesSecondaryText(UINT controlId) const
 	case IDC_STATIC_CHILDFILTER_HINT:
 	case IDC_STATIC_TARGETFILTER_HINT:
 	case IDC_STATIC_UPSTREAM_HINT:
-	case 0x240A: // chain route line
 		return TRUE;
 	}
 	return CModernDialog::UsesSecondaryText(controlId);
@@ -2540,7 +2534,6 @@ void CPage1::RefreshChainList(int select)
 		return;
 	m_listChain.SetRedraw(FALSE);
 	m_listChain.DeleteAllItems();
-	CString route;
 	for (int i = 0; i < (int)m_chainHops.size(); ++i)
 	{
 		CfgProxyItem item;
@@ -2551,14 +2544,11 @@ void CPage1::RefreshChainList(int select)
 		m_listChain.SetItemText(i, 1, m_chainHops[i]);
 		m_listChain.SetItemText(i, 2, !m_profileStore.Load(item) ? Localization::Get(L"page1.chain_hop_missing") :
 			!CProxyProfileStore::IsChainHop(item) ? Localization::Get(L"page1.chain_hop_invalid") : DescribeServer(item));
-		route += m_chainHops[i] + L" \x2192 ";
 	}
 	if (select >= 0 && select < (int)m_chainHops.size())
 		m_listChain.SetItemState(select, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 	m_listChain.SetRedraw(TRUE);
 	m_listChain.Invalidate();
-	m_staticChainRoute.SetWindowText(m_chainHops.size() < 2 ? Localization::Get(L"page1.chain_empty")
-		: Localization::Format(L"page1.chain_route", (LPCTSTR)route.Left(route.GetLength() - 3)));
 	UpdateChainButtons();
 }
 

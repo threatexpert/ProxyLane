@@ -274,14 +274,21 @@ class Settings : public IProxySettings
 {
 public:
 	ProxyChain chain;
+	LONG chainQueries = 0;
+	bool redirectPrivateDns = false;
 	BOOL GetProxySettings(LPProxySettingsInfo settings) override
 	{
 		ZeroMemory(settings, sizeof(*settings));
 		settings->bHookTCP = TRUE;
 		settings->nDNSOption = PSI_DNSOPT_REMOTE;
+		if (redirectPrivateDns)
+		{
+			settings->bRedirectPrivateDNS = TRUE;
+			settings->redirectDNSAddr.SetIP("8.8.8.8");
+			settings->redirectDNSAddr.SetPort(53);
+		}
 		return TRUE;
 	}
-	LONG chainQueries = 0;
 	BOOL GetProxyInfo(const LPPRCClient, LPProxyInfo result) override
 	{
 		*result = chain[0];
@@ -332,7 +339,7 @@ static void PipeRead(HANDLE pipe, void* data, DWORD size)
 
 // Sends one connection through the PRC with the given chain; returns whether
 // a byte round-trips through the echo target.
-static bool Through(Settings& settings, Log& log, WORD targetPort, bool byName)
+static bool Through(Settings& settings, Log& log, WORD targetPort, bool byName, const char* targetIp = NULL)
 {
 	IGlobalProxy* proxy = GetGlobalProxyInstance();
 	Check(proxy != NULL, "global proxy");
@@ -371,7 +378,7 @@ static bool Through(Settings& settings, Log& log, WORD targetPort, bool byName)
 	Check(GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user) != FALSE, "process identity");
 	registration.processCreateTime = ((ULONGLONG)created.dwHighDateTime << 32) | created.dwLowDateTime;
 	registration.srcAddr = source;
-	registration.dstAddr.SetIP(byName ? "127.255.0.1" : "127.0.0.1");
+	registration.dstAddr.SetIP(targetIp ? targetIp : byName ? "127.255.0.1" : "127.0.0.1");
 	registration.dstAddr.SetPort(targetPort);
 	if (byName) strcpy_s(registration.szDomainName, "localhost");
 	header.action = PRCPD_REGISTERCLIENT;
@@ -596,6 +603,23 @@ int main()
 		passed &= Report(ok && a.Target() == targetIp && settings.chainQueries == 1 && log.proxyFailures == 0,
 			"single upstream still uses one layer", "hop saw " + a.Target() +
 			", chain queries " + std::to_string(settings.chainQueries));
+	}
+	{
+		// Redirect private DNS: TCP to a LAN resolver (192.168.1.1:53) leaves the
+		// last hop for the public resolver. The last hop rejects, so nothing
+		// leaves this machine; it only records what it was asked for.
+		Server a(Server::SOCKS5), b(Server::HTTP), c(Server::SOCKS5);
+		c.reject = true;
+		a.Start(); b.Start(); c.Start();
+		Settings settings; Log log;
+		settings.redirectPrivateDns = true;
+		settings.chain.push_back(Hop(TEXT("SOCKS5"), a.Port()));
+		settings.chain.push_back(Hop(TEXT("HTTP"), b.Port()));
+		settings.chain.push_back(Hop(TEXT("SOCKS5"), c.Port()));
+		Through(settings, log, 53, false, "192.168.1.1");
+		passed &= Report(a.Target() == "127.0.0.1:" + std::to_string(b.Port()) &&
+			b.Target() == "127.0.0.1:" + std::to_string(c.Port()) && c.Target() == "8.8.8.8:53",
+			"private DNS over TCP is redirected at the last hop", "last hop asked for " + c.Target());
 	}
 	{
 		// No hop limit: eight hops, alternating SOCKS5 and HTTP.

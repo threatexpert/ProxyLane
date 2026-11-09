@@ -23,8 +23,6 @@
   "page1.chain_up": "上移",
   "page1.chain_down": "下移",
   "page1.chain_remove": "移除",
-  "page1.chain_empty": "至少添加两个配置才能组成代理链。",
-  "page1.chain_route": "路径：应用 → %s → 互联网",
   "page1.chain_hop_missing": "（配置已不存在）",
   "page1.chain_hop_invalid": "（不是 SOCKS5 或 HTTP 服务器配置）",
   "profile.chain_too_short": "代理链至少需要两个配置。",

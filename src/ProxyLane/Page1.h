@@ -50,7 +50,6 @@ public:
 	CModernButton m_btnChainUp;
 	CModernButton m_btnChainDown;
 	CModernButton m_btnChainRemove;
-	CStatic m_staticChainRoute;
 	afx_msg void OnChainAdd();
 	afx_msg void OnChainUp();
 	afx_msg void OnChainDown();

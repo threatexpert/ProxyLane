@@ -23,8 +23,6 @@
   "page1.chain_up": "Move up",
   "page1.chain_down": "Move down",
   "page1.chain_remove": "Remove",
-  "page1.chain_empty": "Add at least two profiles to build a chain.",
-  "page1.chain_route": "Route: App → %s → Internet",
   "page1.chain_hop_missing": "(profile no longer exists)",
   "page1.chain_hop_invalid": "(not a SOCKS5 or HTTP server profile)",
   "profile.chain_too_short": "A chain needs at least two profiles.",
