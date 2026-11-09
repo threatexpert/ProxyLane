@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "ModernUI.h"
+#include "ProxyTestResultDialog.h"
 #include <iostream>
 #include <stdexcept>
 
@@ -23,6 +24,17 @@ public:
         return CWnd::OnCommand(wp, lp);
     }
 };
+struct RowTooltip { HWND row; HWND tooltip; };
+static BOOL CALLBACK FindRowTooltip(HWND window, LPARAM parameter) {
+    RowTooltip& found = *reinterpret_cast<RowTooltip*>(parameter);
+    TCHAR name[64] = {};
+    GetClassName(window, name, _countof(name));
+    if (_tcscmp(name, TOOLTIPS_CLASS) != 0) return TRUE;
+    TOOLINFO info = {sizeof(info)}; info.hwnd = found.row; info.uId = 1;
+    if (!SendMessage(window, TTM_GETTOOLINFO, 0, reinterpret_cast<LPARAM>(&info))) return TRUE;
+    found.tooltip = window;
+    return FALSE;
+}
 int wmain() {
     if (!AfxWinInit(GetModuleHandle(NULL), NULL, GetCommandLine(), 0)) return 2;
     try {
@@ -67,6 +79,31 @@ int wmain() {
         Check(text.GetLineCount() == 2 && begin == 0 && end == 5 && (text.GetStyle() & ES_READONLY) &&
             (text.GetStyle() & WS_VSCROLL) && (text.GetStyle() & WS_HSCROLL),
             "rounded multiline field preserves lines, selection, read-only and scroll bars");
+        CProxyTestResultRow resultRow;
+        CFont resultFont;
+        Check(resultRow.Create(L"", WS_CHILD | SS_OWNERDRAW, CRect(0, 0, 200, 96), &host, 107) != FALSE,
+            "dynamic proxy result row creation");
+        UiTheme::CreateUiFont(resultFont, resultRow, 9);
+        resultRow.SetFont(&resultFont);
+        const CString fullError = L"Long proxy error: server.example.invalid:1080 rejected authentication & no alternative method is available.";
+        resultRow.Set(CProxyTestResultRow::Failed, L"Proxy TCP", L"Failed", fullError);
+        RowTooltip tooltip = {resultRow, NULL};
+        EnumThreadWindows(GetCurrentThreadId(), FindRowTooltip, reinterpret_cast<LPARAM>(&tooltip));
+        Check(tooltip.tooltip != NULL && (resultRow.GetStyle() & SS_NOTIFY),
+            "truncated result subtitle registers a tooltip and receives mouse events");
+        TCHAR fullTip[2048] = {};
+        TOOLINFO info = {sizeof(info)}; info.hwnd = resultRow; info.uId = 1; info.lpszText = fullTip;
+        SendMessage(tooltip.tooltip, TTM_GETTEXT, 0, reinterpret_cast<LPARAM>(&info));
+        Check(fullError == fullTip, "tooltip retains the full error including literal ampersands");
+        resultRow.MoveWindow(0, 0, 2000, 96);
+        Check(SendMessage(tooltip.tooltip, TTM_GETTOOLCOUNT, 0, 0) == 0,
+            "widening a result row removes its unnecessary tooltip");
+        resultRow.MoveWindow(0, 0, 200, 96);
+        Check(SendMessage(tooltip.tooltip, TTM_GETTOOLCOUNT, 0, 0) == 1,
+            "narrowing a result row restores its overflow tooltip");
+        resultRow.Set(CProxyTestResultRow::Passed, L"Proxy TCP", L"Connected", L"OK");
+        Check(SendMessage(tooltip.tooltip, TTM_GETTOOLCOUNT, 0, 0) == 0,
+            "short replacement subtitles do not retain stale error tooltips");
         host.DestroyWindow();
         CModernDialog resourceDialog(6000);
         Check(resourceDialog.Create(6000) != FALSE, "hidden resource dialog creation");

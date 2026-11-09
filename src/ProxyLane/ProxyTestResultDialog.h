@@ -19,8 +19,29 @@ public:
 	{
 		state = value; title = heading; status = label; detail = description;
 		SetWindowText(title + _T(" — ") + status + _T("\r\n") + detail);
+		// Set is called after Create has finished; avoid nested MFC window
+		// creation from PreSubclassWindow for dynamically-created rows.
+		ModifyStyle(0, SS_NOTIFY);
+		if (!m_tooltip.GetSafeHwnd() && m_tooltip.Create(GetParent(), TTS_ALWAYSTIP | TTS_NOPREFIX))
+			m_tooltip.SetDelayTime(TTDT_AUTOPOP, 20000);
+		UpdateOverflowTooltip();
 	}
 protected:
+	BOOL PreTranslateMessage(MSG* message) override
+	{
+		if (message && m_tooltip.GetSafeHwnd())
+		{
+			if (message->message == WM_MOUSEMOVE) UpdateOverflowTooltip();
+			m_tooltip.RelayEvent(message);
+		}
+		return CStatic::PreTranslateMessage(message);
+	}
+	LRESULT WindowProc(UINT message, WPARAM wParam, LPARAM lParam) override
+	{
+		const LRESULT result = CStatic::WindowProc(message, wParam, lParam);
+		if (message == WM_SIZE || message == WM_SETFONT) UpdateOverflowTooltip();
+		return result;
+	}
 	void DrawItem(LPDRAWITEMSTRUCT item) override
 	{
 		CDC dc; dc.Attach(item->hDC);
@@ -64,11 +85,51 @@ protected:
 		if (headingFont) dc.SelectObject(headingFont);
 		dc.DrawText(title, titleRect, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
 		dc.SelectObject(GetFont());
-		CRect detailRect(s(12), s(32), rect.right-s(12), rect.bottom-s(5));
+		CRect detailRect = DetailRect();
 		dc.SetTextColor(UiTheme::TextSecondary());
 		dc.DrawText(detail, detailRect, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 		dc.RestoreDC(saved); dc.Detach();
 	}
+private:
+	CRect DetailRect() const
+	{
+		CRect rect; GetClientRect(&rect);
+		return CRect(UiTheme::ScaleForWindow(m_hWnd, 12), UiTheme::ScaleForWindow(m_hWnd, 32),
+			rect.right-UiTheme::ScaleForWindow(m_hWnd, 12), rect.bottom-UiTheme::ScaleForWindow(m_hWnd, 5));
+	}
+	void UpdateOverflowTooltip()
+	{
+		if (!GetSafeHwnd() || !m_tooltip.GetSafeHwnd()) return;
+		const CRect rect = DetailRect();
+		CClientDC dc(this);
+		CFont* font = GetFont();
+		CFont* old = font ? dc.SelectObject(font) : NULL;
+		const CSize extent = dc.GetTextExtent(detail);
+		if (old) dc.SelectObject(old);
+		const bool truncated = !rect.IsRectEmpty() && !detail.IsEmpty() &&
+			(extent.cx > rect.Width() || extent.cy > rect.Height() ||
+			 detail.Find(_T('\n')) >= 0 || detail.Find(_T('\r')) >= 0);
+		if (!truncated)
+		{
+			if (m_tooltip.GetToolCount()) { m_tooltip.Pop(); m_tooltip.DelTool(this, 1); }
+			m_tooltipText.Empty();
+			return;
+		}
+		m_tooltip.SetMaxTipWidth(UiTheme::ScaleForWindow(m_hWnd, 420));
+		if (!m_tooltip.GetToolCount())
+		{
+			m_tooltipText = detail;
+			m_tooltip.AddTool(this, m_tooltipText, rect, 1);
+		}
+		else if (m_tooltipText != detail)
+		{
+			m_tooltipText = detail;
+			m_tooltip.UpdateTipText(m_tooltipText, this, 1);
+		}
+		m_tooltip.SetToolRect(this, 1, rect);
+	}
+	CString m_tooltipText;
+	CToolTipCtrl m_tooltip;
 };
 
 // Ordinary results contain exactly three rows and one Close button. SSH first

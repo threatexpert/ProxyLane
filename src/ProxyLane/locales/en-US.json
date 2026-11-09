@@ -345,7 +345,7 @@
   "profile.invalid_endpoint": "Check the upstream proxy address and port.",
   "profile.psk_required": "A PSK is required when gonc TLS-PSK encryption is selected.",
   "profile.secure_transport_unsupported": "gonc TLS-PSK supports SOCKS5 and HTTP only.",
-  "profile.unsupported_type": "Choose NOPROXY, SOCKS5, or HTTP. SOCKS4 and SOCKS4A are no longer supported.",
+  "profile.unsupported_type": "Choose NOPROXY, SOCKS5, HTTP, or SSH. SOCKS4 and SOCKS4A are no longer supported.",
   "profile.unsaved_prompt": "The current profile has unsaved changes.\r\n\r\nChoose Yes to save, or No to discard the changes.",
   "profile.unsaved_title": "Unsaved Profile",
   "profile.save_before_start": "This profile has not been saved. Save and enable it now?",

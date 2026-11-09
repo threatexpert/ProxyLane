@@ -345,7 +345,7 @@
   "profile.invalid_endpoint": "请检查上游代理的地址和端口是否填写正确。",
   "profile.psk_required": "选择 gonc TLS-PSK 加密模式后必须填写 PSK。",
   "profile.secure_transport_unsupported": "gonc TLS-PSK 仅支持 SOCKS5 和 HTTP。",
-  "profile.unsupported_type": "请选择 NOPROXY、SOCKS5 或 HTTP。SOCKS4 和 SOCKS4A 已不再支持。",
+  "profile.unsupported_type": "请选择 NOPROXY、SOCKS5、HTTP 或 SSH。SOCKS4 和 SOCKS4A 已不再支持。",
   "profile.unsaved_prompt": "当前配置尚未保存。\r\n\r\n选择“是”保存，选择“否”放弃更改。",
   "profile.unsaved_title": "未保存的配置",
   "profile.save_before_start": "当前配置尚未保存。现在保存并启用吗？",
