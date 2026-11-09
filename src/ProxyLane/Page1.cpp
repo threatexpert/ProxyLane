@@ -1085,6 +1085,13 @@ void CPage1::OnProtocolChanged()
     // A TLS PSK and an SSH host-key pin have different meanings.
     const bool wasSsh = m_editTransportPsk.GetPasswordChar() == 0;
     CString protocol; m_cbProxyType.GetWindowText(protocol);
+    ProxyInfo selectedProxy;
+    selectedProxy.strProxyType = protocol;
+    // Apply the default on a protocol selection, not on every UI refresh,
+    // so users can still explicitly choose to allow direct UDP traffic.
+    if (!m_loadingProfile && m_cbProxyType.GetCurSel() != CB_ERR &&
+        !ProxyTransportPolicy::SupportsUdpProxy(selectedProxy.GetProxyType()))
+        m_btnBlockUDP.SetCheck(BST_CHECKED);
     if (wasSsh || protocol == L"SSH") m_editTransportPsk.SetWindowText(L"");
     if (protocol == L"SSH") {
         m_advancedOpen = TRUE; UpdateAdvancedCaption();
@@ -2153,11 +2160,11 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_btnHookUDP.SetCheck(BST_CHECKED);
 		m_btnBlockUDP.SetCheck(BST_UNCHECKED);
 		m_btnBlockIPv6.SetCheck(BST_UNCHECKED);
-		m_btnDNSLocal.SetCheck(BST_CHECKED);
-		m_btnDNSRemote.SetCheck(BST_UNCHECKED);
+		m_btnDNSLocal.SetCheck(BST_UNCHECKED);
+		m_btnDNSRemote.SetCheck(BST_CHECKED);
 		m_btnRedirectPrivateDNS.SetCheck(BST_CHECKED);
 		m_editRedirectDNS.SetWindowText(_T("8.8.8.8"));
-		m_btnHookChildProcess.SetCheck(BST_UNCHECKED);
+		m_btnHookChildProcess.SetCheck(BST_CHECKED);
 		m_editChildFilter.SetWindowText(_T(""));
 		m_radioChildFilterInclude.SetCheck(BST_CHECKED);
 		m_radioChildFilterExclude.SetCheck(BST_UNCHECKED);
