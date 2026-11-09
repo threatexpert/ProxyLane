@@ -84,6 +84,31 @@ namespace UiTheme
 		PaintElevationBadge(graphics, rect);
 	}
 
+	void DrawRemoveBadge(HDC dc, const CRect& rect, BOOL pressed)
+	{
+		if (!dc || rect.Width() < 8 || rect.Height() < 8) return;
+		EnsureGdiplus();
+		Gdiplus::Graphics graphics(dc);
+		graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+		graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+		const Gdiplus::REAL size = static_cast<Gdiplus::REAL>(min(rect.Width(), rect.Height()));
+		const Gdiplus::REAL x = rect.left + (rect.Width() - size) / 2, y = rect.top + (rect.Height() - size) / 2;
+		const Gdiplus::REAL ring = max(1.5f, size / 10.0f);
+		// Soft shadow lifts the badge off the tile border it overlaps.
+		Gdiplus::SolidBrush shadow(Gdiplus::Color(40, 15, 23, 42));
+		graphics.FillEllipse(&shadow, x, y + ring * 0.6f, size, size);
+		Gdiplus::SolidBrush white(Gdiplus::Color(255, 255, 255, 255));
+		graphics.FillEllipse(&white, x, y, size, size);
+		Gdiplus::SolidBrush disc(pressed ? Gdiplus::Color(255, 185, 28, 28) : ToColor(Danger()));
+		graphics.FillEllipse(&disc, x + ring, y + ring, size - ring * 2, size - ring * 2);
+		const Gdiplus::REAL arm = size * 0.17f, cx = x + size / 2, cy = y + size / 2;
+		Gdiplus::Pen cross(Gdiplus::Color(255, 255, 255, 255), max(1.5f, size / 9.0f));
+		cross.SetStartCap(Gdiplus::LineCapRound);
+		cross.SetEndCap(Gdiplus::LineCapRound);
+		graphics.DrawLine(&cross, cx - arm, cy - arm, cx + arm, cy + arm);
+		graphics.DrawLine(&cross, cx + arm, cy - arm, cx - arm, cy + arm);
+	}
+
 	HICON CreateElevationOverlay(int iconSize)
 	{
 		if (iconSize < 4) return NULL;
@@ -702,6 +727,7 @@ IMPLEMENT_DYNAMIC(CModernButton, CButton)
 
 CModernButton::CModernButton()
 	: m_visualStyle(STYLE_SECONDARY)
+	, m_icon(ICON_NONE)
 	, m_backdrop(UiTheme::PageBackground())
 	, m_hot(FALSE)
 {
@@ -751,6 +777,57 @@ LRESULT CModernButton::OnMouseLeave(WPARAM, LPARAM)
 	return 0;
 }
 
+void CModernButton::SetIcon(Icon icon)
+{
+	if (m_icon == icon) return;
+	m_icon = icon;
+	if (GetSafeHwnd()) Invalidate(FALSE);
+}
+
+int CModernButton::IconWidth() const
+{
+	// 14px icon plus a 6px gap before the caption.
+	return m_icon == ICON_NONE ? 0 : UiTheme::ScaleForWindow(m_hWnd, 20);
+}
+
+namespace
+{
+	void DrawButtonIcon(HDC hdc, CModernButton::Icon icon, const CRect& box, COLORREF color, float stroke)
+	{
+		Gdiplus::Graphics graphics(hdc);
+		graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+		Gdiplus::Pen pen(Gdiplus::Color(255, GetRValue(color), GetGValue(color), GetBValue(color)), stroke);
+		pen.SetStartCap(Gdiplus::LineCapRound);
+		pen.SetEndCap(Gdiplus::LineCapRound);
+		pen.SetLineJoin(Gdiplus::LineJoinRound);
+		const Gdiplus::REAL x = static_cast<Gdiplus::REAL>(box.left), y = static_cast<Gdiplus::REAL>(box.top);
+		const Gdiplus::REAL w = static_cast<Gdiplus::REAL>(box.Width()), h = static_cast<Gdiplus::REAL>(box.Height());
+		if (icon == CModernButton::ICON_POWER)
+		{
+			// Open ring with the gap at the top, and a stem through the gap.
+			const Gdiplus::REAL inset = stroke / 2 + w * 0.06f;
+			graphics.DrawArc(&pen, x + inset, y + inset + h * 0.04f, w - inset * 2, h - inset * 2, 300.0f, 300.0f);
+			graphics.DrawLine(&pen, x + w / 2, y + stroke / 2, x + w / 2, y + h * 0.48f);
+		}
+		else if (icon == CModernButton::ICON_GAUGE)
+		{
+			// Speedometer traced from the supplied 1024-unit artwork: an arc open at
+			// the bottom (centre 518,578, radius 350) and a needle from a hub at
+			// 531,695 to 690,492. Its 150..890 horizontal extent fills the box.
+			const Gdiplus::REAL unit = w / 740.0f;
+			const Gdiplus::REAL ox = x - 150.0f * unit, oy = y + (h - 600.0f * unit) / 2 - 215.0f * unit;
+			auto px = [&](Gdiplus::REAL v) { return ox + v * unit; };
+			auto py = [&](Gdiplus::REAL v) { return oy + v * unit; };
+			const Gdiplus::REAL radius = 350.0f * unit;
+			graphics.DrawArc(&pen, px(518) - radius, py(578) - radius, radius * 2, radius * 2, 153.0f, 234.0f);
+			graphics.DrawLine(&pen, px(531), py(695), px(690), py(492));
+			Gdiplus::SolidBrush hub(Gdiplus::Color(255, GetRValue(color), GetGValue(color), GetBValue(color)));
+			const Gdiplus::REAL hubRadius = max(stroke * 1.1f, 107.0f * unit);
+			graphics.FillEllipse(&hub, px(531) - hubRadius, py(695) - hubRadius, hubRadius * 2, hubRadius * 2);
+		}
+	}
+}
+
 void CModernButton::DrawItem(LPDRAWITEMSTRUCT info)
 {
 	// Paint into an off-screen bitmap so hover/press changes do not flicker.
@@ -792,6 +869,13 @@ void CModernButton::DrawItem(LPDRAWITEMSTRUCT info)
 		text = UiTheme::Accent();
 	}
 
+	if (m_visualStyle == STYLE_SOFT)
+	{
+		fill = pressed || m_hot ? RGB(219, 230, 253) : UiTheme::AccentSoft();
+		border = pressed || m_hot ? UiTheme::Accent() : RGB(191, 209, 250);
+		text = UiTheme::Accent();
+	}
+
 	if (m_visualStyle == STYLE_GHOST)
 	{
 		fill = pressed || m_hot ? UiTheme::AccentSoft() : m_backdrop;
@@ -822,8 +906,21 @@ void CModernButton::DrawItem(LPDRAWITEMSTRUCT info)
 	CFont* font = GetFont();
 	CFont* oldFont = font ? dc.SelectObject(font) : NULL;
 	CRect textRect = rect;
-	dc.DrawText(caption, textRect, DT_CENTER |
-		DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+	if (m_icon != ICON_NONE)
+	{
+		// Centre icon and caption as one group.
+		const int iconSize = UiTheme::ScaleForWindow(m_hWnd, 14);
+		const int captionWidth = dc.GetTextExtent(caption).cx;
+		const int groupLeft = max(rect.left + 2, rect.CenterPoint().x - (IconWidth() + captionWidth) / 2);
+		const int iconTop = rect.top + (rect.Height() - iconSize) / 2;
+		DrawButtonIcon(dc.m_hDC, m_icon, CRect(groupLeft, iconTop, groupLeft + iconSize, iconTop + iconSize), text,
+			max(1.5f, UiTheme::ScaleForWindow(m_hWnd, 16) / 10.0f));
+		textRect.left = groupLeft + IconWidth();
+		dc.DrawText(caption, textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+	}
+	else
+		dc.DrawText(caption, textRect, DT_CENTER |
+			DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 	if (oldFont)
 		dc.SelectObject(oldFont);
 
@@ -1131,7 +1228,7 @@ void CStatusLabel::SetTrafficRates(LPCTSTR uploadText, LPCTSTR downloadText)
 		return;
 	m_uploadText = uploadText;
 	m_downloadText = downloadText;
-	SetWindowText(m_secondaryText + _T("\r\n") + m_uploadText + _T("\r\n") + m_downloadText);
+	SetWindowText(m_secondaryText + _T("\r\n\u2191 ") + m_uploadText + _T("\r\n\u2193 ") + m_downloadText);
 	Invalidate(FALSE);
 	UpdateOverflowTooltip();
 }
@@ -1222,9 +1319,7 @@ void CStatusLabel::UpdateOverflowTooltip()
 		}
 		if (!m_uploadText.IsEmpty())
 		{
-			truncated = truncated || dc.GetTextExtent(m_uploadText).cx > innerWidth ||
-				dc.GetTextExtent(m_downloadText).cx > innerWidth;
-			fullText += _T("\r\n") + m_uploadText + _T("\r\n") + m_downloadText;
+			fullText += _T("\r\n\u2191 ") + m_uploadText + _T("\r\n\u2193 ") + m_downloadText;
 		}
 	}
 	else
@@ -1243,7 +1338,7 @@ void CStatusLabel::UpdateOverflowTooltip()
 	if (!m_detailText.IsEmpty())
 	{
 		fullText = m_detailText;
-		if (!m_uploadText.IsEmpty()) fullText += L"\r\n" + m_uploadText + L"\r\n" + m_downloadText;
+		if (!m_uploadText.IsEmpty()) fullText += L"\r\n\u2191 " + m_uploadText + L"\r\n\u2193 " + m_downloadText;
 		truncated = TRUE;
 	}
 	if (!truncated || fullText.IsEmpty())
@@ -1260,6 +1355,46 @@ void CStatusLabel::UpdateOverflowTooltip()
 		m_tooltip.UpdateTipText(m_tooltipText, this);
 	}
 	m_tooltip.Activate(TRUE);
+}
+
+namespace
+{
+	Gdiplus::Color StatusColor(COLORREF color, BYTE alpha = 255)
+	{
+		return Gdiplus::Color(alpha, GetRValue(color), GetGValue(color), GetBValue(color));
+	}
+
+	// Status dot with a soft halo, centred in `box`.
+	void DrawStatusDot(HDC hdc, const CRect& box, COLORREF color)
+	{
+		Gdiplus::Graphics graphics(hdc);
+		graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+		const Gdiplus::REAL size = static_cast<Gdiplus::REAL>(min(box.Width(), box.Height()));
+		const Gdiplus::REAL cx = box.left + box.Width() / 2.0f, cy = box.top + box.Height() / 2.0f;
+		Gdiplus::SolidBrush halo(StatusColor(color, 48));
+		graphics.FillEllipse(&halo, cx - size / 2, cy - size / 2, size, size);
+		Gdiplus::SolidBrush dot(StatusColor(color));
+		const Gdiplus::REAL inner = size * 0.5f;
+		graphics.FillEllipse(&dot, cx - inner / 2, cy - inner / 2, inner, inner);
+	}
+
+	// Upload / download arrow: a stem and a chevron head.
+	void DrawRateArrow(HDC hdc, const CRect& box, BOOL up, COLORREF color, float stroke)
+	{
+		Gdiplus::Graphics graphics(hdc);
+		graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+		Gdiplus::Pen pen(StatusColor(color), stroke);
+		pen.SetStartCap(Gdiplus::LineCapRound);
+		pen.SetEndCap(Gdiplus::LineCapRound);
+		pen.SetLineJoin(Gdiplus::LineJoinRound);
+		const Gdiplus::REAL x = static_cast<Gdiplus::REAL>(box.left), y = static_cast<Gdiplus::REAL>(box.top);
+		const Gdiplus::REAL w = static_cast<Gdiplus::REAL>(box.Width()), h = static_cast<Gdiplus::REAL>(box.Height());
+		const Gdiplus::REAL cx = x + w / 2, tip = up ? y + stroke / 2 : y + h - stroke / 2, tail = up ? y + h - stroke / 2 : y + stroke / 2;
+		const Gdiplus::REAL head = (up ? 1 : -1) * w * 0.42f;
+		graphics.DrawLine(&pen, cx, tip, cx, tail);
+		const Gdiplus::PointF chevron[] = { { cx - w * 0.42f, tip + head }, { cx, tip }, { cx + w * 0.42f, tip + head } };
+		graphics.DrawLines(&pen, chevron, _countof(chevron));
+	}
 }
 
 void CStatusLabel::DrawItem(LPDRAWITEMSTRUCT info)
@@ -1309,7 +1444,15 @@ void CStatusLabel::DrawItem(LPDRAWITEMSTRUCT info)
 	const BOOL inlineStatus = m_inline && !m_twoLine;
 	CPen* oldPen = NULL;
 	CBrush* oldBrush = NULL;
-	if (!inlineStatus)
+	if (m_twoLine)
+	{
+		// Neutral (stopped) stays white; an active tone keeps its tinted card so
+		// a running proxy stands out in the sidebar.
+		rect.DeflateRect(1, 1);
+		if (m_tone == TONE_NEUTRAL) { fill = RGB(255, 255, 255); border = UiTheme::BorderSoft(); }
+		UiTheme::FillRoundRect(dc.m_hDC, rect, UiTheme::ScaleForWindow(m_hWnd, 10), fill, border);
+	}
+	else if (!inlineStatus)
 	{
 		rect.DeflateRect(1, 1);
 		UiTheme::FillRoundRect(dc.m_hDC, rect, UiTheme::ScaleForWindow(m_hWnd, 9), fill, border);
@@ -1321,53 +1464,52 @@ void CStatusLabel::DrawItem(LPDRAWITEMSTRUCT info)
 
 	if (m_twoLine)
 	{
-		const int horizontalPadding = UiTheme::ScaleForWindow(m_hWnd, 9);
-		const int verticalPadding = UiTheme::ScaleForWindow(m_hWnd, 5);
-		const int primaryHeight = UiTheme::ScaleForWindow(m_hWnd, m_compact ? 18 : 22);
-		const int dotSize = UiTheme::ScaleForWindow(m_hWnd, 6);
-		const int dotGap = UiTheme::ScaleForWindow(m_hWnd, 6);
+		// Header: status dot and title; below it the profile name, aligned with
+		// the title. When rates are present, a divider and two label/value rows.
+		auto S = [this](int value) { return UiTheme::ScaleForWindow(m_hWnd, value); };
 		CRect inner(rect);
-		inner.DeflateRect(horizontalPadding, verticalPadding);
+		inner.DeflateRect(S(12), S(9));
+		const int titleHeight = S(20), lineHeight = S(18), dotSize = S(12);
+		const COLORREF title = m_tone == TONE_NEUTRAL ? UiTheme::TextSecondary() : text;
+		const COLORREF dot = m_tone == TONE_NEUTRAL ? RGB(160, 166, 177) : text;
+		const int textLeft = inner.left + dotSize + S(6);
 
-		CRect primaryRect(inner.left + dotSize + dotGap, inner.top,
-			inner.right, min(inner.bottom, inner.top + primaryHeight));
-		CRect dotRect(inner.left,
-			primaryRect.CenterPoint().y - dotSize / 2,
-			inner.left + dotSize,
-			primaryRect.CenterPoint().y - dotSize / 2 + dotSize);
-		CPen dotPen(PS_SOLID, 1, text);
-		CBrush dotBrush(text);
-		oldPen = dc.SelectObject(&dotPen);
-		oldBrush = dc.SelectObject(&dotBrush);
-		dc.Ellipse(dotRect);
-		dc.SelectObject(oldBrush);
-		dc.SelectObject(oldPen);
+		CRect titleRect(textLeft, inner.top, inner.right, inner.top + titleHeight);
+		DrawStatusDot(dc.m_hDC, CRect(inner.left, titleRect.CenterPoint().y - dotSize / 2,
+			inner.left + dotSize, titleRect.CenterPoint().y - dotSize / 2 + dotSize), dot);
+		dc.SetTextColor(title);
+		dc.DrawText(m_primaryText, titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
-		dc.SetTextColor(text);
-		dc.DrawText(m_primaryText, primaryRect,
-			DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
-
-		CRect secondaryRect(inner.left, primaryRect.bottom, inner.right, inner.bottom);
-		if (!m_uploadText.IsEmpty())
-			secondaryRect.bottom = min(inner.bottom, secondaryRect.top + primaryHeight);
 		if (!m_detailFont.GetSafeHandle()) UiTheme::CreateUiFont(m_detailFont, m_hWnd, 9, FW_NORMAL);
-		CFont* primaryFont = dc.SelectObject(&m_detailFont);
-		dc.SetTextColor(UiTheme::TextSecondary());
-		dc.DrawText(m_secondaryText, secondaryRect,
-			DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
-		dc.SelectObject(primaryFont);
+		CFont* titleFont = dc.SelectObject(&m_detailFont);
+		CRect profileRect(textLeft, titleRect.bottom, inner.right, titleRect.bottom + lineHeight);
+		dc.SetTextColor(UiTheme::TextPrimary());
+		dc.DrawText(m_secondaryText, profileRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+
 		if (!m_uploadText.IsEmpty())
 		{
-			CRect rateRect(inner.left, secondaryRect.bottom + UiTheme::ScaleForWindow(m_hWnd, 4),
-				inner.right, inner.bottom);
-			rateRect.bottom = min(inner.bottom, rateRect.top + primaryHeight);
-			dc.SetTextColor(UiTheme::TextSecondary());
-			dc.DrawText(m_uploadText, rateRect,
-				DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
-			rateRect.OffsetRect(0, primaryHeight);
-			dc.DrawText(m_downloadText, rateRect,
-				DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+			const int dividerY = profileRect.bottom + S(7);
+			dc.FillSolidRect(inner.left, dividerY, inner.Width(), 1, border);
+			const int arrowSize = S(10);
+			const float stroke = max(1.3f, S(14) / 10.0f);
+			CRect row(inner.left, dividerY + S(7), inner.right, dividerY + S(7) + lineHeight);
+			for (int i = 0; i < 2; ++i)
+			{
+				const BOOL up = i == 0;
+				const int arrowTop = row.CenterPoint().y - arrowSize / 2;
+				DrawRateArrow(dc.m_hDC, CRect(row.left + S(1), arrowTop, row.left + S(1) + arrowSize, arrowTop + arrowSize),
+					up, up ? UiTheme::Accent() : UiTheme::Success(), stroke);
+				CRect label(row.left + arrowSize + S(7), row.top, row.right, row.bottom);
+				dc.SetTextColor(UiTheme::TextSecondary());
+				dc.DrawText(Localization::Get(up ? L"status.upload" : L"status.download"), label,
+					DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+				dc.SetTextColor(UiTheme::TextPrimary());
+				dc.DrawText(up ? m_uploadText : m_downloadText, row,
+					DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+				row.OffsetRect(0, lineHeight + S(2));
+			}
 		}
+		dc.SelectObject(titleFont);
 	}
 	else if (inlineStatus)
 	{

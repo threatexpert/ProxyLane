@@ -514,7 +514,8 @@ void CPage1::LayoutSettingsPage()
 	// Section card: the three option groups share one frame rectangle.
 	{
 		const int top = y;
-		const int rowH = S(29);
+		// 24px switches on a 38px pitch leave visible air between option rows.
+		const int rowH = S(38);
 		const int checkH = S(24);
 		int row = top + S(34);
         // Size switches by their label plus the track; wrap whole controls on
@@ -542,7 +543,7 @@ void CPage1::LayoutSettingsPage()
             place(IDC_EDIT_REDIRECT_DNS, innerX + redirectW + S(12), row - (fieldH - checkH) / 2,
                 innerW - redirectW - S(12), fieldH);
         }
-        const int height = m_activeTab == 0 ? row + max(fieldH, checkH) + S(10) - top
+        const int height = m_activeTab == 0 ? row + max(fieldH, checkH) + S(16) - top
             : max(S(220), client.Height() - margin - top);
         const CRect frame(x0, top, x0 + contentW, top + height);
         place(IDC_STATIC_GROUP_OTHER, frame.left, frame.top, frame.Width(), frame.Height());
@@ -1340,6 +1341,18 @@ void CPage1::OnDestroy()
 	OnBnClickedCancel();
 }
 
+
+CString CPage1::GetProxyTestStatus(CStatusLabel::Tone& tone) const
+{
+	CString text;
+	tone = CStatusLabel::TONE_NEUTRAL;
+	if (m_staticTestProxy.GetSafeHwnd())
+	{
+		m_staticTestProxy.GetWindowText(text);
+		tone = m_staticTestProxy.GetTone();
+	}
+	return text;
+}
 
 void CPage1::OnBnClickedTestproxy()
 {

@@ -554,10 +554,8 @@ void CLaunchPanel::RebuildTooltips()
 		CRect rect = TileRect(index);
 		if (m_organizing)
 		{
-			CRect shortcut = ShortcutRect(index), remove = RemoveRect(index);
-			m_tooltip.AddTool(this, Localization::Get(m_tiles[index].available ? L"shortcut.create" : L"recent.unavailable"), &shortcut, ++m_tipCount);
+			CRect remove = RemoveRect(index);
 			m_tooltip.AddTool(this, Localization::Get(L"recent.remove"), &remove, ++m_tipCount);
-			rect.top = max(shortcut.bottom, remove.bottom);
 		}
 		m_tooltip.AddTool(this, m_tiles[index].tip + L"\r\n" + Localization::Get(m_organizing ? L"launch.organize_active" : L"launch.organize_hint"), &rect, ++m_tipCount);
 	}
@@ -566,7 +564,7 @@ void CLaunchPanel::RebuildTooltips()
 void CLaunchPanel::StopMotion()
 {
 	CancelTileMove();
-	m_removePressed = m_shortcutPressed = -1;
+	m_removePressed = -1;
 	m_pointerDown = m_dragging = m_touchPanning = m_animating = FALSE;
 	m_hot = m_pressed = -1;
 	if (GetSafeHwnd())
@@ -734,7 +732,7 @@ void CLaunchPanel::EndDrag(CPoint point, BOOL allowClick)
 
 void CLaunchPanel::OnCaptureChanged(CWnd* window)
 {
-	m_removePressed = m_shortcutPressed = -1;
+	m_removePressed = -1;
 	if (m_pointerDown)
 	{
 		CancelTileMove();
@@ -747,8 +745,9 @@ void CLaunchPanel::OnCaptureChanged(CWnd* window)
 CRect CLaunchPanel::RemoveRect(int index) const
 {
 	const CRect tile = TileRect(index);
-	// The hit target is larger than the painted cross, especially useful over RDP.
-	return CRect(max(tile.CenterPoint().x, tile.right - Scale(18)), tile.top - Scale(4), tile.right + Scale(2), tile.top + Scale(16));
+	// Painted at 20px over the corner; the hit target is 28px, which helps over RDP.
+	const CPoint centre(tile.right - Scale(4), tile.top + Scale(4));
+	return CRect(centre.x - Scale(14), centre.y - Scale(14), centre.x + Scale(14), centre.y + Scale(14));
 }
 
 int CLaunchPanel::HitTestRemove(CPoint point) const
@@ -756,20 +755,6 @@ int CLaunchPanel::HitTestRemove(CPoint point) const
 	if (!m_organizing || m_reordering || m_pointerDown || m_animating || m_busyTile >= 0) return -1;
 	for (int i = m_firstTile; i < m_firstTile + VisibleTileCount(); ++i)
 		if (RemoveRect(i).PtInRect(point)) return i;
-	return -1;
-}
-
-CRect CLaunchPanel::ShortcutRect(int index) const
-{
-	const CRect tile = TileRect(index);
-	return CRect(tile.left - Scale(2), tile.top - Scale(4), min(tile.CenterPoint().x, tile.left + Scale(18)), tile.top + Scale(16));
-}
-
-int CLaunchPanel::HitTestShortcut(CPoint point) const
-{
-	if (!m_organizing || m_reordering || m_pointerDown || m_animating || m_busyTile >= 0) return -1;
-	for (int i = m_firstTile; i < m_firstTile + VisibleTileCount(); ++i)
-		if (m_tiles[i].available && ShortcutRect(i).PtInRect(point)) return i;
 	return -1;
 }
 
@@ -922,7 +907,7 @@ void CLaunchPanel::OnPaint()
 		if (!m_compact)
 		{
 			dc.SelectObject(&m_bodyFont);
-			dc.SetTextColor(UiTheme::TextSecondary());
+			dc.SetTextColor(m_bodyColor == CLR_NONE ? UiTheme::TextSecondary() : m_bodyColor);
 			dc.DrawText(m_body, bodyRect, DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
 		}
 		dc.SelectObject(oldFont);
@@ -1029,25 +1014,10 @@ void CLaunchPanel::OnPaint()
 	}
 	if (m_organizing && !m_reordering && !m_animating && !m_dragging) {
 		for (int i = m_firstTile; i < m_firstTile + VisibleTileCount(); ++i) {
-			CRect badge = RemoveRect(i); badge.DeflateRect(Scale(2), Scale(2));
-			const BOOL down = m_removePressed == i && RemoveRect(i).PtInRect(m_editPoint);
-			UiTheme::FillRoundRect(dc.m_hDC, badge, Scale(8), down ? UiTheme::Danger() : UiTheme::DangerSoft(), UiTheme::Danger());
-			CRect cross = badge; cross.DeflateRect(Scale(5), Scale(5));
-			CPen pen(PS_SOLID, max(1, Scale(1)), down ? RGB(255, 255, 255) : UiTheme::Danger());
-			CPen* old = dc.SelectObject(&pen);
-			dc.MoveTo(cross.TopLeft()); dc.LineTo(cross.BottomRight());
-			dc.MoveTo(cross.right, cross.top); dc.LineTo(cross.left, cross.bottom);
-			dc.SelectObject(old);
-			CRect shortcut = ShortcutRect(i); shortcut.DeflateRect(Scale(2), Scale(2));
-			const BOOL pressed = m_shortcutPressed == i && ShortcutRect(i).PtInRect(m_editPoint);
-			const COLORREF accent = m_tiles[i].available ? UiTheme::Accent() : UiTheme::TextSecondary();
-			UiTheme::FillRoundRect(dc.m_hDC, shortcut, Scale(8), pressed ? accent : UiTheme::AccentSoft(), accent);
-			CRect arrow = shortcut; arrow.DeflateRect(Scale(4), Scale(4));
-			CPen arrowPen(PS_SOLID, max(1, Scale(1)), pressed ? RGB(255, 255, 255) : accent);
-			old = dc.SelectObject(&arrowPen);
-			dc.MoveTo(arrow.left, arrow.bottom); dc.LineTo(arrow.right, arrow.top);
-			dc.MoveTo(arrow.left, arrow.top); dc.LineTo(arrow.right, arrow.top); dc.LineTo(arrow.right, arrow.bottom);
-			dc.SelectObject(old);
+			const CRect hit = RemoveRect(i);
+			CRect badge(hit.CenterPoint().x - Scale(10), hit.CenterPoint().y - Scale(10),
+				hit.CenterPoint().x + Scale(10), hit.CenterPoint().y + Scale(10));
+			UiTheme::DrawRemoveBadge(dc.m_hDC, badge, m_removePressed == i && hit.PtInRect(m_editPoint));
 		}
 	}
 	if (m_reordering && m_editIndex >= 0) {
@@ -1067,7 +1037,7 @@ void CLaunchPanel::OnPaint()
 
 void CLaunchPanel::OnMouseMove(UINT flags, CPoint point)
 {
-	if (m_removePressed >= 0 || m_shortcutPressed >= 0) { m_editPoint = point; Invalidate(FALSE); }
+	if (m_removePressed >= 0) { m_editPoint = point; Invalidate(FALSE); }
 	if (!m_tracking)
 	{
 		TRACKMOUSEEVENT track = { sizeof(track), TME_LEAVE, m_hWnd, 0 };
@@ -1076,7 +1046,7 @@ void CLaunchPanel::OnMouseMove(UINT flags, CPoint point)
 	MoveDrag(point);
 	const int hit = m_busyTile < 0 ? HitTestTile(point) : -1;
 	SetHotTile(hit);
-	::SetCursor(::LoadCursor(NULL, hit >= 0 || HitTestRemove(point) >= 0 || HitTestShortcut(point) >= 0 ? IDC_HAND : IDC_ARROW));
+	::SetCursor(::LoadCursor(NULL, hit >= 0 || HitTestRemove(point) >= 0 ? IDC_HAND : IDC_ARROW));
 	CWnd::OnMouseMove(flags, point);
 }
 
@@ -1089,11 +1059,6 @@ LRESULT CLaunchPanel::OnMouseLeave(WPARAM, LPARAM)
 
 void CLaunchPanel::OnLButtonDown(UINT flags, CPoint point)
 {
-	const int shortcut = HitTestShortcut(point);
-	if (shortcut >= 0) {
-		SetFocus(); m_shortcutPressed = shortcut; m_editPoint = point;
-		ClearTooltips(); SetCapture(); Invalidate(FALSE); return;
-	}
 	const int remove = HitTestRemove(point);
 	if (remove >= 0) {
 		SetFocus(); m_removePressed = remove; m_editPoint = point;
@@ -1112,15 +1077,6 @@ void CLaunchPanel::OnLButtonDown(UINT flags, CPoint point)
 
 void CLaunchPanel::OnLButtonUp(UINT flags, CPoint point)
 {
-	if (m_shortcutPressed >= 0) {
-		const int index = m_shortcutPressed;
-		const BOOL create = HitTestShortcut(point) == index;
-		const CString id = m_tiles[index].id;
-		m_shortcutPressed = -1;
-		if (GetCapture() == this) ReleaseCapture();
-		if (create) if (CWnd* parent = GetParent()) parent->SendMessage(WM_LAUNCH_PANEL_SHORTCUT, 0, reinterpret_cast<LPARAM>(&id));
-		RebuildTooltips(); Invalidate(FALSE); return;
-	}
 	if (m_removePressed >= 0) {
 		const int index = m_removePressed;
 		const BOOL remove = HitTestRemove(point) == index;
@@ -1152,8 +1108,70 @@ void CLaunchPanel::OnContextMenu(CWnd*, CPoint point)
 	const int index = keyboard ? m_focusTile : HitTestTile(point);
 	if (index < 0 || index >= static_cast<int>(m_tiles.size())) return;
 	SetFocus();
-	m_pressed = index;
-	StartOrganizing(); // Enter edit mode without opening a menu.
+	CPoint screen = point;
+	if (keyboard) { const CRect tile = TileRect(index); screen = CPoint(tile.left + Scale(8), tile.bottom); }
+	ClientToScreen(&screen);
+	ShowTileMenu(index, screen);
+}
+
+void CLaunchPanel::ShowTileMenu(int index, CPoint screenPoint)
+{
+	enum { CMD_OPEN = 1, CMD_OPEN_ADMIN, CMD_SHORTCUT, CMD_REORDER, CMD_REMOVE };
+	const Tile tile = m_tiles[index];
+	FinishOrganizing();
+	CMenu menu;
+	if (!menu.CreatePopupMenu()) return;
+	const UINT unavailable = tile.available ? 0 : MF_GRAYED;
+	menu.AppendMenu(MF_STRING | unavailable, CMD_OPEN, Localization::Get(L"launch.menu_open"));
+	// An elevated tile already starts as administrator; Store apps cannot.
+	if (!tile.elevated && !tile.packaged)
+		menu.AppendMenu(MF_STRING | unavailable, CMD_OPEN_ADMIN, Localization::Get(L"launch.menu_open_admin"));
+	menu.AppendMenu(MF_SEPARATOR);
+	menu.AppendMenu(MF_STRING | unavailable, CMD_SHORTCUT, Localization::Get(L"shortcut.create"));
+	menu.AppendMenu(MF_STRING | (m_tiles.size() > 1 ? 0 : MF_GRAYED), CMD_REORDER, Localization::Get(L"launch.menu_reorder"));
+	menu.AppendMenu(MF_SEPARATOR);
+	menu.AppendMenu(MF_STRING, CMD_REMOVE, Localization::Get(L"recent.remove"));
+	if (tile.available) menu.SetDefaultItem(CMD_OPEN);
+	const UINT command = menu.TrackPopupMenu(TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
+		screenPoint.x, screenPoint.y, this);
+	// The menu pumps messages: find the tile again by id before acting on it.
+	int current = -1;
+	for (size_t i = 0; i < m_tiles.size(); ++i)
+		if (m_tiles[i].id == tile.id) current = static_cast<int>(i);
+	CWnd* parent = GetParent();
+	if (current < 0 || !parent || m_busyTile >= 0) return;
+	switch (command)
+	{
+	case CMD_OPEN:
+		m_focusTile = current;
+		ActivateTile(current);
+		break;
+	case CMD_OPEN_ADMIN:
+		if (current >= m_firstTile && current < m_firstTile + VisibleTileCount())
+			parent->SendMessage(WM_LAUNCH_PANEL_TILE, static_cast<WPARAM>(current), 1);
+		break;
+	case CMD_SHORTCUT:
+		parent->SendMessage(WM_LAUNCH_PANEL_SHORTCUT, 0, reinterpret_cast<LPARAM>(&tile.id));
+		break;
+	case CMD_REORDER:
+		m_pressed = current;
+		StartOrganizing();
+		break;
+	case CMD_REMOVE:
+	{
+		Edit edit;
+		edit.id = tile.id; edit.remove = TRUE;
+		parent->SendMessage(WM_LAUNCH_PANEL_EDIT, 0, reinterpret_cast<LPARAM>(&edit));
+		break;
+	}
+	}
+}
+
+void CLaunchPanel::SetBodyColor(COLORREF color)
+{
+	if (m_bodyColor == color) return;
+	m_bodyColor = color;
+	if (GetSafeHwnd()) Invalidate(FALSE);
 }
 
 void CLaunchPanel::OnKeyDown(UINT character, UINT repeatCount, UINT flags)

@@ -133,6 +133,9 @@ public:
 	BOOL IsFirstRunGuideActive() const { return m_firstRunGuide; }
 	CString GetSelectedProfileName() { return GetCurrentProfileName(); }
 	CString GetSelectedProfileSummary();
+	// Connection test of the selected profile, mirrored by the applications page.
+	BOOL IsProxyTesting() const { return m_bIsTesting; }
+	CString GetProxyTestStatus(CStatusLabel::Tone& tone) const;
 	CString GetSelectedRecentProfileId();
 	void GetSavedProfileNames(std::vector<CString>& names);
 

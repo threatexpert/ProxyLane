@@ -306,7 +306,7 @@ void CMainTab::PositionWnd()
 	{
 		const int sidebarMargin = UiTheme::ScaleForWindow(m_hWnd, 10);
 		const int sidebarStatusHeight = UiTheme::ScaleForWindow(m_hWnd,
-			m_proxyRunning ? 104 : 48);
+			m_proxyRunning ? 112 : 56);
 		m_sidebarStatus.MoveWindow(
 			sidebarMargin,
 			content.bottom - sidebarStatusHeight,
@@ -510,9 +510,7 @@ void CMainTab::UpdateTrafficRates(BOOL reset)
 		m_trafficSampler.Reset(upload, download, now);
 	else
 		m_trafficSampler.Sample(upload, download, now, uploadRate, downloadRate);
-	m_sidebarStatus.SetTrafficRates(
-		CString(_T("\u2191 ")) + FormatTrafficRate(uploadRate),
-		CString(_T("\u2193 ")) + FormatTrafficRate(downloadRate));
+	m_sidebarStatus.SetTrafficRates(FormatTrafficRate(uploadRate), FormatTrafficRate(downloadRate));
 }
 
 void CMainTab::OnLButtonDown(UINT flags, CPoint point)
