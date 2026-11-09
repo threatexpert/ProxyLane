@@ -117,6 +117,7 @@ void CPage1::OnProfileMenu()
     CMenu menu;
     if (!menu.CreatePopupMenu()) return;
     menu.AppendMenu(MF_STRING | (m_bIsTesting ? MF_GRAYED : 0), 0x2401, Localization::Get(L"profile.new"));
+    menu.AppendMenu(MF_STRING | (m_bIsTesting ? MF_GRAYED : 0), 0x240B, Localization::Get(L"profile.new_chain"));
     menu.AppendMenu(MF_SEPARATOR);
     menu.AppendMenu(MF_STRING, IDC_BUTTON_COPY_PROFILE, Localization::Get(_T("share.copy")));
     menu.AppendMenu(MF_STRING | (m_bIsTesting ? MF_GRAYED : 0), IDC_BUTTON_PASTE_PROFILE,
@@ -220,6 +221,13 @@ void CPage1::ImportConfigFile(const CString& path)
 
 void CPage1::OnCopyProfile()
 {
+    // A v1 code carries one server; exporting a chain would silently drop its hops.
+    if (m_chainMode)
+    {
+        MessageBox(Localization::Get(_T("share.chain_unsupported")), Localization::Get(_T("share.copy_failed")),
+            MB_ICONINFORMATION);
+        return;
+    }
     try
     {
         Json value = Json::object();
@@ -339,6 +347,9 @@ void CPage1::OnPasteProfile()
         m_btnDNSLocal.SetCheck(!remote); m_btnDNSRemote.SetCheck(remote);
         m_radioChildFilterExclude.SetCheck(!include); m_radioChildFilterInclude.SetCheck(include);
         m_radioTargetFilterBypass.SetCheck(!proxy); m_radioTargetFilterProxy.SetCheck(proxy);
+        // A shared profile is always a single server.
+        m_chainHops.clear();
+        SetChainMode(FALSE);
         UpdateChildFilterEnable();
         UpdateDnsRedirectEnable();
         UpdateTransportEnable();

@@ -112,7 +112,7 @@ CProxyTCPTaskMgr::~CProxyTCPTaskMgr(void)
 
 
 BOOL CProxyTCPTaskMgr::OnNewTask(SOCKET sClient, LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
-	IProxyLog::ConnectionStage& stage)
+	IProxyLog::ConnectionStage& stage, const ProxyChain *lpChain)
 {
 	stage = IProxyLog::STAGE_ALLOCATE;
 	CTcpProxyTask *pTask = new CTcpProxyTask(this);
@@ -122,7 +122,7 @@ BOOL CProxyTCPTaskMgr::OnNewTask(SOCKET sClient, LPPRCClient lpPRCClient, LPProx
 		return FALSE;
 	}
 
-	if(!pTask->SetTaskInfo(sClient, lpPRCClient, lpProxyInfo, stage))
+	if(!pTask->SetTaskInfo(sClient, lpPRCClient, lpProxyInfo, stage, lpChain))
 	{
 		const int error = WSAGetLastError();
 		delete pTask;

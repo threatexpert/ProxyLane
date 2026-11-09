@@ -151,6 +151,12 @@ void CPage1::DoDataExchange(CDataExchange* pDX)
 BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
  ON_COMMAND(0x2401, &CPage1::OnNewProfile)
  ON_BN_CLICKED(0x2402, &CPage1::OnToggleAdvanced)
+	ON_COMMAND(0x240B, &CPage1::OnNewChainProfile)
+	ON_BN_CLICKED(0x2406, &CPage1::OnChainAdd)
+	ON_BN_CLICKED(0x2407, &CPage1::OnChainUp)
+	ON_BN_CLICKED(0x2408, &CPage1::OnChainDown)
+	ON_BN_CLICKED(0x2409, &CPage1::OnChainRemove)
+	ON_NOTIFY(LVN_ITEMCHANGED, 0x2405, &CPage1::OnChainItemChanged)
 
 	ON_WM_SIZE()
 	ON_WM_VSCROLL()
@@ -207,6 +213,39 @@ BOOL CPage1::OnInitDialog()
  m_btnAdvanced.SetBackdropColor(UiTheme::PageBackground());
  m_btnAdvanced.SetVisualStyle(CModernButton::STYLE_GHOST);
  UpdateAdvancedCaption();
+
+	// The chain editor, created hidden; layout shows it for chain profiles.
+	// Tab order follows the optional-section toggle.
+	{
+		CWnd* after = &m_btnAdvanced;
+		auto order = [&after](CWnd& control) {
+			control.SetWindowPos(after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+			after = &control;
+		};
+		m_listChain.Create(WS_CHILD | WS_TABSTOP | WS_BORDER | LVS_REPORT | LVS_SINGLESEL |
+			LVS_SHOWSELALWAYS | LVS_NOSORTHEADER, CRect(), this, 0x2405);
+		m_listChain.SetExtendedStyle(LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+		m_listChain.InsertColumn(0, L"#", LVCFMT_LEFT, UiTheme::ScaleForWindow(m_hWnd, 36));
+		m_listChain.InsertColumn(1, Localization::Get(L"page1.chain_column_profile"), LVCFMT_LEFT,
+			UiTheme::ScaleForWindow(m_hWnd, 180));
+		m_listChain.InsertColumn(2, Localization::Get(L"page1.chain_column_server"), LVCFMT_LEFT,
+			UiTheme::ScaleForWindow(m_hWnd, 320));
+		struct { CModernButton* button; UINT id; LPCWSTR key; } buttons[] = {
+			{ &m_btnChainAdd, 0x2406, L"page1.chain_add" }, { &m_btnChainUp, 0x2407, L"page1.chain_up" },
+			{ &m_btnChainDown, 0x2408, L"page1.chain_down" }, { &m_btnChainRemove, 0x2409, L"page1.chain_remove" } };
+		m_listChain.SetFont(&m_uiFont);
+		order(m_listChain);
+		for (auto& entry : buttons)
+		{
+			entry.button->Create(Localization::Get(entry.key), WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
+				CRect(), this, entry.id);
+			entry.button->SetFont(&m_uiFont);
+			entry.button->SetBackdropColor(UiTheme::PageBackground());
+			entry.button->SetVisualStyle(CModernButton::STYLE_SECONDARY);
+			order(*entry.button);
+		}
+	}
+
 	m_OK.SetVisualStyle(CModernButton::STYLE_PRIMARY);
 	m_Cancel.SetVisualStyle(CModernButton::STYLE_DANGER);
 	m_staticTestProxy.SetInlineStyle(TRUE);
@@ -235,6 +274,7 @@ BOOL CPage1::OnInitDialog()
 
 		m_cfgls.AddString(item.strName);
 	}
+	RefreshProfileEntries();
 
 	UILoadCfg(NULL);
 
@@ -363,6 +403,7 @@ void CPage1::LayoutSettingsPage()
 
 	// Selected combo fields should line up with the edit controls.
 	m_cfgls.SetItemHeight(-1, fieldH - S(6));
+	m_cfgls.SetItemHeight(0, S(40));
 	m_cbProxyType.SetItemHeight(-1, fieldH - S(6));
 	m_cbTransport.SetItemHeight(-1, fieldH - S(6));
 
@@ -398,6 +439,8 @@ void CPage1::LayoutSettingsPage()
 		place(IDC_STATIC_CONFIG_LABEL, left, rowY + (fieldH - labelH) / 2, labelW, labelH);
 		const int comboX = left + labelW + S(8);
 		place(IDC_COMBO_CFGS, comboX, rowY, saveX - gap - comboX, S(260));
+		// Rows carry a detail line; give the list room for addresses.
+		m_cfgls.SetDroppedWidth(max(saveX - gap - comboX, S(360)));
 		place(IDC_BUTTON_SAVE_PROFILE, saveX, rowY, saveW, fieldH);
 		place(IDC_BUTTON_PROFILE_MENU, menuX, rowY, menuW, fieldH);
 		y = inlineProfile ? S(62) : y + fieldH + S(12);
@@ -425,6 +468,39 @@ void CPage1::LayoutSettingsPage()
 				row += hintHeight + S(12);
 			}
 		}
+		const UINT serverIds[] = { IDC_STATIC_TYPE_LABEL, IDC_CB_PROXYTYPE, IDC_STATIC_HOST_LABEL,
+			IDC_EDIT_ADDR, IDC_STATIC_PORT_LABEL, IDC_EDIT_PORT, 0x2402 };
+		const UINT chainIds[] = { 0x2405, 0x2406, 0x2407, 0x2408, 0x2409 };
+		for (int i = 0; i < _countof(serverIds); ++i)
+			if (CWnd* control = GetDlgItem(serverIds[i]))
+				control->ShowWindow(m_chainMode ? SW_HIDE : SW_SHOW);
+		for (int i = 0; i < _countof(chainIds); ++i)
+			if (CWnd* control = GetDlgItem(chainIds[i]))
+				control->ShowWindow(m_chainMode ? SW_SHOW : SW_HIDE);
+		if (m_chainMode)
+		{
+			const UINT optionalIds[] = { IDC_STATIC_USER_LABEL, IDC_EDIT_USER, IDC_STATIC_PASSWORD_LABEL, IDC_EDIT_PASS,
+				IDC_STATIC_TRANSPORT_LABEL, IDC_COMBO_TRANSPORT, IDC_STATIC_PSK_LABEL, IDC_EDIT_TRANSPORT_PSK };
+			for (int i = 0; i < _countof(optionalIds); ++i)
+				if (CWnd* control = GetDlgItem(optionalIds[i]))
+					control->ShowWindow(SW_HIDE);
+			// Hop list (header + four rows), then its buttons.
+			const int listH = S(26) * 5 + S(4);
+			place(0x2405, innerX, row, innerW, listH);
+			row += listH + S(8);
+			const int addW = textWidth(0x2406) + S(30);
+			place(0x2406, innerX, row, addW, fieldH);
+			const int removeW = textWidth(0x2409) + S(24);
+			const int downW = textWidth(0x2408) + S(24);
+			const int upW = textWidth(0x2407) + S(24);
+			int x = innerX + innerW - removeW;
+			place(0x2409, x, row, removeW, fieldH);
+			x -= gap + downW;
+			place(0x2408, x, row, downW, fieldH);
+			x -= gap + upW;
+			place(0x2407, x, row, upW, fieldH);
+			row += fieldH + S(12);
+		}
 		const int typeW = S(92), portW = S(64), endpointGap = S(8);
 		const int advancedW = textWidth(0x2402) + S(16);
 		const int minHostW = max(S(112), textWidth(IDC_STATIC_HOST_LABEL) + S(8));
@@ -434,6 +510,8 @@ void CPage1::LayoutSettingsPage()
 		const int hostW = min(S(220), inlineAdvanced
 			? innerW - typeW - portW - advancedW - endpointGap * 3
 			: innerW - typeW - endpointGap);
+		if (!m_chainMode)
+		{
 		place(IDC_STATIC_TYPE_LABEL, innerX, row, typeW, labelH);
 		place(IDC_CB_PROXYTYPE, innerX, row + labelH + S(2), typeW, S(260));
 		place(IDC_STATIC_HOST_LABEL, innerX + typeW + endpointGap, row, hostW, labelH);
@@ -452,8 +530,8 @@ void CPage1::LayoutSettingsPage()
 			IDC_STATIC_TRANSPORT_LABEL, IDC_COMBO_TRANSPORT, IDC_STATIC_PSK_LABEL, IDC_EDIT_TRANSPORT_PSK };
 		for (int i = 0; i < _countof(advancedIds); ++i)
 			if (CWnd* control = GetDlgItem(advancedIds[i]))
-				control->ShowWindow(m_advancedOpen ? SW_SHOW : SW_HIDE);
-		if (m_advancedOpen)
+				control->ShowWindow(m_advancedOpen && !m_chainMode ? SW_SHOW : SW_HIDE);
+		if (m_advancedOpen && !m_chainMode)
 		{
 			const int half = (innerW - gapX) / 2;
 			place(IDC_STATIC_USER_LABEL, innerX, row, half, labelH);
@@ -469,6 +547,7 @@ void CPage1::LayoutSettingsPage()
 			place(IDC_STATIC_PSK_LABEL, innerX + transportW + gapX, row, pskW, labelH);
 			place(IDC_EDIT_TRANSPORT_PSK, innerX + transportW + gapX, row + labelH + S(2), pskW, fieldH);
 			row += rowStep;
+		}
 		}
 
 		row += S(2);
@@ -728,6 +807,21 @@ BOOL CPage1::GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI)
 	return TRUE;
 }
 
+INT CPage1::GetProxyChain(const LPPRCClient pPRCC, LPProxyInfo lpHops, INT nCapacity)
+{
+	// The caller asks only for a connection GetProxyInfo routed through a
+	// proxy, so the target filter has already had its say.
+	if (!pPRCC || pPRCC->sType != SOCK_STREAM)
+		return 0;
+	CSingleLock runtimeLock(&m_runtimeLock, TRUE);
+	if (!m_runtimeSettingsValid || m_runtimeChain.size() < 2)
+		return 0;
+	const INT hops = (INT)m_runtimeChain.size();
+	if (lpHops && nCapacity >= hops)
+		std::copy(m_runtimeChain.begin(), m_runtimeChain.end(), lpHops);
+	return hops;
+}
+
 BOOL CPage1::GetProxySettings(LPProxySettingsInfo lpPSI)
 {
 	if (!lpPSI)
@@ -778,6 +872,7 @@ BOOL CPage1::GetProxySettingsFromUi(LPProxySettingsInfo lpPSI)
 BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 {
 	m_settingsValidationKey = _T("profile.invalid_endpoint");
+	m_settingsValidationName.Empty();
 
 	CString szType, szHost, szPort, szUser, szPass, szTransportPsk;
 
@@ -865,6 +960,38 @@ BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 	return TRUE;
 }
 
+BOOL CPage1::GetRoute(LPProxyInfo first, ProxyChain* chain)
+{
+	chain->clear();
+	if (!m_chainMode)
+		return GetSettings(first);
+
+	m_settingsValidationName.Empty();
+	if (!m_profileStore.ResolveChain(m_chainHops, *chain, m_settingsValidationKey,
+		m_settingsValidationName))
+		return FALSE;
+	for (size_t i = 0; i < chain->size(); ++i)
+	{
+		if ((*chain)[i].reserved == PROXY_TRANSPORT_GONC_TLS_PSK && !ProxySupportsOptionalModules())
+		{
+			m_settingsValidationKey = _T("profile.secure_transport_unavailable");
+			m_settingsValidationName = m_chainHops[i];
+			chain->clear();
+			return FALSE;
+		}
+	}
+	*first = chain->front();
+	return TRUE;
+}
+
+CString CPage1::SettingsValidationMessage() const
+{
+	// Chain errors name the hop; the others take no argument.
+	return m_settingsValidationName.IsEmpty()
+		? Localization::Get(m_settingsValidationKey)
+		: Localization::Format(m_settingsValidationKey, (LPCTSTR)m_settingsValidationName);
+}
+
 void CPage1::OnBnClickedOk()
 {
 	StartProxy(TRUE);
@@ -946,9 +1073,12 @@ void CPage1::UpdateTransportEnable()
 	ProxyInfo selectedProxy;
 	selectedProxy.strProxyType = proxyType;
 	const int selectedProxyType = selectedProxy.GetProxyType();
-	const BOOL direct = proxyType.CompareNoCase(_T("NOPROXY")) == 0;
-	const CString group = Localization::Get(direct ? L"page1.direct_group" : L"page1.proxy_group");
-	const CString hint = typeIndex == CB_ERR ? Localization::Get(L"profile.unsupported_type") :
+	// A chain's own (hidden) server fields do not describe the route.
+	const BOOL direct = !m_chainMode && proxyType.CompareNoCase(_T("NOPROXY")) == 0;
+	const CString group = Localization::Get(m_chainMode ? L"page1.chain_group" :
+		direct ? L"page1.direct_group" : L"page1.proxy_group");
+	const CString hint = m_chainMode ? Localization::Get(L"page1.chain_hint") :
+		typeIndex == CB_ERR ? Localization::Get(L"profile.unsupported_type") :
 		direct ? Localization::Get(L"page1.direct_hint") :
 		m_firstRunGuide ? Localization::Get(L"page1.first_run_hint") : CString();
 	CString previousHint, previousGroup;
@@ -977,12 +1107,14 @@ void CPage1::UpdateTransportEnable()
 		m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK);
 	if (m_btnHookUDP.GetSafeHwnd())
 	{
-		const BOOL supportsUdp =
+		// UDP never goes through a chain.
+		const BOOL supportsUdp = !m_chainMode &&
 			typeIndex != CB_ERR && ProxyTransportPolicy::SupportsUdpProxy(selectedProxyType);
-		if (typeIndex != CB_ERR && !supportsUdp)
+		if ((typeIndex != CB_ERR || m_chainMode) && !supportsUdp)
 			m_btnHookUDP.SetCheck(BST_UNCHECKED);
 		m_btnHookUDP.EnableWindow(supportsUdp);
 	}
+	UpdateProfileTag();
 	if (previousHint != hint) LayoutSettingsPage();
 }
 
@@ -1048,9 +1180,30 @@ BOOL CPage1::SaveCurrentProfile(LPCTSTR profileName)
 			Localization::Get(_T("profile.save_failed_title")), MB_ICONINFORMATION);
 		return FALSE;
 	}
-	if (!GetSettings(&item.pi))
+	// A profile keeps the type it was created with: never let a draft of the
+	// other type overwrite it.
 	{
-		MessageBox(Localization::Get(m_settingsValidationKey),
+		std::vector<CString> names;
+		m_profileStore.ListNames(names);
+		for (const CString& name : names)
+		{
+			if (name.CompareNoCase(item.strName) != 0)
+				continue;
+			CfgProxyItem existing;
+			existing.strName = name;
+			m_profileStore.Load(existing); // sets the type even for an invalid server profile
+			if (!existing.bChain != !m_chainMode)
+			{
+				MessageBox(Localization::Format(_T("profile.type_conflict"), (LPCTSTR)item.strName),
+					Localization::Get(_T("profile.save_failed_title")), MB_ICONINFORMATION);
+				return FALSE;
+			}
+		}
+	}
+	// A chain may be saved before it is complete; it is checked when enabled.
+	if (!m_chainMode && !GetSettings(&item.pi))
+	{
+		MessageBox(SettingsValidationMessage(),
 			Localization::Get(_T("profile.save_failed_title")), MB_ICONERROR);
 		return FALSE;
 	}
@@ -1069,6 +1222,7 @@ BOOL CPage1::SaveCurrentProfile(LPCTSTR profileName)
 	int index = m_cfgls.FindStringExact(-1, item.strName);
 	if (index == CB_ERR)
 		index = m_cfgls.AddString(item.strName);
+	RefreshProfileEntries();
 	m_loadingProfile = TRUE;
 	m_cfgls.SetCurSel(index);
 	m_cfgls.SetWindowText(item.strName);
@@ -1138,11 +1292,12 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 	}
 
 	ProxyInfo proxyInfo;
+	ProxyChain chain;
 	ProxySettingsInfo runtimeSettings;
-	if (!GetSettings(&proxyInfo))
+	if (!GetRoute(&proxyInfo, &chain))
 	{
 		if (showErrors)
-			MessageBox(Localization::Get(m_settingsValidationKey),
+			MessageBox(SettingsValidationMessage(),
 				Localization::Get(_T("proxy.start_failed_title")), MB_ICONERROR);
 		return FALSE;
 	}
@@ -1156,13 +1311,15 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 
 	if (!GetProxySettingsFromUi(&runtimeSettings))
 		return FALSE;
-	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()))
+	// UDP never goes through a chain: it stays unhooked (direct or blocked).
+	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()) || !chain.empty())
 		runtimeSettings.bHookUDP = FALSE;
 
 	PublishProfileSnapshots();
 	{
 		CSingleLock runtimeLock(&m_runtimeLock, TRUE);
 		m_ProxyInfo = proxyInfo;
+		m_runtimeChain = chain;
 		m_runtimeSettings = runtimeSettings;
 		m_runtimeSettingsValid = TRUE;
 	}
@@ -1213,6 +1370,14 @@ CString CPage1::GetSelectedProfileSummary()
 	// Read the same draft that StartProxy uses, without validating or saving it.
 	const CString name = GetCurrentProfileName();
 	if (name.IsEmpty()) return CString();
+	if (m_chainMode)
+	{
+		CString route;
+		for (const CString& hop : m_chainHops)
+			route += (route.IsEmpty() ? L"" : L" \x2192 ") + hop;
+		return name + L" \x00b7 " + Localization::Format(L"launch.profile_chain",
+			route.IsEmpty() ? L"\x2014" : (LPCTSTR)route);
+	}
 	CString type, host, port;
 	m_cbProxyType.GetWindowText(type);
 	if (type.CompareNoCase(L"NOPROXY") == 0)
@@ -1239,10 +1404,11 @@ BOOL CPage1::ApplyRuntimeSettings()
 		return FALSE;
 
 	ProxyInfo proxyInfo;
+	ProxyChain chain;
 	ProxySettingsInfo runtimeSettings;
-	if (!GetSettings(&proxyInfo))
+	if (!GetRoute(&proxyInfo, &chain))
 	{
-		MessageBox(Localization::Get(m_settingsValidationKey),
+		MessageBox(SettingsValidationMessage(),
 			Localization::Get(_T("apply.failed_title")), MB_ICONERROR);
 		return FALSE;
 	}
@@ -1251,13 +1417,14 @@ BOOL CPage1::ApplyRuntimeSettings()
 
 	if (!GetProxySettingsFromUi(&runtimeSettings))
 		return FALSE;
-	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()))
+	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()) || !chain.empty())
 		runtimeSettings.bHookUDP = FALSE;
 
 	PublishProfileSnapshots();
 	{
 		CSingleLock runtimeLock(&m_runtimeLock, TRUE);
 		m_ProxyInfo = proxyInfo;
+		m_runtimeChain = chain;
 		m_runtimeSettings = runtimeSettings;
 		m_runtimeSettingsValid = TRUE;
 	}
@@ -1388,17 +1555,18 @@ void CPage1::OnBnClickedTestproxy()
 	m_testUdpRequested = FALSE;
 
 	ProxyInfo testProxyInfo;
-	if (!GetSettings(&testProxyInfo))
+	if (!GetRoute(&testProxyInfo, &m_testChain))
 	{
-		MessageBox(Localization::Get(m_settingsValidationKey),
+		MessageBox(SettingsValidationMessage(),
 			Localization::Get(_T("test.invalid_title")), MB_ICONERROR);
 		m_staticTestProxy.SetStatus(Localization::Get(_T("status.invalid_config")), CStatusLabel::TONE_DANGER);
 		m_proxyTestPhase = PROXY_TEST_NONE;
 		return;
 	}
 	m_testProxyInfo = testProxyInfo;
+	m_testChainNames = !m_testChain.empty() ? m_chainHops : std::vector<CString>();
 	m_testUdpRequested = m_btnHookUDP.GetCheck() == BST_CHECKED &&
-		testProxyInfo.GetProxyType() == PROXYTYPE_SOCKS5;
+		testProxyInfo.GetProxyType() == PROXYTYPE_SOCKS5 && m_testChain.empty();
 
 	PRCClient client;
 
@@ -1455,7 +1623,10 @@ BOOL CPage1::StartProxyTestPhase(const PRCClient& client, int phase,
 
 	m_proxyTestPhase = phase;
 	PRCClient mutableClient = client;
-	if (!m_pProxyTester->Start(this, &mutableClient, &m_testProxyInfo))
+	const BOOL started = m_testChain.size() > 1
+		? m_pProxyTester->StartChain(this, &mutableClient, &m_testChain[0], (INT)m_testChain.size())
+		: m_pProxyTester->Start(this, &mutableClient, &m_testProxyInfo);
+	if (!started)
 	{
 		const int error = WSAGetLastError();
 		m_pProxyTester->Release();
@@ -1780,6 +1951,11 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 				szText = Localization::Format(_T("test.negotiation_failed"), nCode);
 				break;
 			}
+			// In a chain, say which hop the failure belongs to.
+			const int failedHop = m_testChain.size() > 1 ? pTester->GetFailedHop() : -1;
+			if (failedHop >= 0 && failedHop < (int)m_testChainNames.size())
+				szText = Localization::Format(_T("test.chain_hop"), failedHop + 1,
+					(LPCTSTR)m_testChainNames[failedHop], (LPCTSTR)szText);
 			LPCTSTR statusKey = _T("status.test_failed");
 			if (m_profileDirty && m_runtimeDirty)
 				statusKey = _T("status.test_failed_unsaved_unapplied");
@@ -1859,6 +2035,15 @@ void CPage1::OnCfgoptDelete()
 		if (strName.GetLength() > 0)
 		{
 			CString prompt = Localization::Format(_T("profile.delete_confirm"), (LPCTSTR)strName);
+			// A hop of other chains: say which ones stop working.
+			std::vector<CString> users;
+			if (m_profileStore.ListChainUsers(strName, users) && !users.empty())
+			{
+				CString list;
+				for (const CString& user : users)
+					list += (list.IsEmpty() ? L"" : L", ") + user;
+				prompt = Localization::Format(_T("profile.chain_used_by"), (LPCTSTR)strName, (LPCTSTR)list);
+			}
 			if (MessageBox(prompt, Localization::Get(_T("profile.delete_title")),
 				MB_OKCANCEL | MB_ICONWARNING) != IDOK)
 			{
@@ -1957,6 +2142,9 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_radioTargetFilterBypass.SetCheck(bTgtProxy ? BST_UNCHECKED : BST_CHECKED);
 		UpdateChildFilterEnable();
 	}
+	m_chainMode = item ? item->bChain : FALSE;
+	m_chainHops = item ? item->chainHops : std::vector<CString>();
+	RefreshChainList();
 	ExpandConfiguredOptions();
 	UpdateDnsRedirectEnable();
 	UpdateTransportEnable();
@@ -1973,7 +2161,16 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 void CPage1::UIGetCfg( CfgProxyItem *item )
 {
 
-	GetSettings(&item->pi);
+	if (m_chainMode || !GetSettings(&item->pi))
+	{
+		// A chain has no server of its own (the store writes it as Type=CHAIN);
+		// keep a direct placeholder rather than half-entered values.
+		ZeroMemory(&item->pi, sizeof(item->pi));
+		item->pi.szItemName = _T("myproxy");
+		item->pi.strProxyType = _T("NOPROXY");
+	}
+	item->bChain = m_chainMode;
+	item->chainHops = m_chainHops;
 	item->nTransportMode = m_cbTransport.GetCurSel() ==
 		PROXY_TRANSPORT_GONC_TLS_PSK ? PROXY_TRANSPORT_GONC_TLS_PSK :
 		PROXY_TRANSPORT_PLAIN;
@@ -2108,6 +2305,7 @@ BOOL CPage1::RefreshProfileNames()
 	m_cfgls.ResetContent();
 	for (const CString& name : names)
 		m_cfgls.AddString(name);
+	RefreshProfileEntries();
 	const BOOL removed = !m_loadedProfileName.IsEmpty() &&
 		m_cfgls.FindStringExact(-1, m_loadedProfileName) == CB_ERR;
 	m_cfgls.SetCurSel(selected ? m_cfgls.FindStringExact(-1, draft) : -1);
@@ -2222,12 +2420,29 @@ void CPage1::OnToggleAdvanced()
 {
  m_advancedOpen = !m_advancedOpen; UpdateAdvancedCaption(); LayoutSettingsPage();
 }
-void CPage1::OnNewProfile()
+void CPage1::OnNewProfile() { NewProfile(FALSE); }
+void CPage1::OnNewChainProfile() { NewProfile(TRUE); }
+void CPage1::NewProfile(BOOL chain)
 {
  if (m_bIsTesting || !ConfirmDiscardUnsavedChanges() || !RefreshProfileNames()) return;
- CString base = Localization::Get(L"profile.new_name"), name = base;
+ CString base = Localization::Get(chain ? L"profile.new_chain_name" : L"profile.new_name"), name = base;
  for (int i = 2; m_cfgls.FindStringExact(-1, name) != CB_ERR; ++i) name.Format(L"%s %d", (LPCWSTR)base, i);
  UILoadCfg(NULL);
+	if (chain)
+	{
+		// Chain defaults: proxy TCP and child processes, block UDP (it is never
+		// chained), resolve DNS through the chain, redirect private DNS.
+		m_btnHookTCP.SetCheck(BST_CHECKED);
+		m_btnHookChildProcess.SetCheck(BST_CHECKED);
+		m_btnBlockUDP.SetCheck(BST_CHECKED);
+		m_btnDNSLocal.SetCheck(BST_UNCHECKED);
+		m_btnDNSRemote.SetCheck(BST_CHECKED);
+		m_btnRedirectPrivateDNS.SetCheck(BST_CHECKED);
+		m_editRedirectDNS.SetWindowText(_T("8.8.8.8"));
+		UpdateChildFilterEnable();
+		UpdateDnsRedirectEnable();
+		SetChainMode(TRUE);
+	}
  m_loadingProfile = TRUE; m_cfgls.SetCurSel(-1); m_cfgls.SetWindowText(name); m_loadingProfile = FALSE;
  m_draftProfileName = name; SetProfileDirty(TRUE); SetRuntimeDirty(TRUE);
  m_scrollY = 0; LayoutSettingsPage(); m_cfgls.SetFocus(); m_cfgls.SetEditSel(0, -1);
@@ -2238,4 +2453,179 @@ void CPage1::UpdateAdvancedCaption()
 {
  if (m_btnAdvanced.GetSafeHwnd())
   m_btnAdvanced.SetWindowText(Localization::Get(m_advancedOpen ? L"profile.advanced_hide" : L"profile.advanced_show"));
+}
+
+namespace
+{
+	// "SOCKS5 host:port" for a saved profile, as the chain list and menu show it.
+	CString DescribeServer(const CfgProxyItem& item)
+	{
+		ProxyInfo pi = item.pi;
+		const int type = pi.GetProxyType();
+		CString host = (CString)pi.strProxyHost;
+		if (host.Find(L':') >= 0) host = L"[" + host + L"]";
+		CString text;
+		text.Format(L"%s %s:%d", type == PROXYTYPE_SOCKS5 ? L"SOCKS5" : L"HTTP", (LPCWSTR)host, pi.nProxyPort);
+		return text;
+	}
+}
+
+void CPage1::SetChainMode(BOOL chain)
+{
+	m_chainMode = chain;
+	RefreshChainList();
+	UpdateTransportEnable();
+	LayoutSettingsPage();
+}
+
+void CPage1::RefreshProfileEntries()
+{
+	m_cfgls.ClearEntries();
+	for (int i = 0; i < m_cfgls.GetCount(); ++i)
+	{
+		CfgProxyItem item;
+		m_cfgls.GetLBText(i, item.strName);
+		const BOOL valid = m_profileStore.Load(item);
+		CProfileCombo::Entry entry;
+		ProxyInfo pi = item.pi;
+		if (item.bChain)
+		{
+			entry.tag = Localization::Get(L"profile.tag_chain");
+			entry.accent = TRUE;
+			for (const CString& hop : item.chainHops)
+				entry.detail += (entry.detail.IsEmpty() ? L"" : L" \x2192 ") + hop;
+		}
+		else if (!valid)
+			entry.tag = (CString)pi.strProxyType; // e.g. a retired SOCKS4 profile
+		else if (pi.GetProxyType() == PROXYTYPE_NOPROXY)
+			entry.tag = Localization::Get(L"profile.tag_direct");
+		else
+		{
+			// "SOCKS5 host:port" -> tag "SOCKS5", detail "host:port".
+			const CString server = DescribeServer(item);
+			const int space = server.Find(L' ');
+			entry.tag = server.Left(space);
+			entry.detail = server.Mid(space + 1);
+		}
+		m_cfgls.SetEntry(item.strName, entry);
+	}
+	UpdateProfileTag();
+}
+
+void CPage1::UpdateProfileTag()
+{
+	if (!m_cfgls.GetSafeHwnd())
+		return;
+	CString tag;
+	if (m_chainMode)
+		tag = Localization::Get(L"profile.tag_chain");
+	else if (m_cbProxyType.GetCurSel() != CB_ERR)
+	{
+		m_cbProxyType.GetLBText(m_cbProxyType.GetCurSel(), tag);
+		if (tag.CompareNoCase(L"NOPROXY") == 0)
+			tag = Localization::Get(L"profile.tag_direct");
+	}
+	m_cfgls.SetFieldTag(tag, m_chainMode);
+}
+
+void CPage1::RefreshChainList(int select)
+{
+	if (!m_listChain.GetSafeHwnd())
+		return;
+	m_listChain.SetRedraw(FALSE);
+	m_listChain.DeleteAllItems();
+	for (int i = 0; i < (int)m_chainHops.size(); ++i)
+	{
+		CfgProxyItem item;
+		item.strName = m_chainHops[i];
+		CString number;
+		number.Format(L"%d", i + 1);
+		m_listChain.InsertItem(i, number);
+		m_listChain.SetItemText(i, 1, m_chainHops[i]);
+		m_listChain.SetItemText(i, 2, !m_profileStore.Load(item) ? Localization::Get(L"page1.chain_hop_missing") :
+			!CProxyProfileStore::IsChainHop(item) ? Localization::Get(L"page1.chain_hop_invalid") : DescribeServer(item));
+	}
+	if (select >= 0 && select < (int)m_chainHops.size())
+		m_listChain.SetItemState(select, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+	m_listChain.SetRedraw(TRUE);
+	m_listChain.Invalidate();
+	UpdateChainButtons();
+}
+
+void CPage1::UpdateChainButtons()
+{
+	if (!m_listChain.GetSafeHwnd())
+		return;
+	const int selected = m_listChain.GetNextItem(-1, LVNI_SELECTED);
+	const int count = (int)m_chainHops.size();
+	m_btnChainAdd.EnableWindow(!m_bIsTesting);
+	m_btnChainUp.EnableWindow(!m_bIsTesting && selected > 0);
+	m_btnChainDown.EnableWindow(!m_bIsTesting && selected >= 0 && selected < count - 1);
+	m_btnChainRemove.EnableWindow(!m_bIsTesting && selected >= 0);
+}
+
+void CPage1::OnChainItemChanged(NMHDR*, LRESULT* result)
+{
+	UpdateChainButtons();
+	*result = 0;
+}
+
+void CPage1::OnChainAdd()
+{
+	// Offer saved Server-mode SOCKS5/HTTP profiles that are not already hops
+	// (and not this profile itself).
+	std::vector<CString> names, offered;
+	m_profileStore.ListNames(names);
+	const CString self = GetCurrentProfileName();
+	CMenu menu;
+	if (!menu.CreatePopupMenu()) return;
+	for (const CString& name : names)
+	{
+		if (name.CompareNoCase(self) == 0) continue;
+		BOOL used = FALSE;
+		for (const CString& hop : m_chainHops) used = used || hop.CompareNoCase(name) == 0;
+		CfgProxyItem item;
+		item.strName = name;
+		if (used || !m_profileStore.Load(item) || !CProxyProfileStore::IsChainHop(item)) continue;
+		offered.push_back(name);
+		menu.AppendMenu(MF_STRING, offered.size(), name + L"  \x00b7  " + DescribeServer(item));
+	}
+	if (offered.empty())
+		menu.AppendMenu(MF_STRING | MF_GRAYED, 0, Localization::Get(L"page1.chain_add_none"));
+	CRect anchor;
+	m_btnChainAdd.GetWindowRect(&anchor);
+	const UINT selected = menu.TrackPopupMenu(TPM_RETURNCMD | TPM_LEFTALIGN | TPM_RIGHTBUTTON,
+		anchor.left, anchor.bottom, this);
+	if (!selected || selected > offered.size())
+		return;
+	m_chainHops.push_back(offered[selected - 1]);
+	RefreshChainList((int)m_chainHops.size() - 1);
+	OnProfileFieldChanged();
+}
+
+void CPage1::OnChainUp()
+{
+	const int selected = m_listChain.GetNextItem(-1, LVNI_SELECTED);
+	if (selected <= 0) return;
+	std::swap(m_chainHops[selected], m_chainHops[selected - 1]);
+	RefreshChainList(selected - 1);
+	OnProfileFieldChanged();
+}
+
+void CPage1::OnChainDown()
+{
+	const int selected = m_listChain.GetNextItem(-1, LVNI_SELECTED);
+	if (selected < 0 || selected >= (int)m_chainHops.size() - 1) return;
+	std::swap(m_chainHops[selected], m_chainHops[selected + 1]);
+	RefreshChainList(selected + 1);
+	OnProfileFieldChanged();
+}
+
+void CPage1::OnChainRemove()
+{
+	const int selected = m_listChain.GetNextItem(-1, LVNI_SELECTED);
+	if (selected < 0) return;
+	m_chainHops.erase(m_chainHops.begin() + selected);
+	RefreshChainList(min(selected, (int)m_chainHops.size() - 1));
+	OnProfileFieldChanged();
 }

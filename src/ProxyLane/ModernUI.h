@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <afxwin.h>
+#include <map>
 
 namespace UiTheme
 {
@@ -270,6 +271,8 @@ public:
 
 protected:
 	virtual void PreSubclassWindow();
+	// Extra painting of the closed field, after its frame and arrow.
+	virtual void PaintField(CDC& dc, const CRect& client) {}
 	afx_msg void OnPaint();
 	afx_msg BOOL OnEraseBkgnd(CDC* dc);
 	afx_msg void OnMouseMove(UINT flags, CPoint point);
@@ -280,4 +283,42 @@ protected:
 	BOOL m_hot;
 
 	DECLARE_MESSAGE_MAP()
+};
+
+// Editable, owner-drawn (CBS_OWNERDRAWFIXED | CBS_HASSTRINGS) profile picker.
+// Each drop-down row shows the name, a detail line and a type tag; the field
+// shows the tag of the profile being edited beside its name.
+class CProfileCombo : public CSoftCombo
+{
+public:
+	struct Entry
+	{
+		CString tag;
+		CString detail;
+		BOOL accent = FALSE;
+	};
+
+	CProfileCombo();
+	void ClearEntries();
+	void SetEntry(const CString& name, const Entry& entry);
+	void SetFieldTag(LPCTSTR tag, BOOL accent);
+
+protected:
+	virtual void PreSubclassWindow();
+	virtual LRESULT WindowProc(UINT message, WPARAM wParam, LPARAM lParam);
+	virtual void MeasureItem(LPMEASUREITEMSTRUCT measureItem);
+	virtual void DrawItem(LPDRAWITEMSTRUCT drawItem);
+	virtual void PaintField(CDC& dc, const CRect& client);
+	int S(int value) const { return UiTheme::ScaleForWindow(m_hWnd, value); }
+	int TagWidth(const CString& tag);
+	// Draws a tag pill ending at `right`, centred on `centerY`; returns its left edge.
+	int DrawTag(CDC& dc, const CString& tag, BOOL accent, int right, int centerY);
+	// Narrows the edit child so the field tag has room.
+	void PlaceEdit();
+
+	std::map<CString, Entry> m_entries;	// keyed by lower-case name
+	CString m_fieldTag;
+	BOOL m_fieldAccent;
+	CFont m_tagFont;
+	CFont m_detailFont;
 };

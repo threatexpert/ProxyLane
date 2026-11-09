@@ -246,7 +246,6 @@ typedef struct _tagProxyInfo
 
 }ProxyInfo, *LPProxyInfo;
 
-
 #define PRC_PIPESERVER_NAME _T("{1237C887-49E0-4a29-8FFA-2B4220B5BC99}")
 
 

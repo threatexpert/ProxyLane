@@ -42,7 +42,7 @@ CTcpProxyTask 只是负责创建并管理两个CPRCTcpPeer对象分别为m_pClie
 PRC Server OnAccept 接收到一个sClient，通过地址信息到PRC查询原请求地址, 并将GlobalProxy当前设置的代理服务器信息传递给CTcpProxyTask.SetTaskInfo
 */
 BOOL CTcpProxyTask::SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
-	IProxyLog::ConnectionStage& stage)
+	IProxyLog::ConnectionStage& stage, const ProxyChain *lpChain)
 {
 	stage = IProxyLog::STAGE_ALLOCATE;
 	do 
@@ -81,7 +81,7 @@ BOOL CTcpProxyTask::SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxy
 		m_pServer->SetSockOpt(SO_SNDBUF, &socketbufsize,sizeof(socketbufsize));
 		m_pServer->SetSockOpt(SO_RCVBUF, &socketbufsize,sizeof(socketbufsize));
 
-		if(!m_pServer->ConnectProxy(lpPRCClient, lpProxyInfo, stage))
+		if(!m_pServer->ConnectProxy(lpPRCClient, lpProxyInfo, stage, lpChain))
 			break;
 
 		stage = IProxyLog::STAGE_ATTACH;

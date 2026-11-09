@@ -81,6 +81,31 @@ BOOL CProxyProfileStore::Load(CfgProxyItem& item) const
 		? PROXY_TRANSPORT_GONC_TLS_PSK : PROXY_TRANSPORT_PLAIN;
 	item.strTransportPsk = m_ini.GetString(section, _T("PSK"));
 
+	// Type=CHAIN marks a chain profile. Older versions do not know the type and
+	// skip the profile instead of running it as something else.
+	item.bChain = ((CString)item.pi.strProxyType).CompareNoCase(_T("CHAIN")) == 0;
+	item.chainHops.clear();
+	if (item.bChain)
+	{
+		// Hop1, Hop2, ... up to the first missing key; there is no hop limit.
+		for (int i = 1; ; ++i)
+		{
+			CString key;
+			key.Format(_T("Hop%d"), i);
+			const CString hop = m_ini.GetString(section, key);
+			if (hop.IsEmpty())
+				break;
+			item.chainHops.push_back(hop);
+		}
+		// A chain has no server of its own.
+		ZeroMemory(&item.pi, sizeof(item.pi));
+		item.pi.szItemName = _T("myproxy");
+		item.pi.strProxyType = _T("NOPROXY");
+		item.nTransportMode = PROXY_TRANSPORT_PLAIN;
+		item.strTransportPsk.Empty();
+		return TRUE;
+	}
+
 	const CString proxyType = (CString)item.pi.strProxyType;
 	if (proxyType.CompareNoCase(_T("NOPROXY")) == 0)
 		return TRUE; // Direct profiles have no upstream proxy endpoint.
@@ -151,19 +176,45 @@ BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 	if (!ini.SetDWORD(section, _T("ChildFilterMode"), item.nChildFilterMode)) return false;
 	if (!ini.SetString(section, _T("TargetFilter"), EncodeFilter(item.strTargetFilter))) return false;
 	if (!ini.SetDWORD(section, _T("TargetFilterMode"), item.nTargetFilterMode)) return false;
-	const int proxyType = item.pi.GetProxyType();
-	const CString type = (proxyType == PROXYTYPE_HTTP10 || proxyType == PROXYTYPE_HTTP11)
-		? CString(L"HTTP") : (CString)item.pi.strProxyType;
-	if (!ini.SetString(section, _T("Type"), type)) return false;
-	if (!ini.SetString(section, _T("Host"), (CString)item.pi.strProxyHost)) return false;
-	if (!ini.SetInt(section, _T("Port"), item.pi.nProxyPort)) return false;
-	if (!ini.SetString(section, _T("User"), (CString)item.pi.strProxyUser)) return false;
-	if (!ini.SetString(section, _T("Pass"), (CString)item.pi.strProxyPass)) return false;
-	if (!ini.SetString(section, _T("Transport"), item.nTransportMode ==
-		PROXY_TRANSPORT_GONC_TLS_PSK ? _T("GONC_TLS_PSK") : _T("PLAIN"))) return false;
-	// Initial secure-transport format intentionally stores the PSK directly
-	// in the profile, as selected by the user.
-	if (!ini.SetString(section, _T("PSK"), item.strTransportPsk)) return false;
+	if (item.bChain)
+	{
+		// A chain stores its hops in place of a server.
+		if (!ini.SetString(section, _T("Type"), _T("CHAIN"))) return false;
+		const LPCTSTR serverKeys[] = { _T("Host"), _T("Port"), _T("User"), _T("Pass"), _T("Transport"), _T("PSK") };
+		for (LPCTSTR key : serverKeys)
+			if (!ini.DeleteKeyName(section, key)) return false;
+	}
+	else
+	{
+		const int proxyType = item.pi.GetProxyType();
+		const CString type = (proxyType == PROXYTYPE_HTTP10 || proxyType == PROXYTYPE_HTTP11)
+			? CString(L"HTTP") : (CString)item.pi.strProxyType;
+		if (!ini.SetString(section, _T("Type"), type)) return false;
+		if (!ini.SetString(section, _T("Host"), (CString)item.pi.strProxyHost)) return false;
+		if (!ini.SetInt(section, _T("Port"), item.pi.nProxyPort)) return false;
+		if (!ini.SetString(section, _T("User"), (CString)item.pi.strProxyUser)) return false;
+		if (!ini.SetString(section, _T("Pass"), (CString)item.pi.strProxyPass)) return false;
+		if (!ini.SetString(section, _T("Transport"), item.nTransportMode ==
+			PROXY_TRANSPORT_GONC_TLS_PSK ? _T("GONC_TLS_PSK") : _T("PLAIN"))) return false;
+		// Initial secure-transport format intentionally stores the PSK directly
+		// in the profile, as selected by the user.
+		if (!ini.SetString(section, _T("PSK"), item.strTransportPsk)) return false;
+	}
+	// Write the hops, then drop the keys a longer chain (or a chain this profile
+	// never was) may have left behind.
+	const int hopCount = item.bChain ? (int)item.chainHops.size() : 0;
+	for (int i = 1; ; ++i)
+	{
+		CString key;
+		key.Format(_T("Hop%d"), i);
+		if (i <= hopCount)
+		{
+			if (!ini.SetString(section, key, item.chainHops[i - 1])) return false;
+		}
+		else if (ini.GetString(section, key).IsEmpty())
+			break;
+		else if (!ini.DeleteKeyName(section, key)) return false;
+	}
 	return ini.SetString(L"options", L"lastselected", item.strName) != FALSE;
 	});
 }
@@ -176,4 +227,97 @@ BOOL CProxyProfileStore::Delete(LPCTSTR name)
 void CProxyProfileStore::SetLastSelected(LPCTSTR name)
 {
 	m_ini.SetString(_T("options"), _T("lastselected"), name);
+}
+
+BOOL CProxyProfileStore::IsChainHop(const CfgProxyItem& item)
+{
+	ProxyInfo pi = item.pi;
+	const int type = pi.GetProxyType();
+	return !item.bChain && (type == PROXYTYPE_SOCKS5 ||
+		type == PROXYTYPE_HTTP10 || type == PROXYTYPE_HTTP11);
+}
+
+BOOL CProxyProfileStore::ListChainUsers(LPCTSTR name, std::vector<CString>& users) const
+{
+	users.clear();
+	std::vector<CString> names;
+	if (!name || !ListNames(names))
+		return FALSE;
+	for (const CString& candidate : names)
+	{
+		CfgProxyItem item;
+		item.strName = candidate;
+		if (!Load(item) || !item.bChain)
+			continue;
+		for (const CString& hop : item.chainHops)
+		{
+			if (hop.CompareNoCase(name) == 0)
+			{
+				users.push_back(candidate);
+				break;
+			}
+		}
+	}
+	return TRUE;
+}
+
+BOOL CProxyProfileStore::ResolveChain(const std::vector<CString>& hops, ProxyChain& chain,
+	CString& errorKey, CString& errorName) const
+{
+	chain.clear();
+	errorName.Empty();
+	if (hops.size() < 2)
+	{
+		errorKey = _T("profile.chain_too_short");
+		return FALSE;
+	}
+	ProxyChain resolved(hops.size());
+	for (size_t i = 0; i < hops.size(); ++i)
+	{
+		errorName = hops[i];
+		for (size_t j = 0; j < i; ++j)
+		{
+			if (hops[j].CompareNoCase(hops[i]) == 0)
+			{
+				errorKey = _T("profile.chain_duplicate");
+				return FALSE;
+			}
+		}
+		CfgProxyItem item;
+		item.strName = hops[i];
+		if (!Load(item))
+		{
+			errorKey = _T("profile.chain_missing");
+			return FALSE;
+		}
+		if (!IsChainHop(item))
+		{
+			errorKey = _T("profile.chain_invalid_hop");
+			return FALSE;
+		}
+
+		ProxyInfo& hop = resolved[i];
+		hop = item.pi;
+		hop.szItemName = hops[i];
+		hop.reserved = item.nTransportMode == PROXY_TRANSPORT_GONC_TLS_PSK
+			? PROXY_TRANSPORT_GONC_TLS_PSK : PROXY_TRANSPORT_PLAIN;
+		SecureZeroMemory(hop.strTransportPsk.szbuf, sizeof(hop.strTransportPsk.szbuf));
+		if (hop.reserved == PROXY_TRANSPORT_GONC_TLS_PSK)
+		{
+			// Same UTF-8 encoding as the Profiles page uses for a single server.
+			const int required = WideCharToMultiByte(CP_UTF8, 0, item.strTransportPsk,
+				item.strTransportPsk.GetLength(), NULL, 0, NULL, NULL);
+			if (required <= 0 || required >= (int)sizeof(hop.strTransportPsk.szbuf))
+			{
+				errorKey = _T("profile.psk_required");
+				return FALSE;
+			}
+			WideCharToMultiByte(CP_UTF8, 0, item.strTransportPsk, item.strTransportPsk.GetLength(),
+				hop.strTransportPsk.szbuf, required, NULL, NULL);
+			hop.strTransportPsk.szbuf[required] = '\0';
+		}
+	}
+	chain.swap(resolved);
+	errorName.Empty();
+	return TRUE;
 }

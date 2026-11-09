@@ -16,6 +16,8 @@ CPRCTcpPeer::CPRCTcpPeer(CTcpProxyTask *pNotify)
 {
 	m_pProxyLayer = NULL;
 	m_pSecureLayer = NULL;
+	m_pChain = NULL;
+	m_chainFailureLogged = FALSE;
 	m_pNotify = pNotify;
 	m_pProxyDataHandle = (CProxyDataHandle*)pNotify->m_pTaskmgr->m_pPRC->GetPDHInstance();
 	m_ppi.lpC = &pNotify->m_PRCClient;
@@ -40,7 +42,8 @@ CPRCTcpPeer::CPRCTcpPeer(CTcpProxyTask *pNotify)
 
 CPRCTcpPeer::~CPRCTcpPeer(void)
 {
-	//???
+	// The layers themselves go with RemoveAllLayers, as for a single upstream.
+	delete m_pChain;
 }
 
 DWORD CPRCTcpPeer::GetLastError()
@@ -54,12 +57,12 @@ void CPRCTcpPeer::SetPartner(CPRCTcpPeer *pPartner)
 }
 
 BOOL CPRCTcpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
-	IProxyLog::ConnectionStage& stage)
+	IProxyLog::ConnectionStage& stage, const ProxyChain *lpChain)
 {
 
 	stage = IProxyLog::STAGE_TRANSPORT;
 	//设置代理
-	if(!AddProxyLayer(lpProxyInfo))
+	if(!AddProxyLayer(lpProxyInfo, lpChain))
 		return FALSE;
 
 
@@ -107,8 +110,18 @@ BOOL CPRCTcpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
 	return TRUE;
 }
 
-BOOL CPRCTcpPeer::AddProxyLayer(LPProxyInfo lpProxyInfo)
+BOOL CPRCTcpPeer::AddProxyLayer(LPProxyInfo lpProxyInfo, const ProxyChain *lpChain)
 {
+	if (lpChain && lpChain->size() > 1)
+	{
+		m_pChain = new CProxyChainLayers;
+		if (!m_pChain->Add(*this, &(*lpChain)[0], (int)lpChain->size()))
+			return FALSE;
+		m_pProxyLayer = m_pChain->Top();
+		m_pSecureLayer = NULL;
+		return TRUE;
+	}
+
 	const bool useSecureTransport = ProxyTransportPolicy::UsesGoncTlsPsk(lpProxyInfo);
 	if (useSecureTransport &&
 		(!ProxyTransportPolicy::SupportsGoncTlsPsk(
@@ -172,10 +185,27 @@ BOOL CPRCTcpPeer::AddProxyLayer(LPProxyInfo lpProxyInfo)
 void CPRCTcpPeer::RemoveAllLayers()
 {
 	CAsyncSocketEx::RemoveAllLayers();
+	if (m_pChain)
+	{
+		// The chain owns every layer, including the one m_pProxyLayer names.
+		m_pChain->Free();
+		delete m_pChain;
+		m_pChain = NULL;
+		m_pProxyLayer = NULL;
+		m_pSecureLayer = NULL;
+		return;
+	}
 	delete m_pProxyLayer;
 	delete m_pSecureLayer;
 	m_pProxyLayer = NULL;
 	m_pSecureLayer = NULL;
+}
+
+BOOL CPRCTcpPeer::HasPendingSecureRead() const
+{
+	if (m_pChain)
+		return m_pChain->HasPendingSecureRead();
+	return m_pSecureLayer && m_pSecureLayer->HasPendingRead();
 }
 
 //void CPRCTcpPeer::PostSocketEvent(long lEvent, int nErrorCode)
@@ -450,9 +480,7 @@ void CPRCTcpPeer::OnSend(int nErrorCode)
 				m_pPartner->ClearBuffer();
 
 				TriggerEvent(FD_CLOSE);
-			}else if(nRetVal > 0 ||
-				(m_pPartner->m_pSecureLayer &&
-				 m_pPartner->m_pSecureLayer->HasPendingRead()))
+			}else if(nRetVal > 0 || m_pPartner->HasPendingSecureRead())
 			{
 				m_pPartner->TriggerEvent(FD_READ);
 				ATLTRACE("CPRCTcpPeer.OnSend(), m_pPartner->TriggerEvent(FD_READ)\r\n");
@@ -689,7 +717,30 @@ PROXYERROR_CANTRESOLVEHOST 7
 	}
 	else if (nType == LAYERCALLBACK_LAYERSPECIFIC)
 	{
-		if (pLayer == m_pProxyLayer)
+		const int hop = m_pChain ? m_pChain->HopOf(pLayer) : -1;
+		if (hop >= 0)
+		{
+			// Only the first failing hop is logged: the layers above it merely
+			// report that their tunnel never opened.
+			if ((nCode == PROXYERROR_NOCONN || nCode == PROXYERROR_REQUESTFAILED ||
+				nCode == PROXYERROR_AUTHFAILED || nCode == PROXYERROR_AUTHREQUIRED ||
+				nCode == PROXYERROR_AUTHTYPEUNKNOWN || nCode == PROXYERROR_AUTHNOLOGON) &&
+				!m_chainFailureLogged)
+			{
+				m_chainFailureLogged = TRUE;
+				CStringA detail;
+				const ProxyInfo& failed = m_pChain->Hop(hop);
+				detail.Format("hop %d of %d (%s:%d)", hop + 1, m_pChain->Count(),
+					failed.strProxyHost.szbuf, failed.nProxyPort);
+				if (nCode == PROXYERROR_REQUESTFAILED && lParam)
+					detail += CStringA(": ") + CStringA((LPCSTR)lParam, (int)strnlen_s((LPCSTR)lParam, 200));
+				else if (nCode != PROXYERROR_NOCONN && nCode != PROXYERROR_REQUESTFAILED)
+					detail += ": authentication failed";
+				LogProxyFailure(m_pNotify->m_pTaskmgr->m_pPRC, m_ppi.lpC,
+					nCode == PROXYERROR_NOCONN, (int)wParam, detail);
+			}
+		}
+		else if (pLayer == m_pProxyLayer)
 		{
 			switch (nCode)
 			{

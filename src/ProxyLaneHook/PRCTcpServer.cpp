@@ -231,6 +231,28 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 
 	DnsRedirectPolicy::Apply(PRCC, psi, pisetting);
 
+	// A direct (bypassed) connection never uses a chain. A single upstream
+	// costs one call that returns 0 and allocates nothing; a chain is copied
+	// into this module's memory, asking again if it grew in between.
+	ProxyChain chain;
+	if (pisetting.GetProxyType() != PROXYTYPE_NOPROXY)
+	{
+		for (;;)
+		{
+			const INT hops = pProxySettings->GetProxyChain(&PRCC,
+				chain.empty() ? NULL : &chain[0], (INT)chain.size());
+			if (hops < 2)
+			{
+				chain.clear();
+				break;
+			}
+			const BOOL copied = hops <= (INT)chain.size();
+			chain.resize(hops);
+			if (copied)
+				break;
+		}
+	}
+
 	if (psi.bDisableLLMNR)
 	{
 		if (isLLMNR(PRCC.szDomainName))
@@ -242,7 +264,8 @@ void CPRCTcpServer::OnAccept(int nErrorCode)
 	}
 
 	IProxyLog::ConnectionStage stage = IProxyLog::STAGE_ALLOCATE;
-	if(!m_pProxyTaskMgr->OnNewTask(sClient, &PRCC, &pisetting, stage))
+	if(!m_pProxyTaskMgr->OnNewTask(sClient, &PRCC, &pisetting, stage,
+		chain.empty() ? NULL : &chain))
 	{
 		const DWORD error = WSAGetLastError();
 		LogConnectionFailure(&PRCC, ppszName, stage, error);
