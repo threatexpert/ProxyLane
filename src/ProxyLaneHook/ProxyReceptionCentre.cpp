@@ -9,6 +9,7 @@
 #include "ProxyDataHandle.h"
 #include "ProxyLog.h"
 #include "DirectIpv6Route.h"
+#include "SshSessionManager.h"
 #include <vector>
 
 #define TIMER_CHECK_REGISTERED_CLIENT 0x100
@@ -606,6 +607,9 @@ DWORD WINAPI CProxyReceptionCentre::InternalPRCThreadProc()
 		}
 	}
 
+	// Destroy socket layers and pooled transports on their owning event thread.
+	ShutdownPRCServer();
+	SshSessionManager::ShutdownCurrentThread();
 	SetThreadStatus(threadstatus_end);
 	return 0;
 }

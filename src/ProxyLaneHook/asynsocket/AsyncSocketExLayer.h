@@ -76,6 +76,7 @@ class CAsyncSocketExLayer
 {
 	friend CAsyncSocketEx;
 	friend CAsyncSocketExHelperWindow;
+	friend class CAsyncSshSocketLayer;
 protected:
 	//Protected constructor so that CAsyncSocketExLayer can't be instantiated
 	CAsyncSocketExLayer();

@@ -215,6 +215,7 @@ public:
 	CStatusLabel m_staticTestProxy;
 	afx_msg void OnEnChangeEditAddr();
 	afx_msg void OnProfileFieldChanged();
+    afx_msg void OnProtocolChanged();
 	afx_msg void OnDnsSettingsChanged();
 	afx_msg void OnCbnEditchangeComboCfgs();
 	afx_msg void OnCfgoptLoad();

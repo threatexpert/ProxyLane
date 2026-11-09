@@ -3,6 +3,7 @@
 #include "ProxyProfileStore.h"
 #include "RecentApplications.h"
 #include "ConfigStorage.h"
+#include "SshProfile.h"
 
 namespace
 {
@@ -79,7 +80,14 @@ BOOL CProxyProfileStore::Load(CfgProxyItem& item) const
 	CString transport = m_ini.GetString(section, _T("Transport"));
 	item.nTransportMode = transport.CompareNoCase(_T("GONC_TLS_PSK")) == 0
 		? PROXY_TRANSPORT_GONC_TLS_PSK : PROXY_TRANSPORT_PLAIN;
-	item.strTransportPsk = m_ini.GetString(section, _T("PSK"));
+	item.strTransportPsk = m_ini.GetString(section, storedType == PROXYTYPE_SSH ? L"SshHostKey" : L"PSK");
+    if (storedType == PROXYTYPE_SSH) {
+        if (item.nTransportMode != PROXY_TRANSPORT_PLAIN || m_ini.GetString(section, L"User").IsEmpty()) return FALSE;
+        if (!SshProfile::Encode(m_ini.GetString(section, L"User"), item.pi.strProxyUser.szbuf) ||
+            !SshProfile::Encode(m_ini.GetString(section, L"Pass"), item.pi.strProxyPass.szbuf) ||
+            !SshProfile::ValidFingerprint(item.strTransportPsk)) return FALSE;
+        item.bHookUDP = FALSE;
+    }
 
 	// Type=CHAIN marks a chain profile. Older versions do not know the type and
 	// skip the profile instead of running it as something else.
@@ -180,7 +188,7 @@ BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 	{
 		// A chain stores its hops in place of a server.
 		if (!ini.SetString(section, _T("Type"), _T("CHAIN"))) return false;
-		const LPCTSTR serverKeys[] = { _T("Host"), _T("Port"), _T("User"), _T("Pass"), _T("Transport"), _T("PSK") };
+		const LPCTSTR serverKeys[] = { _T("Host"), _T("Port"), _T("User"), _T("Pass"), _T("Transport"), _T("PSK"), L"SshHostKey" };
 		for (LPCTSTR key : serverKeys)
 			if (!ini.DeleteKeyName(section, key)) return false;
 	}
@@ -192,13 +200,14 @@ BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 		if (!ini.SetString(section, _T("Type"), type)) return false;
 		if (!ini.SetString(section, _T("Host"), (CString)item.pi.strProxyHost)) return false;
 		if (!ini.SetInt(section, _T("Port"), item.pi.nProxyPort)) return false;
-		if (!ini.SetString(section, _T("User"), (CString)item.pi.strProxyUser)) return false;
-		if (!ini.SetString(section, _T("Pass"), (CString)item.pi.strProxyPass)) return false;
+		if (!ini.SetString(section, _T("User"), (proxyType == PROXYTYPE_SSH ? SshProfile::Decode(item.pi.strProxyUser.szbuf) : (CString)item.pi.strProxyUser))) return false;
+		if (!ini.SetString(section, _T("Pass"), (proxyType == PROXYTYPE_SSH ? SshProfile::Decode(item.pi.strProxyPass.szbuf) : (CString)item.pi.strProxyPass))) return false;
 		if (!ini.SetString(section, _T("Transport"), item.nTransportMode ==
 			PROXY_TRANSPORT_GONC_TLS_PSK ? _T("GONC_TLS_PSK") : _T("PLAIN"))) return false;
 		// Initial secure-transport format intentionally stores the PSK directly
 		// in the profile, as selected by the user.
-		if (!ini.SetString(section, _T("PSK"), item.strTransportPsk)) return false;
+		if (!ini.SetString(section, proxyType == PROXYTYPE_SSH ? L"SshHostKey" : L"PSK", item.strTransportPsk)) return false;
+        if (!ini.DeleteKeyName(section, proxyType == PROXYTYPE_SSH ? L"PSK" : L"SshHostKey")) return false;
 	}
 	// Write the hops, then drop the keys a longer chain (or a chain this profile
 	// never was) may have left behind.
@@ -234,7 +243,7 @@ BOOL CProxyProfileStore::IsChainHop(const CfgProxyItem& item)
 	ProxyInfo pi = item.pi;
 	const int type = pi.GetProxyType();
 	return !item.bChain && (type == PROXYTYPE_SOCKS5 ||
-		type == PROXYTYPE_HTTP10 || type == PROXYTYPE_HTTP11);
+		type == PROXYTYPE_HTTP10 || type == PROXYTYPE_HTTP11 || type == PROXYTYPE_SSH);
 }
 
 BOOL CProxyProfileStore::ListChainUsers(LPCTSTR name, std::vector<CString>& users) const
@@ -302,7 +311,14 @@ BOOL CProxyProfileStore::ResolveChain(const std::vector<CString>& hops, ProxyCha
 		hop.reserved = item.nTransportMode == PROXY_TRANSPORT_GONC_TLS_PSK
 			? PROXY_TRANSPORT_GONC_TLS_PSK : PROXY_TRANSPORT_PLAIN;
 		SecureZeroMemory(hop.strTransportPsk.szbuf, sizeof(hop.strTransportPsk.szbuf));
-		if (hop.reserved == PROXY_TRANSPORT_GONC_TLS_PSK)
+		if (hop.GetProxyType() == PROXYTYPE_SSH) {
+            if (hop.reserved != PROXY_TRANSPORT_PLAIN || !hop.strProxyUser.szbuf[0] ||
+                !SshProfile::ValidFingerprint(item.strTransportPsk) ||
+                !SshProfile::Encode(item.strTransportPsk, hop.strTransportPsk.szbuf)) {
+                errorKey = L"profile.ssh_invalid"; return FALSE;
+            }
+        }
+        else if (hop.reserved == PROXY_TRANSPORT_GONC_TLS_PSK)
 		{
 			// Same UTF-8 encoding as the Profiles page uses for a single server.
 			const int required = WideCharToMultiByte(CP_UTF8, 0, item.strTransportPsk,

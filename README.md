@@ -109,6 +109,18 @@ HTTPS 解密不限于 443 端口；QUIC 支持 v1，可查看 HTTP/3，以及其
 不提供日常自动备份或独立的恢复入口；仅完整配置导入保留原有的导入前备份和失败恢复。配置保存使用临时文件校验后替换，写入失败保留原配置及未保存修改。导出包含密码和 PSK，不打包引用的外部文件。检查更新由用户手动触发，在后台访问 https://10000.download/api/tools/proxylane/release 查询最新正式发布（下载站缓存 10 分钟）。发现新版后打开下载站工具页，由用户选择下载，不自动安装；客户端无需直连 GitHub。设置与关于页提供下载站入口。
 
 
+## SSH 代理
+
+选择 `SSH` 协议，填写服务器地址、端口（通常为 22）、用户名和密码。支持密码认证和 TCP `direct-tcpip` 转发；服务器必须允许端口转发。可单独使用，也可作为 SOCKS5 / HTTP / SSH 混合链中任意位置的节点。不支持 UDP、密钥登录或交互式认证。
+
+首次点击测试时，会显示服务器的 SHA256 主机指纹；通过可信渠道核对并确认后再测试，最后保存并应用。指纹不匹配时拒绝连接，不发送登录密码。指纹以 `SshHostKey` 保存在配置中，密码沿用配置文件的明文保存方式。
+
+C++ 管理按需创建的 SSH session，同一事件线程中相同前置链路、账号、密码和指纹的连接复用认证，每条业务 TCP 使用独立通道。测试器与业务代理使用各自的会话池。每 15 秒发送需要回复的 SSH keepalive；约 60 秒收不到服务端数据时使会话失效，后续新连接重新认证。现有 TCP 流不能透明恢复，需应用重新连接。没有通道使用的 session 在约 60 秒后回收。
+
+同一 session 可以同时等待多个通道打开确认，慢目标不会阻塞后续目标的打开。每个 session 最多保留 32 个未完成的打开操作，额外请求排队；单个请求约 60 秒超时，仅使该业务连接失败。取消或超时后仍保留协议清理状态，收到迟到确认时关闭对应通道，该状态也计入上限。
+
+SSH 后端为独立的 `ProxyLaneSsh64.dll`，仅在使用 SSH 时加载，最低支持目标是 Windows 10 / Server 2016 x64；32 位应用可以通过 64 位主程序使用。WinCNG 后端支持 RSA / ECDSA 主机密钥，不支持仅提供 Ed25519 主机密钥的服务器。
+
 ## gonc TLS-PSK 加密传输
 
 在 SOCKS5 或 HTTP 配置的 **加密模式** 中选择 `gonc TLS-PSK`，填写远端 gonc 服务的地址、端口及相同的 PSK，无需在本机另开 gonc 客户端。
@@ -135,6 +147,7 @@ gonc -e ":s5s -u -http" -l -k -psk YOUR_PSK -tls 1083
 - Visual Studio 2019，安装 C++ 桌面开发及 MFC 组件。
 - Visual C++ `v141_xp` 工具集和 Windows 7.1A SDK，用于主程序与 Hook DLL。
 - `v142` 工具集和 Windows 10 SDK，用于测试项目。
+- CMake 3.15+、`tar`、`v142` 和 Windows 10 SDK，用于 x64 SSH 后端。
 - Rust MSVC 工具链，确保 `rustup` 和 `cargo` 在 PATH 中；MITM 模块使用固定版本 `1.88.0`。
 
 在项目根目录准备 Rust 工具链：
@@ -154,6 +167,14 @@ msbuild .\src\ProxyLane.sln /m /p:Configuration=Release /p:Platform=x64
 ```
 
 主程序及运行所需 DLL 输出到 `bin/`。x64 Release 的构建后步骤会调用 Rust 构建脚本，生成安全传输与 MITM 组件；首次构建需要下载依赖，耗时较长。
+
+### SSH 后端依赖
+
+libssh2 以官方 1.11.1 为基础，并应用 `third_party/libssh2/concurrent-channel-open.patch`；补丁在 [threatexpert/libssh2](https://github.com/threatexpert/libssh2) 的开发分支维护。目录中同时保留配套公开头文件和原始许可证。`scripts/build-ssh.ps1` 下载并校验官方源码包 SHA256，在忽略入库的 `build/deps` 下按补丁哈希隔离源码与构建缓存，再应用补丁；不依赖开发者本机的相邻仓库。`src/ProxyLaneSsh` 的 CMake 封装使用 WinCNG 和静态 CRT 编译 DLL，没有 OpenSSL 或额外运行库依赖。
+
+x64 Release 构建只在 DLL / 构建标记缺失或依赖版本、脚本、封装源码变化时执行脚本；普通主工程改动跳过此步骤。已有源码缓存时不下载，已有对象文件时增量编译。需要手工重建后端可运行 `powershell -ExecutionPolicy Bypass -File .\scripts\build-ssh.ps1`。首次构建需要联网，之后可用缓存离线构建。发布脚本把 libssh2 许可证合并到统一的 `LICENSE`。
+
+本地 SSH 集成测试需要 Python 和 Paramiko：`powershell -ExecutionPolicy Bypass -File .\tests\run-ssh-transport-tests.ps1 -Full`。它在回环地址运行临时服务器，不使用系统账号；会扣住一个 OPEN 的服务器确认，验证后续 OPEN 在同一 session 上先确认并传输数据。完整测试还包含约三分钟的通道超时、失联及空闲等待。
 
 ### 单独构建 Rust 组件
 

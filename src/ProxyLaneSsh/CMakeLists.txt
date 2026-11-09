@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.15)
+project(ProxyLaneSsh C)
+set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
+set(CRYPTO_BACKEND WinCNG CACHE STRING "" FORCE)
+set(BUILD_STATIC_LIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(ENABLE_ZLIB_COMPRESSION OFF CACHE BOOL "" FORCE)
+set(ENABLE_ECDSA_WINCNG ON CACHE BOOL "" FORCE)
+# This backend is intentionally x64 / Windows 10+; legacy protocols do not
+# depend on it. Static CRT avoids an additional redistributable requirement.
+if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+  message(FATAL_ERROR "ProxyLane SSH backend requires x64")
+endif()
+add_subdirectory("${LIBSSH2_SOURCE}" libssh2)
+target_sources(libssh2_shared PRIVATE SessionPump.c)
+target_include_directories(libssh2_shared PRIVATE "${LIBSSH2_SOURCE}/src")

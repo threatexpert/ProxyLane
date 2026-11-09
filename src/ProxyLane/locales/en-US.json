@@ -28,12 +28,12 @@
   "profile.chain_too_short": "A chain needs at least two profiles.",
   "profile.chain_duplicate": "\"%s\" appears more than once in this chain.",
   "profile.chain_missing": "The profile \"%s\" in this chain no longer exists.",
-  "profile.chain_invalid_hop": "\"%s\" can't be part of a chain. Only saved SOCKS5 or HTTP server profiles can.",
+  "profile.chain_invalid_hop": "\"%s\" cannot be part of a chain. Only saved SOCKS5, HTTP or SSH server profiles can.",
   "profile.chain_used_by": "Delete profile \"%s\"?\r\n\r\nThese chains use it and won't start until it is replaced: %s.",
   "test.chain_hop": "Hop %d (%s): %s",
   "share.chain_unsupported": "Chain profiles can't be shared yet. Share each hop's profile instead.",
   "launch.profile_chain": "Chain: %s",
-  "page1.first_run_hint":"Welcome! The Test profile is only a placeholder. Enter your proxy server address and port, then click Test Connection and Enable Profile. To monitor traffic without a proxy, choose the Direct profile.",
+  "page1.first_run_hint": "Welcome! The Test profile is only a placeholder. Enter your proxy server address and port, then click Test Connection and Enable Profile. To monitor traffic without a proxy, choose the Direct profile.",
   "test.direct_connection_failed": "Cannot connect to the test destination. Check the network and destination service.",
   "page3.accessible_process_list": "Running processes",
   "profile.actions": "Actions ▾",
@@ -624,5 +624,12 @@
   "shortcut.profile_conflict": "The shortcut uses profile \"%s\"; the running profile is \"%s\".\r\n\r\nYes: use the shortcut profile.\r\nNo: use the current profile.\r\nCancel: do not launch.",
   "shortcut.started_notification": "Started %s\r\nProfile: %s",
   "shortcut.started_log": "Shortcut launched application: %s; profile: %s.\r\n",
-  "shortcut.notification_failed": "The application started, but the tray notification could not be sent.\r\n"
+  "shortcut.notification_failed": "The application started, but the tray notification could not be sent.\r\n",
+  "page1.ssh_hint": "SSH tunnels TCP only. Sessions connect on demand and are reused, with 15-second keepalives. Test first to verify the host key.",
+  "ssh.host_key": "SSH host key (SHA256)",
+  "profile.ssh_invalid": "SSH requires a username, a valid SHA256 host key (leave empty for the first test), and native transport. UTF-8 credentials must not exceed 127 bytes each.",
+  "test.ssh_unavailable": "SSH requires 64-bit ProxyLane on Windows 10 / Server 2016 or later, with ProxyLaneSsh64.dll beside the application.",
+  "test.ssh_unknown_key": "The SSH server host key is not trusted yet. No login password was sent.",
+  "test.ssh_changed_key": "The SSH host key differs from the saved key. The connection was rejected without sending a password. Verify with the server administrator before changing the saved fingerprint.",
+  "test.ssh_trust_key": "Verify the server address and fingerprint above through a trusted channel. Trust this key?\nTest again after confirming; a single-server profile must also be saved and applied."
 }

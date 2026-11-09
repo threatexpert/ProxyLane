@@ -144,6 +144,7 @@ BOOL CProxyTester::StartChain(IProxyTesterCallback *pCallback, const LPPRCClient
 	if (!m_pChain->Add(*this, lpHops, nHops))
 		return FALSE;
 	m_pProxyLayer = m_pChain->Top();
+	if (m_pChain->HasSsh()) m_pNotify->ArmTester(this, 60000);
 
 	if (!Create(0, SOCK_STREAM,
 		FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE,
@@ -159,6 +160,15 @@ int CProxyTester::GetFailedHop()
 
 BOOL CProxyTester::AddProxyLayer(LPProxyInfo lpProxyInfo)
 {
+	if (lpProxyInfo && lpProxyInfo->GetProxyType() == PROXYTYPE_SSH)
+	{
+		if (m_client.sType != SOCK_STREAM) { WSASetLastError(WSAEOPNOTSUPP); return FALSE; }
+		m_pChain = new CProxyChainLayers;
+		if (!m_pChain->Add(*this, lpProxyInfo, 1)) return FALSE;
+		m_pProxyLayer = m_pChain->Top();
+		m_pNotify->ArmTester(this, 60000);
+		return TRUE;
+	}
 	if (lpProxyInfo &&
 		lpProxyInfo->reserved == PROXY_TRANSPORT_GONC_TLS_PSK &&
 		(!ProxyTransportPolicy::SupportsGoncTlsPsk(

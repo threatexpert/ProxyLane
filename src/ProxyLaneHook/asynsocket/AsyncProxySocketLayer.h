@@ -165,7 +165,9 @@ public:
 
 	//Returns the type of the proxy
 	int GetProxyType() const;
-	int GetProxyOpID() const;
+	virtual int GetProxyOpID() const;
+	virtual BOOL HasPendingRead() const { return FALSE; }
+	virtual int FailedHop() const { return -1; }
 
 #ifdef _AFX
 	virtual BOOL GetPeerName(CString& rPeerAddress, UINT& rPeerPort);
@@ -355,6 +357,9 @@ private:
 #define PROXYERROR_SECURE_HANDSHAKE	21
 #define PROXYERROR_UDP_UNSUPPORTED	22
 #define PROXYERROR_UDP_RELAY_FAILED	23
+#define PROXYERROR_SSH_UNAVAILABLE       24
+#define PROXYERROR_SSH_HOSTKEY_UNKNOWN   25
+#define PROXYERROR_SSH_HOSTKEY_CHANGED   26
 
 //Status messages
 #define PROXYSTATUS_LISTENSOCKETCREATED 8	//Called when a listen socket was created successfully. Unlike the normal listen function,

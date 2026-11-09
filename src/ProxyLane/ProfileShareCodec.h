@@ -38,7 +38,7 @@ inline void Validate(const Json& value)
         name.front() == ' ' || name.back() == ' ' || name.find('\t') != std::string::npos)
         throw Error("share.invalid_name");
     const std::string type = String(value, "type", 16);
-    if (type != "NOPROXY" && type != "SOCKS5" && type != "HTTP" && type != "HTTP10" && type != "HTTP11")
+    if (type != "NOPROXY" && type != "SOCKS5" && type != "HTTP" && type != "HTTP10" && type != "HTTP11" && type != "SSH")
         throw Error("share.invalid_type");
     const std::string host = String(value, "host", 127);
     String(value, "user", 127);
@@ -46,6 +46,13 @@ inline void Validate(const Json& value)
     const std::string psk = String(value, "psk", 255);
     const std::string transport = String(value, "transport", 32);
     if (transport != "PLAIN" && transport != "GONC_TLS_PSK") throw Error("share.invalid_transport");
+    if (type == "SSH") {
+        const std::string pin = String(value, "ssh_host_key", 50);
+        if (String(value, "user", 127).empty() || transport != "PLAIN" || !psk.empty() ||
+            (!pin.empty() && (pin.size() != 50 || pin.compare(0,7,"SHA256:") != 0 ||
+                pin.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",7) != std::string::npos)))
+            throw Error("profile.ssh_invalid");
+    }
     if (!value.contains("port") || !value.at("port").is_number_integer() ||
         value.at("port") < 0 || value.at("port") > 65535 ||
         (type != "NOPROXY" && (host.empty() || value.at("port") == 0 ||

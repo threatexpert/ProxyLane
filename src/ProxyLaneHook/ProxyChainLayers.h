@@ -3,6 +3,7 @@
 #include "asynsocket\AsyncSocketEx.h"
 #include "asynsocket\AsyncProxySocketLayer.h"
 #include "asynsocket\AsyncSecureSocketLayer.h"
+#include "asynsocket\AsyncSshSocketLayer.h"
 #include "ProxyModule.h"
 #include "ProxyTransportPolicy.h"
 
@@ -22,7 +23,7 @@ class CProxyChainLayers
 public:
 	BOOL Add(CAsyncSocketEx& socket, const ProxyInfo* hops, int count)
 	{
-		if (!m_hops.empty() || !hops || count < 2)
+		if (!m_hops.empty() || !hops || count < 1)
 		{
 			WSASetLastError(WSAEINVAL);
 			return FALSE;
@@ -35,14 +36,22 @@ public:
 			ProxyInfo& hop = m_hops[i];
 			const int type = hop.GetProxyType();
 			const bool secure = ProxyTransportPolicy::UsesGoncTlsPsk(&hop);
-			if ((type != PROXYTYPE_SOCKS5 && type != PROXYTYPE_HTTP10 && type != PROXYTYPE_HTTP11) ||
+			if ((type != PROXYTYPE_SOCKS5 && type != PROXYTYPE_HTTP10 && type != PROXYTYPE_HTTP11 && type != PROXYTYPE_SSH) ||
 				!hop.strProxyHost.szbuf[0] || !hop.nProxyPort ||
+				(type == PROXYTYPE_SSH && (hop.reserved != PROXY_TRANSPORT_PLAIN || !hop.strProxyUser.szbuf[0])) ||
 				(secure && !hop.strTransportPsk.szbuf[0]))
 			{
 				WSASetLastError(WSAEINVAL);
 				return FALSE;
 			}
 
+			if (type == PROXYTYPE_SSH)
+			{
+				m_proxy[i] = new CAsyncSshSocketLayer(ProxyChain(hops, hops + i + 1));
+				// The shared session owns all preceding hops. This socket owns
+				// only its channel adapter and the hops above that adapter.
+				return socket.AddLayer(m_proxy[i]);
+			}
 			m_proxy[i] = new CAsyncProxySocketLayer;
 			if (!m_proxy[i])
 			{
@@ -94,7 +103,7 @@ public:
 		for (size_t i = 0; layer && i < m_proxy.size(); ++i)
 		{
 			if (layer == m_proxy[i] || layer == m_secure[i])
-				return (int)i;
+				return m_proxy[i] && m_proxy[i]->FailedHop() >= 0 ? m_proxy[i]->FailedHop() : (int)i;
 		}
 		return -1;
 	}
@@ -116,12 +125,18 @@ public:
 	{
 		for (size_t i = 0; i < m_secure.size(); ++i)
 		{
+			if (m_proxy[i] && m_proxy[i]->HasPendingRead()) return TRUE;
 			if (m_secure[i] && m_secure[i]->HasPendingRead())
 				return TRUE;
 		}
 		return FALSE;
 	}
 
+	BOOL HasSsh() const
+	{
+		for (auto hop : m_hops) if (hop.GetProxyType() == PROXYTYPE_SSH) return TRUE;
+		return FALSE;
+	}
 private:
 	ProxyChain m_hops;
 	std::vector<CAsyncProxySocketLayer*> m_proxy;

@@ -215,6 +215,8 @@ typedef struct _tagProxyInfo
 	string<128> strProxyUser;
 	string<128> strProxyPass;
 	DWORD  reserved; // PROXY_TRANSPORT_*
+	// Protocol-specific transport parameter: TLS PSK, or SHA256 host-key pin
+	// for SSH. Reuses the existing field to keep the packed IPC ABI unchanged.
 	string<256> strTransportPsk;
 /////////////////////
 
@@ -227,6 +229,7 @@ typedef struct _tagProxyInfo
 #define PROXYTYPE_SOCKS5	3
 #define PROXYTYPE_HTTP10	4
 #define PROXYTYPE_HTTP11	5
+#define PROXYTYPE_SSH     6
 	INT GetProxyType()
 	{
 		if(!_stricmp(strProxyType, "SOCKS4"))
@@ -239,6 +242,8 @@ typedef struct _tagProxyInfo
 			return PROXYTYPE_HTTP10;
 		else if(!_stricmp(strProxyType, "HTTP") || !_stricmp(strProxyType, "HTTP11"))
 			return PROXYTYPE_HTTP11;
+		else if(!_stricmp(strProxyType, "SSH"))
+			return PROXYTYPE_SSH;
 		else
 			return PROXYTYPE_NOPROXY;
 	}

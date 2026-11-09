@@ -13,6 +13,7 @@
 #include "MitmControl.h"
 #include "ProxyMonitor.h"
 #include "ProcessRegistry.h"
+#include "SshSessionManager.h"
 
 // The GUI keeps this DLL loaded until process exit. Service stop/start only
 // recreates CGlobalProxy/PRC; all readers and writers retain this one registry.
@@ -50,6 +51,7 @@ CGlobalProxy::~CGlobalProxy(void)
 	delete m_pProxyLog;
 	delete m_pProxySettings;
 	delete m_pProxyTesterMgr;
+	SshSessionManager::ShutdownCurrentThread();
 
 	WSACleanup();
 }

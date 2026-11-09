@@ -28,12 +28,12 @@
   "profile.chain_too_short": "代理链至少需要两个配置。",
   "profile.chain_duplicate": "“%s”在此代理链中出现了不止一次。",
   "profile.chain_missing": "此代理链中的配置“%s”已不存在。",
-  "profile.chain_invalid_hop": "“%s”不能加入代理链，只能使用已保存的 SOCKS5 或 HTTP 服务器配置。",
+  "profile.chain_invalid_hop": "“%s”不能加入代理链。仅支持已保存的 SOCKS5、HTTP 或 SSH 服务器配置。",
   "profile.chain_used_by": "确定要删除配置“%s”吗？\r\n\r\n以下代理链正在使用它，删除后需替换才能启用：%s。",
   "test.chain_hop": "第 %d 跳（%s）：%s",
   "share.chain_unsupported": "暂不支持分享代理链配置，请分别分享各跳的配置。",
   "launch.profile_chain": "代理链：%s",
-  "page1.first_run_hint":"欢迎使用！Test 配置只是示例，请填写你的代理服务器地址和端口，然后点击“测试连接”并“启用配置”。如果只想监视流量而不使用代理，请选择 Direct 配置。",
+  "page1.first_run_hint": "欢迎使用！Test 配置只是示例，请填写你的代理服务器地址和端口，然后点击“测试连接”并“启用配置”。如果只想监视流量而不使用代理，请选择 Direct 配置。",
   "test.direct_connection_failed": "无法连接测试目标，请检查网络及目标服务状态。",
   "page3.accessible_process_list": "运行中的进程",
   "profile.actions": "配置操作 ▾",
@@ -624,5 +624,12 @@
   "shortcut.profile_conflict": "快捷方式使用配置“%s”，当前运行的是“%s”。\r\n\r\n是：使用快捷方式的配置启动。\r\n否：使用当前配置启动。\r\n取消：不启动。",
   "shortcut.started_notification": "已启动 %s\r\n使用配置：%s",
   "shortcut.started_log": "快捷方式已启动应用：%s；配置：%s。\r\n",
-  "shortcut.notification_failed": "应用已启动，但未能发送系统托盘通知。\r\n"
+  "shortcut.notification_failed": "应用已启动，但未能发送系统托盘通知。\r\n",
+  "page1.ssh_hint": "SSH 仅代理 TCP；按需建立并复用会话，每 15 秒保活。首次使用请先测试并核对主机指纹。",
+  "ssh.host_key": "SSH 主机指纹（SHA256）",
+  "profile.ssh_invalid": "SSH 需要登录用户名、有效的 SHA256 主机指纹（首次测试可留空）及原生传输；用户名和密码的 UTF-8 长度不能超过 127 字节。",
+  "test.ssh_unavailable": "SSH 需要 Windows 10 / Server 2016 或更新版本的 64 位 ProxyLane，以及同目录下的 ProxyLaneSsh64.dll。",
+  "test.ssh_unknown_key": "尚未信任此 SSH 服务器的主机指纹。未发送登录密码。",
+  "test.ssh_changed_key": "SSH 主机指纹与保存的记录不一致，连接已拒绝。请向服务器管理员核实后再修改指纹。未发送登录密码。",
+  "test.ssh_trust_key": "请通过可信渠道核对上面的服务器地址和指纹。是否信任此指纹？\n确认后请重新测试；单服务器配置还需保存并应用。"
 }

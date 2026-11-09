@@ -1,0 +1,643 @@
+diff --git a/docs/Makefile.am b/docs/Makefile.am
+index f330b601..a2ede8bb 100644
+--- a/docs/Makefile.am
++++ b/docs/Makefile.am
+@@ -1,5 +1,6 @@
+ EXTRA_DIST = template.3 AUTHORS BINDINGS.md HACKING.md HACKING-CRYPTO \
+-  INSTALL_AUTOTOOLS INSTALL_CMAKE.md SECURITY.md TODO CMakeLists.txt
++  INSTALL_AUTOTOOLS INSTALL_CMAKE.md SECURITY.md TODO CMakeLists.txt \
++  channel_open.md
+ 
+ dist_man_MANS = \
+   libssh2_agent_connect.3 \
+diff --git a/include/libssh2.h b/include/libssh2.h
+index 8b16dd2e..f4333bfe 100644
+--- a/include/libssh2.h
++++ b/include/libssh2.h
+@@ -849,6 +849,23 @@ libssh2_channel_open_ex(LIBSSH2_SESSION *session, const char *channel_type,
+ LIBSSH2_API LIBSSH2_CHANNEL *
+ libssh2_channel_direct_tcpip_ex(LIBSSH2_SESSION *session, const char *host,
+                                 int port, const char *shost, int sport);
++
++/* Fork extension: independent, nonblocking channel-open operations.
++ * begin copies its arguments without doing I/O. poll returns EAGAIN while
++ * pending; every other return consumes the operation. On success it transfers
++ * the channel to *channel. cancel marks an operation for cancellation: keep
++ * polling it to close a late confirmation, or free the entire session.
++ * Serialize ALL calls on a session; this API does not add thread safety.
++ * Use a nonblocking session. There is no implicit open timeout.
++ */
++typedef struct _LIBSSH2_CHANNEL_OPEN LIBSSH2_CHANNEL_OPEN;
++LIBSSH2_API LIBSSH2_CHANNEL_OPEN *
++libssh2_channel_direct_tcpip_begin(LIBSSH2_SESSION *session, const char *host,
++                                  int port, const char *shost, int sport);
++LIBSSH2_API int libssh2_channel_open_poll(LIBSSH2_CHANNEL_OPEN *operation,
++                                        LIBSSH2_CHANNEL **channel);
++LIBSSH2_API void libssh2_channel_open_cancel(LIBSSH2_CHANNEL_OPEN *operation);
++
+ #define libssh2_channel_direct_tcpip(session, host, port) \
+     libssh2_channel_direct_tcpip_ex((session), (host), (port), "127.0.0.1", 22)
+ 
+diff --git a/src/Makefile.inc b/src/Makefile.inc
+index 5cf070cc..d9ac4486 100644
+--- a/src/Makefile.inc
++++ b/src/Makefile.inc
+@@ -4,6 +4,7 @@ CSOURCES =              \
+   agent.c               \
+   bcrypt_pbkdf.c        \
+   channel.c             \
++  channel_open.c        \
+   comp.c                \
+   chacha.c              \
+   cipher-chachapoly.c   \
+diff --git a/src/channel.h b/src/channel.h
+index 709ec061..961749ed 100644
+--- a/src/channel.h
++++ b/src/channel.h
+@@ -72,6 +72,10 @@ int _libssh2_channel_flush(LIBSSH2_CHANNEL *channel, int streamid);
+  */
+ int _libssh2_channel_free(LIBSSH2_CHANNEL *channel);
+ 
++int _libssh2_channel_open_reply(LIBSSH2_CHANNEL *channel,
++                               const unsigned char *data, size_t length);
++void _libssh2_channel_open_abort(LIBSSH2_CHANNEL *channel);
++
+ int
+ _libssh2_channel_extended_data(LIBSSH2_CHANNEL *channel, int ignore_mode);
+ 
+diff --git a/src/libssh2_priv.h b/src/libssh2_priv.h
+index 9b8866dc..7ee09633 100644
+--- a/src/libssh2_priv.h
++++ b/src/libssh2_priv.h
+@@ -447,6 +447,9 @@ struct _LIBSSH2_CHANNEL
+ {
+     struct list_node node;
+ 
++    /* Non-NULL only while owned by the independent open API. */
++    LIBSSH2_CHANNEL_OPEN *open_operation;
++
+     unsigned char *channel_type;
+     size_t channel_type_len;
+ 
+diff --git a/src/packet.c b/src/packet.c
+index 6da14e9f..7ed30daf 100644
+--- a/src/packet.c
++++ b/src/packet.c
+@@ -743,6 +743,24 @@ _libssh2_packet_add(LIBSSH2_SESSION * session, unsigned char *data,
+         /* A couple exceptions to the packet adding rule: */
+         switch(msg) {
+ 
++        case SSH_MSG_CHANNEL_OPEN_CONFIRMATION:
++        case SSH_MSG_CHANNEL_OPEN_FAILURE:
++            if(datalen < 5) {
++                LIBSSH2_FREE(session, data);
++                session->packAdd_state = libssh2_NB_state_idle;
++                return _libssh2_error(session, LIBSSH2_ERROR_PROTO,
++                                      "Truncated channel open reply");
++            }
++            channelp = _libssh2_channel_locate(session,
++                                               _libssh2_ntohu32(data + 1));
++            if(channelp && channelp->open_operation) {
++                rc = _libssh2_channel_open_reply(channelp, data, datalen);
++                LIBSSH2_FREE(session, data);
++                session->packAdd_state = libssh2_NB_state_idle;
++                return rc;
++            }
++            break; /* Legacy open API still reads from the packet brigade. */
++
+             /*
+               byte      SSH_MSG_DISCONNECT
+               uint32    reason code
+@@ -1647,6 +1665,8 @@ _libssh2_packet_requirev(LIBSSH2_SESSION *session,
+             ret = _libssh2_packet_askv(session, packet_types, data,
+                                        data_len, match_ofs, match_buf,
+                                        match_len);
++            if(ret == -1)
++                continue; /* A reply for another independent operation. */
+             state->start = 0;
+             return ret;
+         }
+diff --git a/src/session.c b/src/session.c
+index 2d77b05e..b2a16714 100644
+--- a/src/session.c
++++ b/src/session.c
+@@ -915,6 +915,11 @@ session_free(LIBSSH2_SESSION *session)
+     int packets_left = 0;
+ 
+     if(session->free_state == libssh2_NB_state_idle) {
++        /* A session teardown must not wait for unconfirmed channel opens. */
++        for(ch = _libssh2_list_first(&session->channels); ch;
++            ch = _libssh2_list_next(&ch->node))
++            _libssh2_channel_open_abort(ch);
++
+         _libssh2_debug((session, LIBSSH2_TRACE_TRANS,
+                        "Freeing session resource %p",
+                        (void *)session->remote.banner));
+diff --git a/tests/Makefile.inc b/tests/Makefile.inc
+index 45f7f475..09d4d000 100644
+--- a/tests/Makefile.inc
++++ b/tests/Makefile.inc
+@@ -43,6 +43,7 @@ DOCKER_TESTS_STATIC = \
+   test_hostkey
+ 
+ STANDALONE_TESTS_STATIC = \
++  test_channel_open \
+   test_simple
+ 
+ # Copy of the above for Makefile.am.
+@@ -50,6 +51,7 @@ STANDALONE_TESTS_STATIC = \
+ test_auth_keyboard_info_request_LDFLAGS = -static
+ test_hostkey_LDFLAGS = -static
+ test_simple_LDFLAGS = -static
++test_channel_open_LDFLAGS = -static
+ 
+ librunner_la_SOURCES = \
+   runner.c runner.h \
+diff --git a/src/channel_open.c b/src/channel_open.c
+new file mode 100644
+index 00000000..b5b3f8d2
+--- /dev/null
++++ b/src/channel_open.c
+@@ -0,0 +1,211 @@
++/* Copyright (C) 2026 threatexpert
++ * SPDX-License-Identifier: BSD-3-Clause
++ * Independent direct-tcpip opens for event-loop clients.
++ */
++#include "libssh2_priv.h"
++#include "channel.h"
++#include "transport.h"
++
++struct _LIBSSH2_CHANNEL_OPEN {
++    LIBSSH2_CHANNEL *channel;
++    unsigned char *packet;
++    size_t packet_len;
++    int sending, sent, confirmed, replied, cancelled, error;
++};
++
++static void open_release(LIBSSH2_CHANNEL_OPEN *op)
++{
++    LIBSSH2_SESSION *session = op->channel->session;
++    op->channel->open_operation = NULL;
++    LIBSSH2_FREE(session, op->packet);
++    LIBSSH2_FREE(session, op);
++}
++
++LIBSSH2_API LIBSSH2_CHANNEL_OPEN *
++libssh2_channel_direct_tcpip_begin(LIBSSH2_SESSION *session, const char *host,
++                                  int port, const char *shost, int sport)
++{
++    LIBSSH2_CHANNEL_OPEN *op;
++    LIBSSH2_CHANNEL *channel;
++    size_t host_len, shost_len, length;
++    unsigned char *p;
++    if(!session)
++        return NULL;
++    if(!host || !shost || port < 1 || port > 65535 || sport < 0 ||
++       sport > 65535 || session->api_block_mode) {
++        _libssh2_error(session, LIBSSH2_ERROR_INVAL,
++                      "Independent opens require valid targets and nonblock");
++        return NULL;
++    }
++    host_len = strlen(host);
++    shost_len = strlen(shost);
++    /* Bound lengths before addition and before transport packet encoding. */
++    if(!host_len || host_len > 32768 || shost_len > 32768 ||
++       host_len + shost_len + 45 >= MAX_SSH_PACKET_LEN - 0x100) {
++        _libssh2_error(session, LIBSSH2_ERROR_INVAL, "Invalid target length");
++        return NULL;
++    }
++    length = host_len + shost_len + 45;
++    op = LIBSSH2_CALLOC(session, sizeof(*op));
++    channel = LIBSSH2_CALLOC(session, sizeof(*channel));
++    if(!op || !channel) {
++        if(op)
++            LIBSSH2_FREE(session, op);
++        if(channel)
++            LIBSSH2_FREE(session, channel);
++        _libssh2_error(session, LIBSSH2_ERROR_ALLOC, "Channel open allocation");
++        return NULL;
++    }
++    op->channel = channel;
++    channel->session = session;
++    channel->open_operation = op;
++    channel->channel_type = LIBSSH2_ALLOC(session, 12);
++    op->packet = LIBSSH2_ALLOC(session, length);
++    if(!channel->channel_type || !op->packet) {
++        if(channel->channel_type)
++            LIBSSH2_FREE(session, channel->channel_type);
++        open_release(op);
++        LIBSSH2_FREE(session, channel);
++        _libssh2_error(session, LIBSSH2_ERROR_ALLOC, "Channel open packet");
++        return NULL;
++    }
++    memcpy(channel->channel_type, "direct-tcpip", 12);
++    channel->channel_type_len = 12;
++    channel->local.id = _libssh2_channel_nextid(session);
++    channel->remote.window_size = LIBSSH2_CHANNEL_WINDOW_DEFAULT;
++    channel->remote.window_size_initial = LIBSSH2_CHANNEL_WINDOW_DEFAULT;
++    channel->remote.packet_size = LIBSSH2_CHANNEL_PACKET_DEFAULT;
++    p = op->packet;
++    *p++ = SSH_MSG_CHANNEL_OPEN;
++    _libssh2_store_str(&p, "direct-tcpip", 12);
++    _libssh2_store_u32(&p, channel->local.id);
++    _libssh2_store_u32(&p, channel->remote.window_size);
++    _libssh2_store_u32(&p, channel->remote.packet_size);
++    _libssh2_store_str(&p, host, host_len);
++    _libssh2_store_u32(&p, (uint32_t)port);
++    _libssh2_store_str(&p, shost, shost_len);
++    _libssh2_store_u32(&p, (uint32_t)sport);
++    op->packet_len = (size_t)(p - op->packet);
++    _libssh2_list_add(&session->channels, &channel->node);
++    return op;
++}
++
++/* Dispatch before any subsequent DATA/WINDOW_ADJUST, even when the caller
++ * polls a different operation. No I/O or user callbacks in packet dispatch. */
++int _libssh2_channel_open_reply(LIBSSH2_CHANNEL *channel,
++                               const unsigned char *data, size_t length)
++{
++    LIBSSH2_CHANNEL_OPEN *op = channel->open_operation;
++    if(!op->sent || op->replied || length < 17)
++        return _libssh2_error(channel->session, LIBSSH2_ERROR_PROTO,
++                              "Invalid independent channel open reply");
++    if(data[0] == SSH_MSG_CHANNEL_OPEN_CONFIRMATION) {
++        uint32_t packet_size = _libssh2_ntohu32(data + 13);
++        if(!packet_size)
++            return _libssh2_error(channel->session, LIBSSH2_ERROR_PROTO,
++                                  "Zero channel packet size");
++        channel->remote.id = _libssh2_ntohu32(data + 5);
++        channel->local.window_size = _libssh2_ntohu32(data + 9);
++        channel->local.window_size_initial = channel->local.window_size;
++        channel->local.packet_size = packet_size;
++        op->confirmed = 1;
++    }
++    else {
++        size_t description_len = _libssh2_ntohu32(data + 9);
++        if(description_len > length - 17 ||
++           _libssh2_ntohu32(data + 13 + description_len) >
++           length - 17 - description_len)
++            return _libssh2_error(channel->session, LIBSSH2_ERROR_PROTO,
++                                  "Truncated channel open failure");
++        op->error = LIBSSH2_ERROR_CHANNEL_FAILURE;
++    }
++    op->replied = 1;
++    return 0;
++}
++
++LIBSSH2_API void libssh2_channel_open_cancel(LIBSSH2_CHANNEL_OPEN *op)
++{
++    if(op)
++        op->cancelled = 1;
++}
++
++LIBSSH2_API int libssh2_channel_open_poll(LIBSSH2_CHANNEL_OPEN *op,
++                                        LIBSSH2_CHANNEL **result)
++{
++    LIBSSH2_CHANNEL *channel;
++    LIBSSH2_SESSION *session;
++    int rc, i;
++    if(!op || !result)
++        return LIBSSH2_ERROR_BAD_USE;
++    *result = NULL;
++    channel = op->channel;
++    session = channel->session;
++    if(session->socket_state == LIBSSH2_SOCKET_DISCONNECTED) {
++        op->error = LIBSSH2_ERROR_SOCKET_DISCONNECT;
++        op->replied = 1;
++    }
++    /* Cancelling an untouched request needs no wire traffic. Once a send
++     * starts we must retry the identical packet until complete, even if only
++     * a prefix was written. Its storage must survive every EAGAIN. */
++    if(op->cancelled && !op->sending) {
++        op->replied = 1;
++        op->error = LIBSSH2_ERROR_CHANNEL_CLOSED;
++    }
++    if(!op->sent && !op->replied) {
++        op->sending = 1;
++        rc = _libssh2_transport_send(session, op->packet, op->packet_len,
++                                     NULL, 0);
++        if(rc == LIBSSH2_ERROR_EAGAIN)
++            return rc;
++        if(rc) {
++            /* A broken SSH transport cannot be recovered per channel. */
++            session->socket_state = LIBSSH2_SOCKET_DISCONNECTED;
++            op->error = rc;
++            op->replied = 1;
++        }
++        else
++            op->sent = 1;
++    }
++    for(i = 0; !op->replied && i < 16; ++i) {
++        rc = _libssh2_transport_read(session);
++        if(rc == LIBSSH2_ERROR_EAGAIN || rc == 0)
++            break;
++        if(rc < 0) {
++            session->socket_state = LIBSSH2_SOCKET_DISCONNECTED;
++            op->error = rc;
++            op->replied = 1;
++        }
++    }
++    if(!op->replied)
++        return LIBSSH2_ERROR_EAGAIN;
++    if(op->confirmed && !op->cancelled && !op->error) {
++        *result = channel;
++        open_release(op);
++        return 0;
++    }
++    if(!op->confirmed)
++        channel->local.close = 1; /* No valid remote channel ID to close. */
++    /* A cancelled, confirmed channel still sends CLOSE and waits for CLOSE.
++     * Never discard a late confirmation and leak the server's channel. */
++    rc = _libssh2_channel_free(channel);
++    if(rc == LIBSSH2_ERROR_EAGAIN)
++        return rc;
++    rc = op->error ? op->error : LIBSSH2_ERROR_CHANNEL_CLOSED;
++    LIBSSH2_FREE(session, op->packet);
++    LIBSSH2_FREE(session, op);
++    return rc;
++}
++
++/* Called by session teardown only, before channel_free can send anything. */
++void _libssh2_channel_open_abort(LIBSSH2_CHANNEL *channel)
++{
++    LIBSSH2_CHANNEL_OPEN *op = channel->open_operation;
++    LIBSSH2_SESSION *session = channel->session;
++    if(!op)
++        return;
++    if(session->packet.olen && session->packet.odata == op->packet)
++        session->socket_state = LIBSSH2_SOCKET_DISCONNECTED;
++    if(!op->confirmed)
++        channel->local.close = 1;
++    open_release(op);
++}
+diff --git a/tests/test_channel_open.c b/tests/test_channel_open.c
+new file mode 100644
+index 00000000..3a55b35c
+--- /dev/null
++++ b/tests/test_channel_open.c
+@@ -0,0 +1,215 @@
++/* Copyright (C) 2026 threatexpert
++ * SPDX-License-Identifier: BSD-3-Clause */
++#include "libssh2_priv.h"
++#include "channel.h"
++#include "packet.h"
++#include <stdio.h>
++#include <stdlib.h>
++
++#define CHECK(x) do { if(!(x)) { \
++    fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #x); exit(1); \
++} } while(0)
++
++static int allocations, sends, partial, block_send, reads;
++static int fail_after = -1;
++static void *allocate(size_t n, void **abstract)
++{
++    void *p;
++    (void)abstract;
++    if(fail_after == 0)
++        return NULL;
++    if(fail_after > 0)
++        --fail_after;
++    p = malloc(n);
++    if(p)
++        ++allocations;
++    return p;
++}
++static void release(void *p, void **abstract)
++{
++    (void)abstract;
++    if(p)
++        --allocations;
++    free(p);
++}
++static void *resize(void *p, size_t n, void **abstract)
++{
++    (void)abstract;
++    if(!p)
++        return allocate(n, abstract);
++    return realloc(p, n);
++}
++static ssize_t send_cb(libssh2_socket_t s, const void *b, size_t n,
++                       int flags, void **abstract)
++{
++    (void)s; (void)b; (void)flags; (void)abstract;
++    if(block_send)
++        return -EAGAIN;
++    ++sends;
++    if(partial) {
++        partial = 0;
++        block_send = 1;
++        return 3;
++    }
++    return (ssize_t)n;
++}
++static ssize_t recv_cb(libssh2_socket_t s, void *b, size_t n,
++                       int flags, void **abstract)
++{
++    (void)s; (void)b; (void)n; (void)flags; (void)abstract;
++    ++reads;
++    return -EAGAIN;
++}
++static LIBSSH2_SESSION *create_session(void)
++{
++    LIBSSH2_SESSION *s = libssh2_session_init_ex(allocate, release, resize, NULL);
++    CHECK(s);
++    libssh2_session_set_blocking(s, 0);
++    s->socket_state = LIBSSH2_SOCKET_CONNECTED;
++    s->send = send_cb;
++    s->recv = recv_cb;
++    sends = reads = partial = block_send = 0;
++    return s;
++}
++static int reply(LIBSSH2_SESSION *s, int type, uint32_t id, size_t length)
++{
++    unsigned char *data = LIBSSH2_CALLOC(s, length);
++    data[0] = (unsigned char)type;
++    if(length >= 5)
++        _libssh2_htonu32(data + 1, id);
++    if(length >= 17 && type == SSH_MSG_CHANNEL_OPEN_CONFIRMATION) {
++        _libssh2_htonu32(data + 5, id + 100);
++        _libssh2_htonu32(data + 9, 100000);
++        _libssh2_htonu32(data + 13, 32000);
++    }
++    return _libssh2_packet_add(s, data, length, LIBSSH2_MAC_CONFIRMED, 0);
++}
++static void destroy(LIBSSH2_SESSION *s)
++{
++    s->socket_state = LIBSSH2_SOCKET_DISCONNECTED;
++    CHECK(libssh2_session_free(s) == 0);
++    CHECK(allocations == 0);
++}
++static LIBSSH2_CHANNEL_OPEN *begin(LIBSSH2_SESSION *s)
++{
++    LIBSSH2_CHANNEL_OPEN *op = libssh2_channel_direct_tcpip_begin(
++        s, "127.0.0.1", 80, "127.0.0.1", 0);
++    CHECK(op);
++    return op;
++}
++int main(void)
++{
++    LIBSSH2_SESSION *s;
++    LIBSSH2_CHANNEL_OPEN *a, *b;
++    LIBSSH2_CHANNEL *channel = NULL;
++    CHECK(libssh2_init(0) == 0);
++    s = create_session();
++    a = begin(s); b = begin(s);
++    CHECK(libssh2_channel_open_poll(a, &channel) == LIBSSH2_ERROR_EAGAIN);
++    CHECK(libssh2_channel_open_poll(b, &channel) == LIBSSH2_ERROR_EAGAIN);
++    CHECK(sends == 2); /* both OPENs sent before either confirmation */
++    CHECK(reply(s, SSH_MSG_CHANNEL_OPEN_CONFIRMATION, 1, 17) == 0);
++    {
++        unsigned char *data = LIBSSH2_CALLOC(s, 12);
++        data[0] = SSH_MSG_CHANNEL_DATA;
++        _libssh2_htonu32(data + 1, 1);
++        _libssh2_htonu32(data + 5, 3);
++        memcpy(data + 9, "abc", 3);
++        CHECK(_libssh2_packet_add(s, data, 12, LIBSSH2_MAC_CONFIRMED, 0) == 0);
++    }
++    CHECK(libssh2_channel_open_poll(b, &channel) == 0);
++    CHECK(channel && channel->local.id == 1 && channel->remote.id == 101);
++    {
++        char buffer[3];
++        CHECK(libssh2_channel_read(channel, buffer, 3) == 3);
++        CHECK(!memcmp(buffer, "abc", 3));
++    }
++    CHECK(libssh2_channel_open_poll(a, &channel) == LIBSSH2_ERROR_EAGAIN);
++    CHECK(reply(s, SSH_MSG_CHANNEL_OPEN_FAILURE, 0, 17) == 0);
++    CHECK(libssh2_channel_open_poll(a, &channel) == LIBSSH2_ERROR_CHANNEL_FAILURE);
++    CHECK(!channel);
++    destroy(s);
++    puts("PASS independent sends, out-of-order confirmation and refusal");
++
++    s = create_session(); a = begin(s); b = begin(s);
++    partial = 1;
++    CHECK(libssh2_channel_open_poll(a, &channel) == LIBSSH2_ERROR_EAGAIN);
++    libssh2_channel_open_cancel(a);
++    CHECK(libssh2_channel_open_poll(b, &channel) == LIBSSH2_ERROR_EAGAIN);
++    CHECK(sends == 1);
++    block_send = 0;
++    CHECK(libssh2_channel_open_poll(a, &channel) == LIBSSH2_ERROR_EAGAIN);
++    CHECK(libssh2_channel_open_poll(b, &channel) == LIBSSH2_ERROR_EAGAIN);
++    CHECK(sends == 3); /* prefix, remainder, B; no duplicate OPEN */
++    CHECK(reply(s, SSH_MSG_CHANNEL_OPEN_CONFIRMATION, 0, 17) == 0);
++    CHECK(libssh2_channel_open_poll(a, &channel) == LIBSSH2_ERROR_EAGAIN);
++    CHECK(sends == 5); /* late confirmation gets EOF and CLOSE */
++    CHECK(reply(s, SSH_MSG_CHANNEL_CLOSE, 0, 5) == 0);
++    CHECK(libssh2_channel_open_poll(a, &channel) == LIBSSH2_ERROR_CHANNEL_CLOSED);
++    CHECK(!_libssh2_channel_locate(s, 0));
++    CHECK(reply(s, SSH_MSG_CHANNEL_OPEN_FAILURE, 1, 17) == 0);
++    CHECK(libssh2_channel_open_poll(b, &channel) == LIBSSH2_ERROR_CHANNEL_FAILURE);
++    destroy(s);
++    puts("PASS partial write, EAGAIN, cancellation and late CLOSE");
++
++    s = create_session(); a = begin(s);
++    libssh2_channel_open_cancel(a);
++    CHECK(libssh2_channel_open_poll(a, &channel) == LIBSSH2_ERROR_CHANNEL_CLOSED);
++    CHECK(sends == 0);
++    a = begin(s);
++    CHECK(libssh2_channel_open_poll(a, &channel) == LIBSSH2_ERROR_EAGAIN);
++    libssh2_channel_open_cancel(a);
++    CHECK(reply(s, SSH_MSG_CHANNEL_OPEN_FAILURE, 1, 17) == 0);
++    CHECK(libssh2_channel_open_poll(a, &channel) == LIBSSH2_ERROR_CHANNEL_FAILURE);
++    CHECK(sends == 1);
++    destroy(s);
++    puts("PASS cancellation before send and late failure without CLOSE");
++
++    s = create_session(); a = begin(s);
++    CHECK(libssh2_channel_open_poll(a, &channel) == LIBSSH2_ERROR_EAGAIN);
++    CHECK(reply(s, SSH_MSG_CHANNEL_OPEN_FAILURE, 0, 8) == LIBSSH2_ERROR_PROTO);
++    CHECK(reply(s, SSH_MSG_CHANNEL_OPEN_CONFIRMATION, 0, 16) == LIBSSH2_ERROR_PROTO);
++    CHECK(reply(s, SSH_MSG_CHANNEL_OPEN_CONFIRMATION, 0, 4) == LIBSSH2_ERROR_PROTO);
++    destroy(s);
++    puts("PASS truncated replies rejected and pending operations freed");
++
++    s = create_session(); a = begin(s); b = begin(s);
++    partial = 1;
++    CHECK(libssh2_channel_open_poll(a, &channel) == LIBSSH2_ERROR_EAGAIN);
++    /* Teardown must neither wait for confirmation nor send a bogus CLOSE. */
++    CHECK(libssh2_session_free(s) == 0);
++    CHECK(allocations == 0 && sends == 1);
++    puts("PASS session teardown during partial OPEN without allocation leaks");
++
++    s = create_session();
++    CHECK(!libssh2_channel_direct_tcpip(s, "localhost", 80));
++    CHECK(libssh2_session_last_errno(s) == LIBSSH2_ERROR_EAGAIN);
++    a = begin(s);
++    CHECK(libssh2_channel_open_poll(a, &channel) == LIBSSH2_ERROR_EAGAIN);
++    CHECK(reply(s, SSH_MSG_CHANNEL_OPEN_CONFIRMATION, 1, 17) == 0);
++    CHECK(reply(s, SSH_MSG_CHANNEL_OPEN_CONFIRMATION, 0, 17) == 0);
++    channel = libssh2_channel_direct_tcpip(s, "localhost", 80);
++    CHECK(channel && channel->local.id == 0);
++    CHECK(libssh2_channel_open_poll(a, &channel) == 0);
++    CHECK(channel && channel->local.id == 1);
++    destroy(s);
++    puts("PASS legacy API interoperates with independent operations");
++
++    s = create_session();
++    {
++        int baseline = allocations, i;
++        CHECK(!libssh2_channel_direct_tcpip_begin(s, NULL, 80, "", 0));
++        CHECK(!libssh2_channel_direct_tcpip_begin(s, "host", 65536, "", 0));
++        for(i = 0; i < 4; ++i) {
++            fail_after = i;
++            CHECK(!libssh2_channel_direct_tcpip_begin(s, "host", 80, "", 0));
++            fail_after = -1;
++            CHECK(allocations == baseline);
++            CHECK(!_libssh2_list_first(&s->channels));
++        }
++    }
++    destroy(s);
++    puts("PASS invalid inputs and allocation failures leave no channel or leak");
++    libssh2_exit();
++    return 0;
++}
+diff --git a/docs/channel_open.md b/docs/channel_open.md
+new file mode 100644
+index 00000000..94b89026
+--- /dev/null
++++ b/docs/channel_open.md
+@@ -0,0 +1,44 @@
++# Concurrent direct-tcpip channel opens (fork extension)
++
++This branch extends official libssh2 1.11.1. Existing APIs and their behavior
++remain available. The extension permits multiple SSH_MSG_CHANNEL_OPEN requests
++to be in flight on one authenticated session. It does not make a session thread
++safe: all calls for a session must be serialized on its owning event loop.
++
++1. Set the session nonblocking and complete authentication.
++2. `libssh2_channel_direct_tcpip_begin` copies the target and origin and returns
++   an opaque `LIBSSH2_CHANNEL_OPEN *`, without I/O. NULL indicates an allocation
++   or argument error (see session_last_errno).
++3. Call `libssh2_channel_open_poll(op, &channel)` for each pending operation.
++   EAGAIN retains the operation. **Every other result consumes it.** Zero
++   transfers the established channel to the caller, to use/free with existing
++   channel APIs. Negative results leave `channel` NULL. Invalid API arguments
++   (NULL op/output) return BAD_USE without consuming anything.
++4. `libssh2_channel_open_cancel(op)` marks cancellation. Continue polling until
++   a terminal result. An operation cancelled before its first poll is discarded.
++   A partially sent OPEN
++   must finish sending the same packet. A sent OPEN retains its channel ID until
++   the peer rejects it, or confirms it and the channel is closed. Cancellation
++   completes with CHANNEL_CLOSED, or CHANNEL_FAILURE for a late rejection.
++5. Freeing the session releases all remaining operations, including requests
++   whose peers never reply. All outstanding operation pointers then become
++   invalid. As with other libssh2 APIs, retry session_free if it returns EAGAIN.
++
++Replies are dispatched by recipient channel ID before subsequent channel data
++is processed. Partial transport writes retain stable packet storage; other
++operations cannot overtake an incomplete transport packet. This ordering does
++not serialize server confirmation waits. Legacy packet waiters continue waiting
++when a reply belongs to a different operation.
++
++The caller implements timeouts and admission limits. After timing out a single
++open, cancel it and retain its cleanup operation, without closing healthy
++channels. Never free or reuse its channel ID prematurely. Bound the total
++number of outstanding operations, including cancelled requests awaiting replies.
++A transport/protocol error requires session teardown, not retrying that session.
++
++`test_channel_open` is a standalone static-library test covering multiple OPENs
++before replies, out-of-order success/failure, partial send/EAGAIN, cancellation
++before and after send, late confirmation/close, malformed replies, and allocator
++balance during session teardown. ProxyLane's real SSH fixture additionally
++withholds server confirmations while later channels exchange data on the same
++authenticated transport.

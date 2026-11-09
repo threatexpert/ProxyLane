@@ -59,6 +59,19 @@ int ProfileShareCodecTestsMain()
             ProfileShare::Base64Url(legacyHttp.dump())) == canonicalHttp);
         assert(ProfileShare::Encode(legacyHttp) == ProfileShare::Encode(canonicalHttp));
     }
+    {
+        Json ssh = original;
+        ssh["type"] = "SSH"; ssh["port"] = 22; ssh["transport"] = "PLAIN";
+        ssh["hook_udp"] = false; ssh["psk"] = "";
+        ssh["ssh_host_key"] = "SHA256:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
+        ssh["user"] = u8"测试用户";
+        assert(ProfileShare::Decode(ProfileShare::Encode(ssh)) == ssh);
+        Json bad = ssh; bad["ssh_host_key"] = "bad"; RejectValue(bad);
+        bad = ssh; bad.erase("ssh_host_key"); RejectValue(bad);
+        bad = ssh; bad["hook_udp"] = true; RejectValue(bad);
+        bad = ssh; bad["user"] = ""; RejectValue(bad);
+        bad = ssh; bad["transport"] = "GONC_TLS_PSK"; RejectValue(bad);
+    }
     for (const char* type : {"SOCKS4", "SOCKS4A"})
     {
         Json removed = original;

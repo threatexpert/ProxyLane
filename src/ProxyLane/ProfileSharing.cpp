@@ -279,6 +279,7 @@ void CPage1::OnCopyProfile()
         value["child_mode"] = m_radioChildFilterInclude.GetCheck() == BST_CHECKED ? 1 : 0;
         value["target_mode"] = m_radioTargetFilterProxy.GetCheck() == BST_CHECKED ? 1 : 0;
         value["transport"] = m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK ? "GONC_TLS_PSK" : "PLAIN";
+        if (value["type"] == "SSH") { value["ssh_host_key"] = value["psk"]; value["psk"] = ""; }
         ProfileShare::Validate(value);
         ValidateResolver(value);
         WriteClipboard(m_hWnd, Wide(ProfileShare::Encode(value)));
@@ -309,7 +310,8 @@ void CPage1::OnPasteProfile()
         // Prepare every string before touching the UI or asking to discard a draft.
         std::vector<std::pair<UINT, CString>> texts;
         for (const auto& field : textFields)
-            texts.emplace_back(field.id, Wide(value.at(field.key).get<std::string>()));
+            texts.emplace_back(field.id, Wide(value.at(value.at("type") == "SSH" && field.id == IDC_EDIT_TRANSPORT_PSK
+                ? "ssh_host_key" : field.key).get<std::string>()));
         for (const auto& field : ruleFields)
         {
             std::string rules;

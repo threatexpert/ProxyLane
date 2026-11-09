@@ -3,6 +3,7 @@
 #include "LaunchPanelPaging.h"
 #include "IniFile.h"
 #include "ProxyProfileStore.h"
+#include "SshProfile.h"
 #include <iostream>
 #include <stdexcept>
 #include <shlwapi.h>
@@ -563,7 +564,25 @@ static void TestProfileSave(Fixture& f)
   loaded.pi.strProxyType = legacyType;
   Check(profiles.Save(loaded) && ini.GetString(L"proxy_Save", L"Type") == L"HTTP", "save also normalizes legacy in-memory type");
  }
- std::cout << "profile transaction, history preservation and failed-save rollback: PASS\n";
+ CfgProxyItem ssh = {}; ssh.strName = L"Ssh"; ssh.pi.strProxyType = L"SSH";
+ ssh.pi.strProxyHost = L"127.0.0.1"; ssh.pi.nProxyPort = 22;
+ Check(SshProfile::Encode(L"\x0100\x6d4b\x8bd5", ssh.pi.strProxyUser.szbuf) &&
+  SshProfile::Encode(L"\x5bc6\x7801", ssh.pi.strProxyPass.szbuf), "encode SSH UTF-8 credentials");
+ ssh.strTransportPsk = L"SHA256:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
+ Check(profiles.Save(ssh) && ini.GetString(L"proxy_Ssh", L"SshHostKey") == ssh.strTransportPsk &&
+  ini.GetString(L"proxy_Ssh", L"PSK").IsEmpty(), "SSH fingerprint has its own INI key");
+ CfgProxyItem loadedSsh = {}; loadedSsh.strName = L"Ssh";
+ Check(profiles.Load(loadedSsh) && CProxyProfileStore::IsChainHop(loadedSsh) &&
+  SshProfile::Decode(loadedSsh.pi.strProxyUser.szbuf) == L"\x0100\x6d4b\x8bd5" &&
+  SshProfile::Decode(loadedSsh.pi.strProxyPass.szbuf) == L"\x5bc6\x7801" &&
+  loadedSsh.strTransportPsk == ssh.strTransportPsk && !loadedSsh.bHookUDP, "SSH profile round trip");
+ ProxyChain route; CString errorKey, errorName;
+ Check(profiles.ResolveChain({L"Save",L"Ssh"},route,errorKey,errorName) && route.size() == 2 &&
+  SshProfile::Decode(route[1].strTransportPsk.szbuf) == ssh.strTransportPsk,
+  "mixed chain resolves SSH key and credentials");
+ Check(ini.SetString(L"proxy_Ssh",L"SshHostKey",L"") && profiles.Load(loadedSsh), "empty SSH key permits first test");
+ Check(ini.SetString(L"proxy_Ssh",L"SshHostKey",L"invalid") && !profiles.Load(loadedSsh), "reject malformed SSH key");
+ std::cout << "profile transaction, history preservation, SSH round trip and failed-save rollback: PASS\n";
 }
 
 int wmain(int argc, wchar_t** argv)

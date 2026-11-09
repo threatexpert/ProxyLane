@@ -27,12 +27,14 @@ $packageFiles = @(
     @{ Source = (Join-Path $binaryDirectory 'ProxyLaneHook64.dll'); Entry = 'ProxyLaneHook64.dll'; Versioned = $true },
     @{ Source = (Join-Path $binaryDirectory 'ProxyLaneSecureTransport64.dll'); Entry = 'ProxyLaneSecureTransport64.dll'; Versioned = $false },
     @{ Source = (Join-Path $binaryDirectory 'ProxyLaneMitm64.dll'); Entry = 'ProxyLaneMitm64.dll'; Versioned = $false },
+    @{ Source = (Join-Path $binaryDirectory 'ProxyLaneSsh64.dll'); Entry = 'ProxyLaneSsh64.dll'; Versioned = $false },
     @{ Source = (Join-Path $repositoryRoot 'README.md');            Entry = 'README.md';           Versioned = $false },
     @{ Source = (Join-Path $repositoryRoot 'README_EN.md');         Entry = 'README_EN.md';        Versioned = $false }
 )
 
 $projectLicense = Join-Path $repositoryRoot 'LICENSE'
 $thirdPartyLicenses = @(
+    @{ Name = 'libssh2'; Source = (Join-Path $repositoryRoot 'third_party\libssh2\COPYING') },
     @{ Name = 'Microsoft Detours'; Source = (Join-Path $repositoryRoot 'third_party\detours\LICENSE.md') },
     @{ Name = 'nlohmann/json'; Source = (Join-Path $repositoryRoot 'third_party\nlohmann\LICENSE.MIT') },
     @{ Name = 'TLS trust notices'; Source = (Join-Path $repositoryRoot 'third_party\tls-trust\NOTICE.txt') },

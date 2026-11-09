@@ -652,7 +652,7 @@ BOOL CAsyncSocketExLayer::ShutDownNext(int nHow /*=sends*/)
 		return shutdown(m_pOwnerSocket->GetSocketHandle(), nHow);
 	}
 	else
-		return m_pNextLayer->ShutDownNext(nHow);
+		return m_pNextLayer->ShutDown(nHow);
 }
 
 //

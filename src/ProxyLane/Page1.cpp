@@ -3,6 +3,7 @@
 
 #include "stdafx.h"
 #include "ConfigStorage.h"
+#include "SshProfile.h"
 #include "ProxyLane.h"
 #include "Page1.h"
 #include "MainTab.h"
@@ -177,7 +178,7 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_EN_CHANGE(IDC_EDIT_TRANSPORT_PSK, &CPage1::OnProfileFieldChanged)
 	ON_EN_CHANGE(IDC_EDIT_CHILDFILTER, &CPage1::OnProfileFieldChanged)
 	ON_EN_CHANGE(IDC_EDIT_TARGETFILTER, &CPage1::OnProfileFieldChanged)
-	ON_CBN_SELCHANGE(IDC_CB_PROXYTYPE, &CPage1::OnProfileFieldChanged)
+	ON_CBN_SELCHANGE(IDC_CB_PROXYTYPE, &CPage1::OnProtocolChanged)
 	ON_CBN_SELCHANGE(IDC_COMBO_TRANSPORT, &CPage1::OnProfileFieldChanged)
 	ON_CBN_EDITCHANGE(IDC_COMBO_CFGS, &CPage1::OnCbnEditchangeComboCfgs)
 	ON_BN_CLICKED(IDC_CHECK_HOOKTCP, &CPage1::OnProfileFieldChanged)
@@ -256,6 +257,7 @@ BOOL CPage1::OnInitDialog()
 
 	m_cbProxyType.AddString(_T("NOPROXY"));
 	m_cbProxyType.AddString(_T("SOCKS5"));
+	m_cbProxyType.AddString(L"SSH");
 	m_cbProxyType.AddString(_T("HTTP"));
 	m_cbTransport.AddString(Localization::Get(_T("transport.plain")));
 	m_cbTransport.AddString(Localization::Get(_T("transport.gonc_tls_psk")));
@@ -540,12 +542,19 @@ void CPage1::LayoutSettingsPage()
 			place(IDC_EDIT_PASS, innerX + half + gapX, row + labelH + S(2), half, fieldH);
 
 			row += rowStep;
-			const int transportW = S(200);
-			const int pskW = innerW - transportW - gapX;
-			place(IDC_STATIC_TRANSPORT_LABEL, innerX, row, transportW, labelH);
-			place(IDC_COMBO_TRANSPORT, innerX, row + labelH + S(2), transportW, S(260));
-			place(IDC_STATIC_PSK_LABEL, innerX + transportW + gapX, row, pskW, labelH);
-			place(IDC_EDIT_TRANSPORT_PSK, innerX + transportW + gapX, row + labelH + S(2), pskW, fieldH);
+			CString protocol; m_cbProxyType.GetWindowText(protocol);
+            const bool ssh = protocol == L"SSH";
+            GetDlgItem(IDC_STATIC_TRANSPORT_LABEL)->ShowWindow(ssh ? SW_HIDE : SW_SHOW);
+            m_cbTransport.ShowWindow(ssh ? SW_HIDE : SW_SHOW);
+            const int transportW = S(200);
+            const int pskOffset = ssh ? 0 : transportW + gapX;
+            const int pskW = innerW - pskOffset;
+            if (!ssh) {
+                place(IDC_STATIC_TRANSPORT_LABEL, innerX, row, transportW, labelH);
+                place(IDC_COMBO_TRANSPORT, innerX, row + labelH + S(2), transportW, S(260));
+            }
+            place(IDC_STATIC_PSK_LABEL, innerX + pskOffset, row, pskW, labelH);
+            place(IDC_EDIT_TRANSPORT_PSK, innerX + pskOffset, row + labelH + S(2), pskW, fieldH);
 			row += rowStep;
 		}
 		}
@@ -883,7 +892,7 @@ BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 		return FALSE;
 	}
 	m_cbProxyType.GetLBText(typeIndex, szType);
-	if (szType != L"NOPROXY" && szType != L"SOCKS5" && szType != L"HTTP")
+	if (szType != L"NOPROXY" && szType != L"SOCKS5" && szType != L"HTTP" && szType != L"SSH")
 	{
 		m_settingsValidationKey = L"profile.unsupported_type";
 		return FALSE;
@@ -918,8 +927,17 @@ BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 		return TRUE;
 	}
 
-	if (!szHost.GetLength() || !szPort.GetLength() || !_ttoi(szPort))
+	if (!szHost.GetLength() || !szPort.GetLength() || _ttoi(szPort) <= 0 || _ttoi(szPort) > 65535)
 		return FALSE;
+    if (szType == L"SSH") {
+        szTransportPsk.Trim();
+        if (szUser.IsEmpty() || !SshProfile::Encode(szUser, pi.strProxyUser.szbuf) ||
+            !SshProfile::Encode(szPass, pi.strProxyPass.szbuf) ||
+            !SshProfile::ValidFingerprint(szTransportPsk) ||
+            !SshProfile::Encode(szTransportPsk, pi.strTransportPsk.szbuf)) {
+            m_settingsValidationKey = L"profile.ssh_invalid"; return FALSE;
+        }
+    }
 	if (transportMode == PROXY_TRANSPORT_GONC_TLS_PSK)
 	{
 		if (!ProxySupportsOptionalModules())
@@ -1062,6 +1080,20 @@ void CPage1::OnProfileFieldChanged()
 	}
 }
 
+void CPage1::OnProtocolChanged()
+{
+    // A TLS PSK and an SSH host-key pin have different meanings.
+    const bool wasSsh = m_editTransportPsk.GetPasswordChar() == 0;
+    CString protocol; m_cbProxyType.GetWindowText(protocol);
+    if (wasSsh || protocol == L"SSH") m_editTransportPsk.SetWindowText(L"");
+    if (protocol == L"SSH") {
+        m_advancedOpen = TRUE; UpdateAdvancedCaption();
+        CString port; m_edit_Port.GetWindowText(port);
+        if (port.IsEmpty() || port == L"1080" || port == L"8080") m_edit_Port.SetWindowText(L"22");
+    }
+    OnProfileFieldChanged(); LayoutSettingsPage();
+}
+
 void CPage1::UpdateTransportEnable()
 {
 	if (!m_editTransportPsk.GetSafeHwnd() || !m_cbTransport.GetSafeHwnd())
@@ -1073,6 +1105,7 @@ void CPage1::UpdateTransportEnable()
 	ProxyInfo selectedProxy;
 	selectedProxy.strProxyType = proxyType;
 	const int selectedProxyType = selectedProxy.GetProxyType();
+    const BOOL ssh = selectedProxyType == PROXYTYPE_SSH;
 	// A chain's own (hidden) server fields do not describe the route.
 	const BOOL direct = !m_chainMode && proxyType.CompareNoCase(_T("NOPROXY")) == 0;
 	const CString group = Localization::Get(m_chainMode ? L"page1.chain_group" :
@@ -1080,6 +1113,7 @@ void CPage1::UpdateTransportEnable()
 	const CString hint = m_chainMode ? Localization::Get(L"page1.chain_hint") :
 		typeIndex == CB_ERR ? Localization::Get(L"profile.unsupported_type") :
 		direct ? Localization::Get(L"page1.direct_hint") :
+        ssh ? Localization::Get(L"page1.ssh_hint") :
 		m_firstRunGuide ? Localization::Get(L"page1.first_run_hint") : CString();
 	CString previousHint, previousGroup;
 	GetDlgItemText(IDC_STATIC_UPSTREAM_HINT, previousHint);
@@ -1100,11 +1134,16 @@ void CPage1::UpdateTransportEnable()
 		ProxyTransportPolicy::SupportsGoncTlsPsk(selectedProxyType);
 	// Preserve an encrypted profile on unsupported hosts; never silently downgrade it.
 	const BOOL supportsModules = ProxySupportsOptionalModules();
-	if (direct || (typeIndex != CB_ERR && supportsModules && !supportsSecureTransport))
+	if (direct || ssh || (typeIndex != CB_ERR && supportsModules && !supportsSecureTransport))
 		m_cbTransport.SetCurSel(PROXY_TRANSPORT_PLAIN);
 	m_cbTransport.EnableWindow(supportsModules && supportsSecureTransport);
-	m_editTransportPsk.EnableWindow(supportsModules && supportsSecureTransport &&
-		m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK);
+	m_editTransportPsk.EnableWindow(ssh || (supportsModules && supportsSecureTransport &&
+        m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK));
+    SetDlgItemText(IDC_STATIC_PSK_LABEL, Localization::Get(ssh ? L"ssh.host_key" : L"common.psk"));
+    const TCHAR passwordChar = ssh ? 0 : L'\x25cf';
+    if (m_editTransportPsk.GetPasswordChar() != passwordChar) {
+        m_editTransportPsk.SetPasswordChar(passwordChar); m_editTransportPsk.Invalidate();
+    }
 	if (m_btnHookUDP.GetSafeHwnd())
 	{
 		// UDP never goes through a chain.
@@ -1685,7 +1724,7 @@ BOOL CPage1::SupportsIpv6ProxyTest()
 {
 	const int proxyType = m_testProxyInfo.GetProxyType();
 	return proxyType == PROXYTYPE_NOPROXY || proxyType == PROXYTYPE_SOCKS5 ||
-		proxyType == PROXYTYPE_HTTP11;
+		proxyType == PROXYTYPE_HTTP11 || proxyType == PROXYTYPE_SSH;
 }
 
 BOOL CPage1::StartIpv6ProxyTest()
@@ -1919,7 +1958,13 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 		{
 			switch (nCode)
 			{
-			case PROXYERROR_NOCONN:
+			case PROXYERROR_SSH_UNAVAILABLE:
+                szText = Localization::Get(L"test.ssh_unavailable"); break;
+            case PROXYERROR_SSH_HOSTKEY_UNKNOWN:
+                szText = Localization::Get(L"test.ssh_unknown_key"); break;
+            case PROXYERROR_SSH_HOSTKEY_CHANGED:
+                szText = Localization::Get(L"test.ssh_changed_key"); break;
+            case PROXYERROR_NOCONN:
 				szText = Localization::Get(m_testProxyInfo.GetProxyType() == PROXYTYPE_NOPROXY ?
 					L"test.direct_connection_failed" : L"test.no_connection");
 				break;
@@ -1967,7 +2012,28 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 			else if (m_profileDirty)
 				statusKey = _T("status.test_failed_unsaved");
 			m_staticTestProxy.SetStatus(Localization::Get(statusKey), CStatusLabel::TONE_DANGER);
-			MessageBox(szText);
+            if ((nCode == PROXYERROR_SSH_HOSTKEY_UNKNOWN || nCode == PROXYERROR_SSH_HOSTKEY_CHANGED) && lParam) {
+                const CString fingerprint = SshProfile::Decode(reinterpret_cast<LPCSTR>(lParam));
+                szText += L"\r\n\r\n" + fingerprint;
+                if (nCode == PROXYERROR_SSH_HOSTKEY_UNKNOWN && SshProfile::ValidFingerprint(fingerprint)) {
+                    ProxyInfo endpoint = failedHop >= 0 && failedHop < (int)m_testChain.size() ? m_testChain[failedHop] : m_testProxyInfo;
+                    CString address; address.Format(L"\r\n%s:%d", (LPCTSTR)(CString)endpoint.strProxyHost, endpoint.nProxyPort);
+                    szText += address + L"\r\n\r\n" + Localization::Get(L"test.ssh_trust_key");
+                    if (MessageBox(szText, Localization::Get(L"test.title"), MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES) {
+                        if (failedHop < 0) {
+                            m_editTransportPsk.SetWindowText(fingerprint); OnProfileFieldChanged();
+                        } else {
+                            CfgProxyItem item; item.strName = m_testChainNames[failedHop];
+                            if (m_profileStore.Load(item)) {
+                                item.strTransportPsk = fingerprint;
+                                if (!m_profileStore.Save(item)) MessageBox(Localization::Get(L"profile.save_failed_title"));
+                                m_profileStore.SetLastSelected(m_loadedProfileName);
+                                SetRuntimeDirty(TRUE);
+                            }
+                        }
+                    }
+                } else MessageBox(szText, Localization::Get(L"test.title"), MB_ICONERROR);
+            } else MessageBox(szText);
 		}
 
 		if (m_pProxyTester)
@@ -2110,8 +2176,8 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		szPort.Format(_T("%d"), item->pi.nProxyPort);
 		if (szType.CompareNoCase(_T("NOPROXY")) == 0 && !item->pi.nProxyPort)
 			szPort.Empty();
-		szUser = item->pi.strProxyUser;
-		szPass = item->pi.strProxyPass;
+		szUser = item->pi.GetProxyType() == PROXYTYPE_SSH ? SshProfile::Decode(item->pi.strProxyUser.szbuf) : (CString)item->pi.strProxyUser;
+		szPass = item->pi.GetProxyType() == PROXYTYPE_SSH ? SshProfile::Decode(item->pi.strProxyPass.szbuf) : (CString)item->pi.strProxyPass;
 
 		// Retain unsupported legacy profiles for editing, but do not leave the
 		// previous selection active (which would silently change their protocol).
@@ -2179,6 +2245,7 @@ void CPage1::UIGetCfg( CfgProxyItem *item )
 		PROXY_TRANSPORT_GONC_TLS_PSK ? PROXY_TRANSPORT_GONC_TLS_PSK :
 		PROXY_TRANSPORT_PLAIN;
 	m_editTransportPsk.GetWindowText(item->strTransportPsk);
+    if (item->pi.GetProxyType() == PROXYTYPE_SSH) item->strTransportPsk.Trim();
 	if (item->pi.GetProxyType() == PROXYTYPE_NOPROXY)
 	{
 		item->nTransportMode = PROXY_TRANSPORT_PLAIN;
@@ -2417,7 +2484,8 @@ BOOL CPage1::SavePendingProfile() { return !m_profileDirty || SaveCurrentProfile
 void CPage1::ExpandConfiguredOptions()
 {
  CString user, pass; m_edit_User.GetWindowText(user); m_edit_Pass.GetWindowText(pass);
- m_advancedOpen = !user.IsEmpty() || !pass.IsEmpty() || m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK;
+ CString protocol; m_cbProxyType.GetWindowText(protocol);
+ m_advancedOpen = protocol == L"SSH" || !user.IsEmpty() || !pass.IsEmpty() || m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK;
  UpdateAdvancedCaption();
 }
 void CPage1::OnToggleAdvanced()
@@ -2469,7 +2537,7 @@ namespace
 		CString host = (CString)pi.strProxyHost;
 		if (host.Find(L':') >= 0) host = L"[" + host + L"]";
 		CString text;
-		text.Format(L"%s %s:%d", type == PROXYTYPE_SOCKS5 ? L"SOCKS5" : L"HTTP", (LPCWSTR)host, pi.nProxyPort);
+		text.Format(L"%s %s:%d", type == PROXYTYPE_SSH ? L"SSH" : type == PROXYTYPE_SOCKS5 ? L"SOCKS5" : L"HTTP", (LPCWSTR)host, pi.nProxyPort);
 		return text;
 	}
 }

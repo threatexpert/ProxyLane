@@ -114,11 +114,14 @@ BOOL CPRCTcpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
 
 BOOL CPRCTcpPeer::AddProxyLayer(LPProxyInfo lpProxyInfo, const ProxyChain *lpChain)
 {
-	if (lpChain && lpChain->size() > 1)
+	if ((lpChain && lpChain->size() > 1) || (lpProxyInfo && lpProxyInfo->GetProxyType() == PROXYTYPE_SSH))
 	{
 		m_pChain = new CProxyChainLayers;
-		if (!m_pChain->Add(*this, &(*lpChain)[0], (int)lpChain->size()))
+		const ProxyInfo* hops = lpChain && lpChain->size() > 1 ? lpChain->data() : lpProxyInfo;
+		const int count = lpChain && lpChain->size() > 1 ? (int)lpChain->size() : 1;
+		if (!m_pChain->Add(*this, hops, count))
 			return FALSE;
+		if (m_pChain->HasSsh()) m_TimeoutMonitor[TM_CONN].SetTimeoutVal(60000);
 		m_pProxyLayer = m_pChain->Top();
 		m_pSecureLayer = NULL;
 		return TRUE;
@@ -224,6 +227,8 @@ BOOL CPRCTcpPeer::HasPendingSecureRead() const
 
 int CPRCTcpPeer::TestSocketStatus(long lEvent)
 {
+	if (m_pChain && m_pChain->HasSsh())
+		return ((lEvent & FD_READ) && HasPendingSecureRead()) || ((lEvent & FD_WRITE) && m_bForwardingReady);
 	DWORD timepassed = 0;
 	fd_set FdRead, FdWrite;
 	struct timeval TimeOut;
@@ -726,7 +731,9 @@ PROXYERROR_CANTRESOLVEHOST 7
 			// report that their tunnel never opened.
 			if ((nCode == PROXYERROR_NOCONN || nCode == PROXYERROR_REQUESTFAILED ||
 				nCode == PROXYERROR_AUTHFAILED || nCode == PROXYERROR_AUTHREQUIRED ||
-				nCode == PROXYERROR_AUTHTYPEUNKNOWN || nCode == PROXYERROR_AUTHNOLOGON) &&
+				nCode == PROXYERROR_AUTHTYPEUNKNOWN || nCode == PROXYERROR_AUTHNOLOGON ||
+                nCode == PROXYERROR_SSH_UNAVAILABLE || nCode == PROXYERROR_SSH_HOSTKEY_UNKNOWN ||
+                nCode == PROXYERROR_SSH_HOSTKEY_CHANGED) &&
 				!m_chainFailureLogged)
 			{
 				m_chainFailureLogged = TRUE;
@@ -734,7 +741,10 @@ PROXYERROR_CANTRESOLVEHOST 7
 				const ProxyInfo& failed = m_pChain->Hop(hop);
 				detail.Format("hop %d of %d (%s:%d)", hop + 1, m_pChain->Count(),
 					failed.strProxyHost.szbuf, failed.nProxyPort);
-				if (nCode == PROXYERROR_REQUESTFAILED && lParam)
+                if (nCode == PROXYERROR_SSH_HOSTKEY_UNKNOWN) detail += ": SSH host key is untrusted; test the profile to verify it";
+                else if (nCode == PROXYERROR_SSH_HOSTKEY_CHANGED) detail += ": SSH host key changed; connection rejected";
+                else if (nCode == PROXYERROR_SSH_UNAVAILABLE) detail += ": SSH backend requires Windows 10+ x64 and ProxyLaneSsh64.dll";
+				else if ((nCode == PROXYERROR_REQUESTFAILED || (nCode == PROXYERROR_NOCONN && m_pChain->HasSsh())) && lParam)
 					detail += CStringA(": ") + CStringA((LPCSTR)lParam, (int)strnlen_s((LPCSTR)lParam, 200));
 				else if (nCode != PROXYERROR_NOCONN && nCode != PROXYERROR_REQUESTFAILED)
 					detail += ": authentication failed";

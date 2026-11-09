@@ -102,6 +102,18 @@ First stop the proxy, tests and monitoring, and close applications hooked by thi
 
 The profile dropdown refreshes when opened to reflect changes made by other instances sharing the file. Refreshing preserves current edits.
 
+## SSH Proxy
+
+Select `SSH`, enter the server address, port (usually 22), username and password. Password authentication and TCP `direct-tcpip` forwarding are supported; the server must allow forwarding. SSH can be used alone or at any position in mixed SOCKS5 / HTTP / SSH chains. UDP, private-key login and keyboard-interactive authentication are not supported.
+
+Test first to discover the SHA256 host fingerprint. Verify it through a trusted channel before confirming, then test again and save/apply. An unexpected host key is rejected before sending the password. The fingerprint is stored as `SshHostKey`; passwords retain the existing plaintext profile storage format.
+
+C++ manages demand-created sessions. Connections on the same event thread reuse authentication when their entire route prefix, credentials and host key match; each TCP stream gets its own channel. The UI tester and business proxy have separate pools. Keepalives request a reply every 15 seconds. About 60 seconds without incoming server data invalidates the session; a subsequent new connection authenticates again. Broken TCP streams require application reconnection and cannot resume transparently. Sessions with no channels in use expire after about 60 seconds.
+
+Multiple channel opens can await server confirmation on the same session; a slow target does not serialize later opens. Each session admits at most 32 unfinished opens and queues excess requests. An individual open times out after about 60 seconds without failing healthy channels. Cancelled/timed-out operations retain cleanup state until a late confirmation is closed or a rejection arrives, and count against this limit.
+
+`ProxyLaneSsh64.dll` is loaded only for SSH, with Windows 10 / Server 2016 x64 as the minimum support target. A 64-bit host can serve 32-bit applications. The WinCNG backend supports RSA / ECDSA host keys, but not servers offering only Ed25519 host keys.
+
 ## gonc TLS-PSK Secure Transport
 
 For SOCKS5 or HTTP, select `gonc TLS-PSK` under **Transport** and enter the remote gonc server address, port and matching PSK. No separate local gonc client is needed.
@@ -128,6 +140,7 @@ Replace `YOUR_PSK` with your own key. TLS 1.3 is supported with TLS 1.2 server c
 - Visual Studio 2019 with Desktop development with C++ and MFC components.
 - Visual C++ `v141_xp` toolset and Windows 7.1A SDK for the application and Hook DLLs.
 - `v142` toolset and Windows 10 SDK for the test project.
+- CMake 3.15+, `tar`, `v142` and Windows 10 SDK for the x64 SSH backend.
 - Rust MSVC toolchain, with `rustup` and `cargo` on PATH. The MITM build uses pinned version `1.88.0`.
 
 Prepare the Rust toolchain from the repository root:
@@ -147,6 +160,14 @@ msbuild .\src\ProxyLane.sln /m /p:Configuration=Release /p:Platform=x64
 ```
 
 The application and runtime DLLs are written to `bin/`. The x64 Release post-build step invokes the Rust scripts to build secure transport and MITM components. The first build downloads dependencies and takes longer.
+
+### SSH Backend Dependency
+
+libssh2 uses official 1.11.1 plus `third_party/libssh2/concurrent-channel-open.patch`, maintained in the development branch of [threatexpert/libssh2](https://github.com/threatexpert/libssh2). The directory also contains the matching public header and original license. `scripts/build-ssh.ps1` downloads and SHA256-verifies the official source archive, applies the patch, and isolates source/build caches by patch hash under the ignored `build/deps` directory. Builds do not depend on a developer's sibling checkout. The CMake wrapper in `src/ProxyLaneSsh` uses WinCNG and a static CRT, with no OpenSSL or extra runtime dependency.
+
+The x64 Release target invokes the script only when outputs are missing or dependency/build-wrapper inputs have changed. Normal application edits skip it. Cached sources require no download, and CMake builds incrementally. Run `powershell -ExecutionPolicy Bypass -File .\scripts\build-ssh.ps1` for an explicit backend build. The first build needs network access; later builds can use the offline cache. Release packaging merges the upstream license into the single `LICENSE` file.
+
+SSH integration tests require Python and Paramiko: `powershell -ExecutionPolicy Bypass -File .\tests\run-ssh-transport-tests.ps1 -Full`. Disposable loopback servers use no system accounts. They withhold an OPEN confirmation and verify that a later OPEN confirms and exchanges data on the same session. The full test includes roughly three minutes of open-timeout, liveness and idle-timeout waits.
 
 ### Build Rust Components Separately
 

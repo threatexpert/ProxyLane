@@ -319,6 +319,8 @@
     <ClCompile Include="PRCPipeClient.cpp" />
     <ClCompile Include="PRCPipeServer.cpp" />
     <ClCompile Include="PRCTcpPeer.cpp" />
+    <ClCompile Include="SshSessionManager.cpp" />
+    <ClCompile Include="asynsocket\AsyncSshSocketLayer.cpp" />
     <ClCompile Include="MitmBridge.cpp" />
     <ClCompile Include="QuicBridge.cpp" />
     <ClCompile Include="BrowserQuicPolicy.cpp" />
@@ -390,6 +392,8 @@
     <ClInclude Include="ProxyReceptionCentre.h" />
     <ClInclude Include="ProxySettings.h" />
     <ClInclude Include="ProxyChainLayers.h" />
+    <ClInclude Include="SshSessionManager.h" />
+    <ClInclude Include="asynsocket\AsyncSshSocketLayer.h" />
     <ClInclude Include="ProxyTaskMgr.h" />
     <ClInclude Include="ProxyTesterMgr.h" />
     <ClInclude Include="StdAfx.h" />
@@ -423,4 +427,9 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
+  <Target Name="BuildSshBackend" AfterTargets="Build" Condition="'$(Platform)'=='x64' and '$(Configuration)'=='Release'"
+          Inputs="$(ProjectDir)..\..\scripts\build-ssh.ps1;$(ProjectDir)..\ProxyLaneSsh\CMakeLists.txt;$(ProjectDir)..\ProxyLaneSsh\SessionPump.c;$(ProjectDir)..\..\third_party\libssh2\UPSTREAM.txt;$(ProjectDir)..\..\third_party\libssh2\concurrent-channel-open.patch;$(ProjectDir)..\..\third_party\libssh2\include\libssh2.h;$(ProjectDir)..\..\third_party\libssh2\COPYING"
+          Outputs="$(ProjectDir)..\..\bin\ProxyLaneSsh64.dll;$(ProjectDir)..\..\build\deps\ssh-backend.stamp">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)..\..\scripts\build-ssh.ps1&quot; -Platform x64" />
+  </Target>
 </Project>
