@@ -69,11 +69,12 @@ BlockIPv6=1
     for accept in (False,True):
         command(page,1008)
         prompt = modal(process,main)
-        contents = text(USER.GetDlgItem(prompt,65535))
+        wait_for(lambda: USER.IsWindowVisible(USER.GetDlgItem(prompt,6)), 'explicit trust action')
+        contents = text(USER.GetDlgItem(prompt,1207))
         assert ports['fingerprint'] in contents, contents
         assert '127.0.0.1' in contents, contents
         assert stats()['auth_a'] == 0
-        dismiss(prompt,6 if accept else 7)
+        dismiss(prompt,6 if accept else 2)
         wait_for(lambda: USER.IsWindowEnabled(USER.GetDlgItem(page,1008)),'test reset')
         assert field(page,1070) == (ports['fingerprint'] if accept else '')
     print('PASS trust rejection and confirmation send no password',flush=True)

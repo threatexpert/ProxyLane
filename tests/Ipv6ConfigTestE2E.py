@@ -1,6 +1,7 @@
 """Exercise the real configuration-test UI using only owned local endpoints."""
 import argparse
 import ctypes
+from ctypes import wintypes
 import json
 from pathlib import Path
 import shutil
@@ -10,7 +11,7 @@ import threading
 import time
 import uuid
 
-from ExitWarningE2ETests import USER, CALLBACK, wait_for, windows, settings_page, text
+from ExitWarningE2ETests import USER, CALLBACK, wait_for, windows, settings_page, text, capture_dialog
 from HookRebindE2ETests import KERNEL, exact
 
 
@@ -46,7 +47,7 @@ class Endpoint:
                         exact(connection, count)
                         connection.sendall(b'\x05\x00')
                         version, command, _, kind = exact(connection, 4)
-                        assert version == 5 and command == 1
+                        assert version == 5 and command in (1, 3)
                         size = {1: 4, 4: 16}.get(kind)
                         if kind == 3:
                             size = exact(connection, 1)[0]
@@ -56,7 +57,8 @@ class Endpoint:
                         if kind == 4 and self.outcome == 'timeout':
                             self.stopped.wait(12)
                             continue
-                        reply = 5 if kind == 4 and self.outcome == 'refused' else 0
+                        reply = (7 if self.outcome == 'udp_unsupported' else 1) if command == 3 else 5 if (
+                            self.outcome == 'tcp_failed' or kind == 4 and self.outcome == 'refused') else 0
                         connection.sendall(bytes([5, reply, 0, 1, 127, 0, 0, 1, 0, 80]))
                     elif self.protocol == 'SOCKS4':
                         header = exact(connection, 8)
@@ -99,7 +101,7 @@ def children(window):
     return '\n'.join(result)
 
 
-def run(binary_dir, bits, language):
+def run(binary_dir, bits, language, capture=False):
     if bits == 32 and ctypes.sizeof(ctypes.c_void_p) == 8:
         raise RuntimeError('The 32-bit GUI forwards to 64-bit on this OS; use run-ipv6-proxy-tester-tests.ps1 for the 32-bit backend.')
     module = KERNEL.GetModuleHandleW('ProxyLaneHook64.dll')
@@ -117,7 +119,8 @@ def run(binary_dir, bits, language):
     try:
         cases = [('NOPROXY', 'success'), ('NOPROXY', 'refused'), ('NOPROXY', 'invalid'),
                  ('SOCKS5', 'success'), ('SOCKS5', 'refused'), ('SOCKS5', 'timeout'),
-                 ('HTTP10', 'success'), ('HTTP11', 'success'), ('SOCKS4', 'unsupported')]
+                 ('HTTP10', 'success'), ('HTTP11', 'success'),
+                 ('SOCKS5', 'tcp_failed'), ('SOCKS5', 'udp_failed'), ('SOCKS5', 'udp_unsupported')]
         for protocol, outcome in cases:
             endpoint = None
             if protocol == 'NOPROXY' and outcome != 'invalid':
@@ -138,7 +141,7 @@ Host=127.0.0.1
 Port={port}
 Transport=PLAIN
 HookTCP=1
-HookUDP=0
+HookUDP={int(outcome in ('udp_failed', 'udp_unsupported'))}
 HookChildProcess=0
 BlockIPv6=0
 ''', encoding='utf-8')
@@ -156,20 +159,36 @@ BlockIPv6=0
                         'button': text(USER.GetDlgItem(page, 1008)), 'base': base.requests,
                         'probe': endpoint.requests if endpoint else [],
                         'windows': [(text(w), children(w)) for w in windows(process.pid)]})
+                # A caption exists before OnInitDialog has created and placed
+                # all dynamic controls. Wait for the final button layout.
+                def ready():
+                    rect = wintypes.RECT()
+                    close = USER.GetDlgItem(dialog, 2)
+                    return close and USER.GetWindowRect(close, ctypes.byref(rect)) and rect.right > rect.left
+                wait_for(ready, 'result layout')
+                if capture:
+                    capture_dialog(dialog, directory / f'{language}-{protocol}-{outcome}.png')
                 result = children(dialog)
-                key = {'success': 'test.ipv6_available', 'refused': 'test.ipv6_target_failed',
-                       'timeout': 'test.ipv6_unknown', 'invalid': 'test.ipv6_invalid_config',
-                       'unsupported': 'test.ipv6_unsupported'}[outcome]
-                assert locale[key].strip() in result, (protocol, outcome, result)
-                if outcome != 'unsupported':
-                    assert locale['test.ipv6_unsupported'].strip() not in result, result
-                if outcome not in ('invalid', 'unsupported'):
-                    assert '[::1]:53' in result, result
-                if outcome == 'refused':
-                    assert locale['test.ipv6_error'].split('%s')[0].strip() in result, result
-                    description = ctypes.FormatError(10061).strip() if protocol == 'NOPROXY' else locale['test.target_failed']
-                    assert description in result, result
-                    assert '10061' not in result, result
+                tcp = text(USER.GetDlgItem(dialog, 1201))
+                udp = text(USER.GetDlgItem(dialog, 1202))
+                ipv6 = text(USER.GetDlgItem(dialog, 1203))
+                assert locale['test.result.failed' if outcome == 'tcp_failed' else 'test.result.passed'] in tcp, tcp
+                udp_status = 'skipped' if protocol == 'NOPROXY' else 'unsupported' if protocol != 'SOCKS5' or outcome == 'udp_unsupported' else 'failed' if outcome == 'udp_failed' else 'disabled'
+                assert locale['test.result.' + udp_status] in udp, udp
+                assert not any(USER.GetDlgItem(dialog, control) for control in (1200, 1204, 1205, 1206, 6)), result
+                if outcome in ('tcp_failed', 'udp_failed', 'udp_unsupported'):
+                    assert locale['test.result.skipped'] in ipv6, ipv6
+                    assert not USER.IsWindowVisible(USER.GetDlgItem(dialog, 6)), 'Unexpected action button'
+                    USER.PostMessageW(dialog, 0x111, 2, 0)
+                    wait_for(lambda: not USER.IsWindow(dialog), 'close result')
+                    assert not endpoint.errors, endpoint.errors
+                    reports.append({'protocol': protocol, 'outcome': outcome, 'dialog': result})
+                    print(f'PASS {bits}-bit {language} {protocol} {outcome}', flush=True)
+                    continue
+                if outcome != 'invalid':
+                    assert '[::1]:53' in ipv6, ipv6
+                ipv6_status = {'success': 'passed', 'refused': 'failed', 'timeout': 'unknown', 'invalid': 'invalid'}[outcome]
+                assert locale['test.result.' + ipv6_status] in ipv6, ipv6
                 if endpoint:
                     assert not endpoint.errors, endpoint.errors
                     if protocol == 'NOPROXY' and outcome == 'success':
@@ -180,9 +199,11 @@ BlockIPv6=0
                     if protocol.startswith('HTTP'):
                         assert any('CONNECT [::1]:53 ' in value for _, value in endpoint.requests), endpoint.requests
                 reports.append({'protocol': protocol, 'outcome': outcome, 'dialog': result})
+                # The compact result window never changes the tested profile.
+                USER.PostMessageW(dialog, 0x111, 2, 0)
+                wait_for(lambda: not USER.IsWindow(dialog), 'dismiss result')
+                assert bool(USER.SendMessageW(USER.GetDlgItem(page, 1071), 0xF0, 0, 0)) == False
                 print(f'PASS {bits}-bit {language} {protocol} {outcome}', flush=True)
-                # Each case owns a disposable GUI; leave profile-changing prompts
-                # unanswered and tear down that GUI in finally.
             finally:
                 if process.poll() is None:
                     process.terminate()
@@ -199,5 +220,6 @@ if __name__ == '__main__':
     parser.add_argument('--bin', default='bin', type=Path)
     parser.add_argument('--bits', type=int, choices=(32, 64), default=64)
     parser.add_argument('--language', choices=('zh-CN', 'en-US'), default='zh-CN')
+    parser.add_argument('--capture', action='store_true')
     arguments = parser.parse_args()
-    run(arguments.bin.resolve(), arguments.bits, arguments.language)
+    run(arguments.bin.resolve(), arguments.bits, arguments.language, arguments.capture)

@@ -108,6 +108,11 @@ private:
 	int m_testIpv6Error = 0;
 	CString m_testIpv6Address;
 	BOOL m_testUdpRequested;
+	BOOL m_testTcpPassed = FALSE;
+	BOOL m_testUdpPassed = FALSE;
+	int m_testUdpError = 0;
+	CString m_testTcpTarget;
+	INT_PTR ShowProxyTestResult(const CString& details, LPCTSTR actionKey = NULL);
 	ProxyInfo m_testProxyInfo;
 	ProxyChain m_testChain;	// empty = testing a single upstream
 	std::vector<CString> m_testChainNames;

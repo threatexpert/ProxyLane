@@ -307,6 +307,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     <ClInclude Include="MainTab.h" />
     <ClInclude Include="ModernUI.h" />
     <ClInclude Include="Page1.h" />
+    <ClInclude Include="ProxyTestResultDialog.h" />
     <ClInclude Include="ProfileShareCodec.h" />
     <ClInclude Include="ConfigImport.h" />
     <ClInclude Include="Page2.h" />
