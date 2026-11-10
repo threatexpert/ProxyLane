@@ -279,12 +279,22 @@ void CPage1::OnCopyProfile()
         value["child_mode"] = m_radioChildFilterInclude.GetCheck() == BST_CHECKED ? 1 : 0;
         value["target_mode"] = m_radioTargetFilterProxy.GetCheck() == BST_CHECKED ? 1 : 0;
         value["transport"] = m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK ? "GONC_TLS_PSK" : "PLAIN";
-        if (value["type"] == "SSH") { value["ssh_host_key"] = value["psk"]; value["psk"] = ""; }
+        if (value["type"] == "SSH") {
+            value["ssh_host_key"] = value["psk"]; value["psk"] = "";
+            ProxyInfo auth;
+            if (!m_sshAuth.Apply(auth)) throw ProfileShare::Error("ssh.key_required");
+            if (auth.sshAuth) {
+                std::string bytes;
+                if (!SshKeyStore::Read(SshKeyStore::Reference(auth.strSshKeyFile.szbuf), bytes)) throw ProfileShare::Error("ssh.key_read_failed");
+                value["ssh_auth"] = "private_key"; value["ssh_private_key"] = bytes;
+                SecureZeroMemory(&bytes[0], bytes.size());
+            }
+        }
         ProfileShare::Validate(value);
         ValidateResolver(value);
         WriteClipboard(m_hWnd, Wide(ProfileShare::Encode(value)));
         ShowProfileNotice(Localization::Get(_T("share.copied")),
-            Localization::Get(_T("share.includes_secrets")), CStatusLabel::TONE_SUCCESS);
+            Localization::Get(ProfileShare::UsesPrivateKey(value) ? L"share.includes_private_key" : L"share.includes_secrets"), CStatusLabel::TONE_SUCCESS);
     }
     catch (const ProfileShare::Error& error)
     {
@@ -307,6 +317,11 @@ void CPage1::OnPasteProfile()
     {
         const Json value = ProfileShare::Decode(Utf8(ReadClipboard(m_hWnd)));
         ValidateResolver(value);
+        ProxyInfo importedAuth;
+        if (ProfileShare::UsesPrivateKey(value)) {
+            importedAuth.sshAuth = 1;
+
+        }
         // Prepare every string before touching the UI or asking to discard a draft.
         std::vector<std::pair<UINT, CString>> texts;
         for (const auto& field : textFields)
@@ -339,7 +354,15 @@ void CPage1::OnPasteProfile()
             name = baseName + Localization::Get(_T("share.import_suffix"));
             if (suffix > 1) { CString number; number.Format(_T(" %d"), suffix); name += number; }
         }
+        if (importedAuth.sshAuth) {
+            CString reference;
+            if (!SshKeyStore::Import(value.at("ssh_private_key").get<std::string>(), reference) ||
+                !SshProfile::Encode(SshKeyStore::Path(reference), importedAuth.strSshKeyFile.szbuf))
+                throw ProfileShare::Error("ssh.key_write_failed");
+        }
         m_loadingProfile = TRUE;
+        m_sshAuth.Load(&importedAuth);
+        SecureZeroMemory(importedAuth.strSshKeyFile.szbuf, sizeof(importedAuth.strSshKeyFile.szbuf));
         m_cfgls.SetCurSel(-1);
         m_cfgls.SetWindowText(name);
         m_cbProxyType.SelectString(-1, type);

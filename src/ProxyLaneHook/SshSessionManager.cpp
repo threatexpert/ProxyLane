@@ -3,6 +3,7 @@
 #include "ProxyChainLayers.h"
 #include "asynsocket/AsyncSshSocketLayer.h"
 #include "TimerQueue.h"
+#include "SshKeyFile.h"
 #include "PlatformSupport.h"
 #include "../../third_party/libssh2/include/libssh2.h"
 #include <deque>
@@ -23,7 +24,7 @@ struct SshApi {
     HMODULE module = NULL;
 #define SSH_APIS(X) \
     X(init) X(session_init_ex) X(session_callback_set2) X(session_set_blocking) \
-    X(session_handshake) X(hostkey_hash) X(userauth_password_ex) \
+    X(session_handshake) X(hostkey_hash) X(userauth_password_ex) X(userauth_publickey_frommemory) \
     X(channel_direct_tcpip_begin) X(channel_open_poll) X(channel_open_cancel) \
     X(channel_read_ex) X(channel_write_ex) \
     X(channel_eof) X(channel_send_eof) X(channel_close) X(channel_free) \
@@ -119,6 +120,7 @@ std::string RouteKey(const ProxyChain& route) {
         add(std::to_string(hop.nProxyPort).c_str());
         add(hop.strProxyUser.szbuf); add(hop.strProxyPass.szbuf);
         add(std::to_string(hop.reserved).c_str()); add(hop.strTransportPsk.szbuf);
+        add(std::to_string(hop.sshAuth).c_str()); add(hop.strSshKeyFile.szbuf); add(hop.strSshKeyDigest.szbuf);
     }
     return key;
 }
@@ -177,6 +179,7 @@ private:
     CAsyncProxySocketLayer direct;
     LIBSSH2_SESSION* session = NULL;
     Buffer wire;
+    SshKeyFile::Snapshot keyFile;
     bool disposed = false, transportReady = false;
     DWORD started = GetTickCount(), lastReceive = GetTickCount(), nextKeepalive = 0;
     size_t nextChannel = 0;
@@ -265,11 +268,19 @@ Pool& CurrentPool() {
 }
 }
 
-std::shared_ptr<SshChannel> SshSessionManager::Open(const ProxyChain& route,
+std::shared_ptr<SshChannel> SshSessionManager::Open(const ProxyChain& inputRoute,
     const CStringA& target, int port, CAsyncSshSocketLayer* observer,
     SshSessionUse use, SshSession* dependent)
 {
     Pool& owner = CurrentPool();
+    ProxyChain route = inputRoute;
+    for (auto& hop : route) if (hop.GetProxyType() == PROXYTYPE_SSH && hop.sshAuth == 1) {
+        SshKeyFile::Snapshot file;
+        const bool readable = file.Open(SshKeyFile::Wide(hop.strSshKeyFile.szbuf));
+        // Include current file contents even on a pooled-session lookup. Missing
+        // or changed keys cannot silently reuse an older authentication.
+        strcpy_s(hop.strSshKeyDigest.szbuf, readable ? file.digest.c_str() : "unreadable");
+    }
     const std::string key = RouteKey(route);
     std::shared_ptr<SshSession> session;
     // Test probes own fresh sessions, including their lower SSH transports.
@@ -425,6 +436,7 @@ void SshSession::Progress(int hop, int stage, DWORD tick) {
         if (c->m->observer) c->m->observer->ReportTestProgress(stage, hop, tick);
 }
 void SshSession::Dispose() {
+    keyFile.Close();
     if (disposed) return;
     disposed = true;
     Close();
@@ -470,11 +482,22 @@ void SshSession::Drive() {
         Progress(static_cast<int>(route.size()) - 1, PTS_AUTH);
     }
     if (phase == AUTH) {
-        const int result = api.userauth_password_ex(session, endpoint.strProxyUser.szbuf,
+        if (endpoint.sshAuth == 1 && keyFile.bytes.empty()) {
+            const auto path = SshKeyFile::Wide(endpoint.strSshKeyFile.szbuf);
+            if (path.empty() || !keyFile.Open(path) || keyFile.digest != endpoint.strSshKeyDigest.szbuf) {
+                Fail(PROXYERROR_SSH_KEY_FILE, WSAEACCES, "SSH private key file unavailable or invalid"); return;
+            }
+        }
+        const int result = endpoint.sshAuth == 1
+            ? api.userauth_publickey_frommemory(session, endpoint.strProxyUser.szbuf, strlen(endpoint.strProxyUser.szbuf),
+                NULL, 0, keyFile.bytes.data(), keyFile.bytes.size(), endpoint.strProxyPass.szbuf)
+            : endpoint.sshAuth == 0 ? api.userauth_password_ex(session, endpoint.strProxyUser.szbuf,
             static_cast<unsigned int>(strlen(endpoint.strProxyUser.szbuf)), endpoint.strProxyPass.szbuf,
-            static_cast<unsigned int>(strlen(endpoint.strProxyPass.szbuf)), NULL);
+            static_cast<unsigned int>(strlen(endpoint.strProxyPass.szbuf)), NULL) : LIBSSH2_ERROR_AUTHENTICATION_FAILED;
         Flush(); if (failed || result == LIBSSH2_ERROR_EAGAIN) return;
-        if (result) { Fail(PROXYERROR_AUTHFAILED, WSAEACCES, "SSH password authentication failed"); return; }
+        if (result) { Fail(endpoint.sshAuth ? PROXYERROR_SSH_KEY_AUTHFAILED : PROXYERROR_AUTHFAILED, WSAEACCES,
+            endpoint.sshAuth ? "SSH private key authentication failed" : "SSH password authentication failed"); return; }
+        keyFile.Close(); // Authentication finished; erase the transient key snapshot.
         phase = READY; lastReceive = now; nextKeepalive = now + KEEPALIVE_INTERVAL;
         api.keepalive_config(session, 1, KEEPALIVE_INTERVAL / 1000);
     }

@@ -4,6 +4,7 @@
 #include "RecentApplications.h"
 #include "ConfigStorage.h"
 #include "SshProfile.h"
+#include "SshKeyStore.h"
 
 namespace
 {
@@ -68,6 +69,9 @@ BOOL CProxyProfileStore::Load(CfgProxyItem& item) const
 	item.strTargetFilter = DecodeFilter(m_ini.GetString(section, _T("TargetFilter")));
 	item.nTargetFilterMode = (int)m_ini.GetDWORD(section, _T("TargetFilterMode"), TARGETFILTER_MODE_BYPASS);
 
+	item.pi.sshAuth = 0;
+    item.pi.strSshKeyDigest.szbuf[0] = 0;
+    SecureZeroMemory(item.pi.strSshKeyFile.szbuf, sizeof(item.pi.strSshKeyFile.szbuf));
 	item.pi.szItemName = _T("myproxy");
 	item.pi.strProxyType = m_ini.GetString(section, _T("Type"));
 	// Legacy HTTP profiles now use HTTP/1.1 CONNECT; loading does not rewrite the INI.
@@ -82,9 +86,25 @@ BOOL CProxyProfileStore::Load(CfgProxyItem& item) const
 		? PROXY_TRANSPORT_GONC_TLS_PSK : PROXY_TRANSPORT_PLAIN;
 	item.strTransportPsk = m_ini.GetString(section, storedType == PROXYTYPE_SSH ? L"SshHostKey" : L"PSK");
     if (storedType == PROXYTYPE_SSH) {
+        const CString auth = m_ini.GetString(section, L"SshAuth", L"password");
+        if (auth != L"password" && auth != L"private_key") return FALSE;
+        item.pi.sshAuth = auth == L"private_key" ? 1 : 0;
+        if (item.pi.sshAuth) {
+            CString reference = m_ini.GetString(section, L"SshKeyFile");
+            // Read the previous experimental inline format without dropping it;
+            // the next explicit save removes the inline data from the INI.
+            if (reference.IsEmpty()) {
+                CString packed = m_ini.GetString(section, L"SshPrivateKey"); packed.Replace(L"|", L"\n");
+                char legacy[SshPrivateKey::Capacity] = {};
+                const bool imported = SshProfile::Encode(packed, legacy) && SshKeyStore::Import(legacy, reference);
+                SecureZeroMemory(legacy, sizeof(legacy));
+                if (!imported) return FALSE;
+            }
+            if (!SshKeyStore::ValidReference(reference) || !SshProfile::Encode(SshKeyStore::Path(reference), item.pi.strSshKeyFile.szbuf)) return FALSE;
+        }
         if (item.nTransportMode != PROXY_TRANSPORT_PLAIN || m_ini.GetString(section, L"User").IsEmpty()) return FALSE;
         if (!SshProfile::Encode(m_ini.GetString(section, L"User"), item.pi.strProxyUser.szbuf) ||
-            !SshProfile::Encode(m_ini.GetString(section, L"Pass"), item.pi.strProxyPass.szbuf) ||
+            !SshProfile::Encode(m_ini.GetString(section, item.pi.sshAuth ? L"SshKeyPassphrase" : L"Pass"), item.pi.strProxyPass.szbuf) ||
             !SshProfile::ValidFingerprint(item.strTransportPsk)) return FALSE;
         item.bHookUDP = FALSE;
     }
@@ -178,7 +198,17 @@ namespace
 		if (!ini.SetString(section, _T("Host"), (CString)item.pi.strProxyHost)) return false;
 		if (!ini.SetInt(section, _T("Port"), item.pi.nProxyPort)) return false;
 		if (!ini.SetString(section, _T("User"), (proxyType == PROXYTYPE_SSH ? SshProfile::Decode(item.pi.strProxyUser.szbuf) : (CString)item.pi.strProxyUser))) return false;
-		if (!ini.SetString(section, _T("Pass"), (proxyType == PROXYTYPE_SSH ? SshProfile::Decode(item.pi.strProxyPass.szbuf) : (CString)item.pi.strProxyPass))) return false;
+		const bool keyAuth = proxyType == PROXYTYPE_SSH && item.pi.sshAuth == 1;
+        if (!ini.SetString(section, L"Pass", keyAuth ? CString() : (proxyType == PROXYTYPE_SSH ? SshProfile::Decode(item.pi.strProxyPass.szbuf) : (CString)item.pi.strProxyPass))) return false;
+        if (proxyType == PROXYTYPE_SSH) {
+            if (item.pi.sshAuth > 1 || (keyAuth && SshKeyStore::Reference(item.pi.strSshKeyFile.szbuf).IsEmpty())) return false;
+            if (!ini.SetString(section, L"SshAuth", keyAuth ? L"private_key" : L"password")) return false;
+        } else if (!ini.DeleteKeyName(section, L"SshAuth")) return false;
+        if (keyAuth) {
+            if (!ini.SetString(section, L"SshKeyFile", SshKeyStore::Reference(item.pi.strSshKeyFile.szbuf)) ||
+                !ini.SetString(section, L"SshKeyPassphrase", SshProfile::Decode(item.pi.strProxyPass.szbuf))) return false;
+        } else if (!ini.DeleteKeyName(section, L"SshKeyFile") || !ini.DeleteKeyName(section, L"SshKeyPassphrase")) return false;
+        if (!ini.DeleteKeyName(section, L"SshPrivateKey")) return false;
 		if (!ini.SetString(section, _T("Transport"), item.nTransportMode ==
 			PROXY_TRANSPORT_GONC_TLS_PSK ? _T("GONC_TLS_PSK") : _T("PLAIN"))) return false;
 		// Initial secure-transport format intentionally stores the PSK directly
@@ -211,7 +241,7 @@ BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 	{
 		// A chain stores its hops in place of a server.
 		if (!ini.SetString(section, _T("Type"), _T("CHAIN"))) return false;
-		const LPCTSTR serverKeys[] = { _T("Host"), _T("Port"), _T("User"), _T("Pass"), _T("Transport"), _T("PSK"), L"SshHostKey" };
+		const LPCTSTR serverKeys[] = { _T("Host"), _T("Port"), _T("User"), _T("Pass"), _T("Transport"), _T("PSK"), L"SshHostKey", L"SshAuth", L"SshPrivateKey", L"SshKeyFile", L"SshKeyPassphrase" };
 		for (LPCTSTR key : serverKeys)
 			if (!ini.DeleteKeyName(section, key)) return false;
 	}

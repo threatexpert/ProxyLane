@@ -34,6 +34,7 @@ $packageFiles = @(
 
 $projectLicense = Join-Path $repositoryRoot 'LICENSE'
 $thirdPartyLicenses = @(
+    @{ Name = 'OpenSSL'; Source = (Join-Path $repositoryRoot 'third_party\openssl\LICENSE.txt') },
     @{ Name = 'libssh2'; Source = (Join-Path $repositoryRoot 'third_party\libssh2\COPYING') },
     @{ Name = 'Microsoft Detours'; Source = (Join-Path $repositoryRoot 'third_party\detours\LICENSE.md') },
     @{ Name = 'nlohmann/json'; Source = (Join-Path $repositoryRoot 'third_party\nlohmann\LICENSE.MIT') },

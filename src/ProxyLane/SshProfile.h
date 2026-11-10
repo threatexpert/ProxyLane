@@ -1,7 +1,8 @@
 #pragma once
+#include "SshPrivateKey.h"
 
 // SSH credentials are UTF-8 on the wire. Do not change legacy protocols'
-// credential encoding or the packed ProxyInfo ABI.
+// credential encoding or the packed ProxyInfo pipe prefix.
 namespace SshProfile {
 template<size_t N> bool Encode(const CString& text, char (&output)[N]) {
     const int bytes = WideCharToMultiByte(CP_UTF8, 0, text, -1, NULL, 0, NULL, NULL);

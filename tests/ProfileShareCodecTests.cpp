@@ -26,6 +26,11 @@ void Reject(const std::string& code)
     assert(rejected);
 }
 
+void RejectKeyValue(const Json& value)
+{
+    Reject(std::string(ProfileShare::KeyPrefix) + ProfileShare::Base64Url(value.dump()));
+}
+
 void RejectValue(const Json& value)
 {
     Reject(std::string(ProfileShare::Prefix) + ProfileShare::Base64Url(value.dump()));
@@ -71,6 +76,18 @@ int ProfileShareCodecTestsMain()
         bad = ssh; bad["hook_udp"] = true; RejectValue(bad);
         bad = ssh; bad["user"] = ""; RejectValue(bad);
         bad = ssh; bad["transport"] = "GONC_TLS_PSK"; RejectValue(bad);
+        ssh["ssh_auth"] = "private_key";
+        ssh["ssh_private_key"] = "-----BEGIN RSA PRIVATE KEY-----\nfixture\n-----END RSA PRIVATE KEY-----\n";
+        std::string portable = ProfileShare::Encode(ssh);
+        assert(portable.find(ProfileShare::KeyPrefix) == 0);
+        assert(ProfileShare::Decode(portable) == ssh);
+        RejectValue(ssh); // Private-key material in a v1 envelope must never downgrade.
+        bad = ssh; bad["ssh_auth"] = "agent"; RejectKeyValue(bad);
+        bad = ssh; bad.erase("ssh_private_key"); RejectKeyValue(bad);
+        bad = ssh; bad["ssh_private_key"] = std::string(16384, 'x'); RejectKeyValue(bad);
+        bad = ssh; bad["ssh_private_key"] = "-----BEGIN OPENSSH PRIVATE KEY-----\nx\n-----END OPENSSH PRIVATE KEY-----"; RejectKeyValue(bad);
+        bad = ssh; bad["ssh_private_key"] = ssh["ssh_private_key"].get<std::string>() + std::string("\0tail",5); RejectKeyValue(bad);
+        bad = ssh; bad["ssh_auth"] = "password"; RejectKeyValue(bad);
     }
     for (const char* type : {"SOCKS4", "SOCKS4A"})
     {

@@ -111,15 +111,21 @@ HTTPS 解密不限于 443 端口；QUIC 支持 v1，可查看 HTTP/3，以及其
 
 ## SSH 代理
 
-选择 `SSH` 协议，填写服务器地址、端口（通常为 22）、用户名和密码。支持密码认证和 TCP `direct-tcpip` 转发；服务器必须允许端口转发。可单独使用，也可作为 SOCKS5 / HTTP / SSH 混合链中任意位置的节点。不支持 UDP、密钥登录或交互式认证。
+选择 `SSH` 协议，填写服务器地址、端口（通常为 22）和用户名，再选择密码或私钥认证。私钥支持 RSA、ECDSA、Ed25519 的 OpenSSH / PEM / PKCS#8 格式，含加密私钥；加密文件需填写私钥口令，文件需小于 16 KiB。暂不支持 PPK、Agent 或交互式认证。支持 TCP `direct-tcpip` 转发，服务器必须允许端口转发；可单独使用，也可作为 SOCKS5 / HTTP / SSH 混合链中任意位置的节点，不支持 UDP。
+
+导入的私钥保存到当前用户 `%LOCALAPPDATA%\ProxyLane\keys\`，profile 的 `SshKeyFile` 只保存文件名引用，原文件移动或删除后仍可使用；加密私钥保留原加密内容，认证口令沿用配置文件中的保存方式。多个实例使用私钥内容的 SHA-256 命名、跨进程锁及原子发布，同一私钥复用文件，不同私钥不互相覆盖。删除或替换 profile 不自动删除共享私钥。
+
+“复制完整 profile”仍包含私钥及口令，使用 `proxylane://profile/v2/` 分享码；粘贴时自动保存到接收方的本地 `keys` 目录并建立引用。取消粘贴不会写入文件；私钥缺失时测试及复制会明确报错。单独备份 INI 时，应同时备份 `keys` 目录。旧的内联私钥配置可加载到本地目录，下一次保存时移除 INI 内的私钥内容。普通密码配置仍使用兼容的 v1 分享格式。
+
+认证时从本地文件读取受限大小的私钥快照，使用 libssh2/OpenSSL 原生内存接口解析和签名，结束后清除快照；profile 仍只保存文件引用。此方式也支持 Unicode 路径，不需要私钥解析补丁。
 
 首次点击测试时，会显示服务器的 SHA256 主机指纹；通过可信渠道核对并确认后再测试，最后保存并应用。指纹不匹配时拒绝连接，不发送登录密码。指纹以 `SshHostKey` 保存在配置中，密码沿用配置文件的明文保存方式。
 
-C++ 管理按需创建的 SSH session，同一事件线程中相同前置链路、账号、密码和指纹的连接复用认证，每条业务 TCP 使用独立通道。测试会话独立建立，测试结束、失败或取消后立即回收，不保留复用。每 15 秒发送需要回复的 SSH keepalive；约 60 秒收不到服务端数据时使会话失效，后续新连接重新认证。现有 TCP 流不能透明恢复，需应用重新连接。业务会话在最后一条业务连接关闭后最多保留 30 分钟，期间可复用；多层 SSH 链按业务连接统一计时，内部隧道和 keepalive 不延长空闲期限。停止代理会立即关闭业务会话。
+C++ 管理按需创建的 SSH session，同一事件线程中相同前置链路、账号、认证方式、密码/私钥/口令和指纹的连接复用认证，每条业务 TCP 使用独立通道。测试会话独立建立，测试结束、失败或取消后立即回收，不保留复用。每 15 秒发送需要回复的 SSH keepalive；约 60 秒收不到服务端数据时使会话失效，后续新连接重新认证。现有 TCP 流不能透明恢复，需应用重新连接。业务会话在最后一条业务连接关闭后最多保留 30 分钟，期间可复用；多层 SSH 链按业务连接统一计时，内部隧道和 keepalive 不延长空闲期限。停止代理会立即关闭业务会话。
 
 同一 session 可以同时等待多个通道打开确认，慢目标不会阻塞后续目标的打开。每个 session 最多保留 32 个未完成的打开操作，额外请求排队；单个请求约 60 秒超时，仅使该业务连接失败。取消或超时后仍保留协议清理状态，收到迟到确认时关闭对应通道，该状态也计入上限。
 
-SSH 后端为独立的 `ProxyLaneSsh64.dll`，仅在使用 SSH 时加载，最低支持目标是 Windows 10 / Server 2016 x64；32 位应用可以通过 64 位主程序使用。WinCNG 后端支持 RSA / ECDSA 主机密钥，不支持仅提供 Ed25519 主机密钥的服务器。
+SSH 后端为独立的 `ProxyLaneSsh64.dll`，仅在使用 SSH 时加载，最低支持目标是 Windows 10 / Server 2016 x64；32 位应用可以通过 64 位主程序使用。OpenSSL 后端支持 RSA / ECDSA / Ed25519 主机密钥、Curve25519 密钥交换及 AES-GCM。
 
 ## gonc TLS-PSK 加密传输
 
@@ -170,11 +176,11 @@ msbuild .\src\ProxyLane.sln /m /p:Configuration=Release /p:Platform=x64
 
 ### SSH 后端依赖
 
-libssh2 以官方 1.11.1 为基础，并应用 `third_party/libssh2/concurrent-channel-open.patch`；补丁在 [threatexpert/libssh2](https://github.com/threatexpert/libssh2) 的开发分支维护。目录中同时保留配套公开头文件和原始许可证。`scripts/build-ssh.ps1` 下载并校验官方源码包 SHA256，在忽略入库的 `build/deps` 下按补丁哈希隔离源码与构建缓存，再应用补丁；不依赖开发者本机的相邻仓库。`src/ProxyLaneSsh` 的 CMake 封装使用 WinCNG 和静态 CRT 编译 DLL，没有 OpenSSL 或额外运行库依赖。
+libssh2 以官方 1.11.1 为基础，并应用 `third_party/libssh2/concurrent-channel-open.patch`；补丁在 [threatexpert/libssh2](https://github.com/threatexpert/libssh2) 的开发分支维护。目录中同时保留配套公开头文件和原始许可证。`scripts/build-ssh.ps1` 下载并校验官方源码包 SHA256，在忽略入库的 `build/deps` 下按补丁哈希隔离源码与构建缓存，再应用补丁；不依赖开发者本机的相邻仓库。`src/ProxyLaneSsh` 的 CMake 封装将 OpenSSL `libcrypto` 和 CRT 静态链接到 DLL，不需要额外 OpenSSL / VC 运行库 DLL。首次构建由 `scripts/prepare-openssl.ps1` 从 nuget.org 自动下载预编译的 `openssl-native 3.5.9`（约 128 MiB），按 `third_party/openssl/dependency.json` 中固定的 SHA256 校验并缓存；后续复用缓存。无需安装 OpenSSL、Perl、NASM、NuGet 或 .NET SDK，也无需账号。离线构建可预先放置同一包到 `build/deps/openssl-native.3.5.9.nupkg`。只使用 x64 / v142 / MT 的静态 libcrypto 和头文件；来源及签名核验记录见 `third_party/openssl/UPSTREAM.txt`。
 
 x64 Release 构建只在 DLL / 构建标记缺失或依赖版本、脚本、封装源码变化时执行脚本；普通主工程改动跳过此步骤。已有源码缓存时不下载，已有对象文件时增量编译。需要手工重建后端可运行 `powershell -ExecutionPolicy Bypass -File .\scripts\build-ssh.ps1`。首次构建需要联网，之后可用缓存离线构建。发布脚本把 libssh2 许可证合并到统一的 `LICENSE`。
 
-本地 SSH 集成测试需要 Python 和 Paramiko：`powershell -ExecutionPolicy Bypass -File .\tests\run-ssh-transport-tests.ps1 -Full`。它在回环地址运行临时服务器，不使用系统账号；会扣住一个 OPEN 的服务器确认，验证后续 OPEN 在同一 session 上先确认并传输数据。测试也验证成功、失败和取消后的会话释放，以及多层 SSH 链清理；完整测试还包含约三分钟的通道超时、失联及空闲复用等待。30 分钟回收边界、重新计时和时钟回绕由单元测试验证。
+本地 SSH 集成测试需要 Python 和 Paramiko >= 3.5（测试 AES-GCM）：`powershell -ExecutionPolicy Bypass -File .\tests\run-ssh-transport-tests.ps1 -Full`。它在回环地址运行临时服务器，不使用系统账号；会扣住一个 OPEN 的服务器确认，验证后续 OPEN 在同一 session 上先确认并传输数据。测试也验证成功、失败和取消后的会话释放，以及多层 SSH 链清理；完整测试还包含约三分钟的通道超时、失联及空闲复用等待。30 分钟回收边界、重新计时和时钟回绕由单元测试验证。
 
 ### 单独构建 Rust 组件
 

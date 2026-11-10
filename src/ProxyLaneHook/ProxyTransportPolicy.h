@@ -9,6 +9,9 @@ namespace ProxyTransportPolicy
 	{
 		info.strProxyType = TEXT("");
 		info.reserved = PROXY_TRANSPORT_PLAIN;
+        info.sshAuth = 0;
+        info.strSshKeyDigest.szbuf[0] = 0;
+        SecureZeroMemory(info.strSshKeyFile.szbuf, sizeof(info.strSshKeyFile.szbuf));
 		SecureZeroMemory(info.strTransportPsk.szbuf, sizeof(info.strTransportPsk.szbuf));
 	}
 

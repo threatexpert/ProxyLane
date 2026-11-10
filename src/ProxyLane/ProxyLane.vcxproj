@@ -341,6 +341,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     <ClInclude Include="ProxyController.h" />
     <ClInclude Include="ProxyProfileStore.h" />
     <ClInclude Include="SshProfile.h" />
+    <ClInclude Include="SshPrivateKey.h" />
+    <ClInclude Include="SshKeyStore.h" />
+    <ClInclude Include="SshAuthControls.h" />
     <ClInclude Include="PackagedAppSupport.h" />
     <ClInclude Include="InstalledApplications.h" />
     <ClInclude Include="ApplicationPicker.h" />

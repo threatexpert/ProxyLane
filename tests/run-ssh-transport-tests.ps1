@@ -28,11 +28,14 @@ cl /nologo /EHsc /O2 /DUNICODE /D_UNICODE tests\SshTransportTests.cpp /Fo:"$outp
     & $env:ComSpec /c $compile
     if ($LASTEXITCODE) { throw 'SSH test compilation failed' }
     Copy-Item -LiteralPath "bin/ProxyLaneHook$bits.dll", "bin/ProxyLaneSsh$bits.dll" -Destination $output
+    $env:PROXYLANE_TEST_MODERN_PORT = $ports.modern
+    $env:PROXYLANE_TEST_MODERN_FINGERPRINT = $ports.modern_fingerprint
     $arguments = @($ports.a, $ports.b, $ports.socks, $ports.http, $ports.echo, $ports.control, $ports.fingerprint)
     if ($Full) { $arguments += 'full' }
     & "$output/test.exe" @arguments
     if ($LASTEXITCODE) { throw 'SSH tests failed' }
 } finally {
+    Remove-Item Env:PROXYLANE_TEST_MODERN_PORT, Env:PROXYLANE_TEST_MODERN_FINGERPRINT -ErrorAction SilentlyContinue
     Pop-Location
     if (-not $fixture.HasExited) { Stop-Process -Id $fixture.Id }
 }

@@ -218,6 +218,11 @@ typedef struct _tagProxyInfo
 	// Protocol-specific transport parameter: TLS PSK, or SHA256 host-key pin
 	// for SSH. Reuses the existing field to keep the packed IPC ABI unchanged.
 	string<256> strTransportPsk;
+	// PRC-local suffix: never sent to injected processes. Keep the legacy
+	// 808-byte routing prefix on the pipe; authentication happens in PRC only.
+	DWORD sshAuth = 0; // 0 = password, 1 = managed private-key file
+	string<1024> strSshKeyFile; // UTF-8 absolute path; PRC-local only
+    string<65> strSshKeyDigest; // Snapshot identity used to isolate cached sessions
 /////////////////////
 
 #define PROXY_TRANSPORT_PLAIN             0
@@ -250,6 +255,9 @@ typedef struct _tagProxyInfo
 //////////////////
 
 }ProxyInfo, *LPProxyInfo;
+
+static const DWORD PROXYINFO_PIPE_SIZE = 808;
+static_assert(offsetof(ProxyInfo, sshAuth) == PROXYINFO_PIPE_SIZE, "ProxyInfo pipe prefix changed");
 
 #define PRC_PIPESERVER_NAME _T("{1237C887-49E0-4a29-8FFA-2B4220B5BC99}")
 

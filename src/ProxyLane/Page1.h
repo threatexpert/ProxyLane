@@ -7,6 +7,7 @@
 #include "ModernUI.h"
 #include "ProxyController.h"
 #include "ProxyProfileStore.h"
+#include "SshAuthControls.h"
 #include "RecentApplications.h"
 #include <afxmt.h>
 #include <vector>
@@ -36,6 +37,9 @@ public:
 	CSoftEdit     m_edit_Pass;
 	CSoftCombo m_cbTransport;
 	CSoftEdit     m_editTransportPsk;
+    CSshAuthControls m_sshAuth;
+    afx_msg void OnSshAuthChanged();
+    afx_msg void OnImportSshKey();
 	CModernButton m_OK;
 	CModernButton m_Cancel;
 	CModernButton m_btnSaveProfile;

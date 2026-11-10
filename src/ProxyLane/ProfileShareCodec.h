@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <set>
 #include <vector>
+#include "SshPrivateKey.h"
 
 // Portable wire format, independent of MFC, the INI file and running proxies.
 namespace ProfileShare
@@ -13,6 +14,8 @@ using Json = nlohmann::json;
 static const size_t MaxCodeBytes = 256 * 1024;
 static const size_t MaxJsonBytes = 192 * 1024;
 static const char Prefix[] = "proxylane://profile/v1/";
+static const char KeyPrefix[] = "proxylane://profile/v2/";
+inline bool UsesPrivateKey(const Json& value) { return value.value("ssh_auth", std::string("password")) == "private_key"; }
 
 struct Error : std::runtime_error
 {
@@ -40,6 +43,12 @@ inline void Validate(const Json& value)
     const std::string type = String(value, "type", 16);
     if (type != "NOPROXY" && type != "SOCKS5" && type != "HTTP" && type != "HTTP10" && type != "HTTP11" && type != "SSH")
         throw Error("share.invalid_type");
+    const std::string auth = value.contains("ssh_auth") ? String(value, "ssh_auth", 16) : "password";
+    if (auth != "password" && auth != "private_key") throw Error("share.invalid_fields");
+    if (auth == "private_key") {
+        if (type != "SSH" || !SshPrivateKey::Supported(String(value, "ssh_private_key", SshPrivateKey::Capacity-1, true)))
+            throw Error("ssh.key_format");
+    } else if (value.contains("ssh_private_key")) throw Error("share.invalid_fields");
     const std::string host = String(value, "host", 127);
     String(value, "user", 127);
     String(value, "password", 127);
@@ -113,7 +122,7 @@ inline std::string Encode(const Json& value)
     if (canonical["type"] == "HTTP10" || canonical["type"] == "HTTP11") canonical["type"] = "HTTP";
     const std::string json = canonical.dump(); // Also validates UTF-8.
     if (json.size() > MaxJsonBytes) throw Error("share.too_large");
-    std::string result = Prefix + Base64Url(json);
+    std::string result = std::string(UsesPrivateKey(value) ? KeyPrefix : Prefix) + Base64Url(json);
     if (result.size() > MaxCodeBytes) throw Error("share.too_large");
     return result;
 }
@@ -124,7 +133,8 @@ inline Json Decode(std::string code)
     const size_t first = code.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) throw Error("share.invalid_code");
     code = code.substr(first, code.find_last_not_of(" \t\r\n") - first + 1);
-    const std::string prefix = Prefix;
+    const bool keyVersion = code.compare(0, sizeof(KeyPrefix)-1, KeyPrefix) == 0;
+    const std::string prefix = keyVersion ? KeyPrefix : Prefix;
     if (code.compare(0, prefix.size(), prefix) != 0)
     {
         if (code.compare(0, 20, "proxylane://profile/v") == 0) throw Error("share.unsupported_version");
@@ -158,6 +168,8 @@ inline Json Decode(std::string code)
         return true;
     });
     Validate(value);
+    // A v1 reader cannot distinguish key authentication: never downgrade it.
+    if (UsesPrivateKey(value) != keyVersion) throw Error("share.unsupported_version");
     if (value["type"] == "HTTP10" || value["type"] == "HTTP11") value["type"] = "HTTP";
     return value;
 }

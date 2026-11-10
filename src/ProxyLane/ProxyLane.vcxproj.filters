@@ -146,6 +146,9 @@
     <ClInclude Include="ProxyTestResultDialog.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="SshAuthControls.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="SshKeyStore.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="SshPrivateKey.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="ChainNodeEditDialog.h">
         <Filter>Header Files</Filter>
       </ClInclude>

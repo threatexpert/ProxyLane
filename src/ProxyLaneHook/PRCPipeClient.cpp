@@ -370,10 +370,11 @@ BOOL CPRCPipeClient::PRCGetProxyInfo(LPPRCClient lpClientInfo, LPProxyInfo lpPI)
 	if(!ReadPipe(&hdr, sizeof(hdr)))
 		return FALSE;
 
-	if(hdr.action != PRCPD_REPLY || !hdr.flag || hdr.dataSize != sizeof(*lpPI))
+	if(hdr.action != PRCPD_REPLY || !hdr.flag || hdr.dataSize != PROXYINFO_PIPE_SIZE)
 		return FALSE;
 
-	if(!ReadPipe(lpPI, sizeof(*lpPI)))
+	ZeroMemory(lpPI, sizeof(*lpPI));
+	if(!ReadPipe(lpPI, PROXYINFO_PIPE_SIZE))
 		return FALSE;
 
 	return TRUE;

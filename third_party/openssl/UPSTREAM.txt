@@ -1,0 +1,23 @@
+OpenSSL 3.5.9 (Apache-2.0), https://openssl-library.org/
+Precompiled package: openssl-native 3.5.9, maintained by vrogier (third party)
+Package: https://www.nuget.org/packages/openssl-native/3.5.9
+Build scripts: https://github.com/vrogier/openssl-native
+Upstream source commit: 45e844fa2a14ec92d146bd8f5778ac130b6625fb
+The exact download URL and SHA256 are pinned in dependency.json.
+The package's NuGet.org repository signature was verified with
+  dotnet nuget verify openssl-native.3.5.9.nupkg --all
+before pinning. Signer certificate SHA256:
+  1F4B311D9ACC115C8DC8018B5A49E00FCE6DA8E2855F9F014CA6F34570BC482D
+This is a repository signature, not a claim of reproducible builds or an
+OpenSSL/Microsoft audit of the third-party binaries. Recheck source provenance,
+signature and SSH authentication tests before changing the pinned package.
+
+scripts/prepare-openssl.ps1 downloads and verifies this exact package and
+extracts only headers, libcrypto_static_v142.lib (x64 / Release / MT), and the
+license. No OpenSSL build, Perl, NASM, NuGet account or .NET SDK is required by
+consumers. Offline builds can place the same .nupkg in build/deps first.
+Archive validation on each invocation protects the pinned download; per-cache
+locking, unique staging paths and atomic publication protect concurrent restores.
+NuGet package build scripts/targets are not executed or imported.
+The original docs/license.txt is preserved here as LICENSE.txt and included by
+scripts/package-release.ps1. libssl, openssl.exe and runtime DLLs are not shipped.

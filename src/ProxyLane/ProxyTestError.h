@@ -20,6 +20,8 @@ inline CString ProxyTestErrorDescription(int error, BOOL direct)
 	case PROXYERROR_CANTRESOLVEHOST: key = _T("test.resolve_failed"); break;
 	case PROXYERROR_SECURE_UNAVAILABLE: key = _T("test.secure_unavailable"); break;
 	case PROXYERROR_SECURE_HANDSHAKE: key = _T("test.secure_handshake_failed"); break;
+	case PROXYERROR_SSH_KEY_FILE: key = _T("test.ssh_key_file_failed"); break;
+	case PROXYERROR_SSH_KEY_AUTHFAILED: key = _T("test.ssh_key_auth_failed"); break;
 	case PROXYERROR_SSH_UNAVAILABLE: key = _T("test.ssh_unavailable"); break;
 	case PROXYERROR_SSH_HOSTKEY_UNKNOWN: key = _T("test.ssh_unknown_key"); break;
 	case PROXYERROR_SSH_HOSTKEY_CHANGED: key = _T("test.ssh_changed_key"); break;

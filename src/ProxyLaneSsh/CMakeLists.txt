@@ -1,13 +1,25 @@
 cmake_minimum_required(VERSION 3.15)
 project(ProxyLaneSsh C)
 set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
-set(CRYPTO_BACKEND WinCNG CACHE STRING "" FORCE)
+set(CRYPTO_BACKEND OpenSSL CACHE STRING "" FORCE)
+set(OPENSSL_USE_STATIC_LIBS TRUE)
+set(OPENSSL_MSVC_STATIC_RT TRUE)
+if(NOT PROXYLANE_OPENSSL_ROOT OR NOT PROXYLANE_OPENSSL_VERSION)
+  message(FATAL_ERROR "Run scripts/build-ssh.ps1 to prepare the pinned OpenSSL dependency")
+endif()
+set(OPENSSL_INCLUDE_DIR "${PROXYLANE_OPENSSL_ROOT}/include" CACHE PATH "" FORCE)
+set(OPENSSL_ROOT_DIR "${PROXYLANE_OPENSSL_ROOT}")
+# FindOpenSSL uses LIB_EAY_RELEASE on MSVC, including for OpenSSL 3.x.
+set(LIB_EAY_RELEASE "${PROXYLANE_OPENSSL_ROOT}/lib/win-x64/native/libcrypto_static_v142.lib" CACHE FILEPATH "" FORCE)
+find_package(OpenSSL "${PROXYLANE_OPENSSL_VERSION}" EXACT REQUIRED COMPONENTS Crypto)
+# The pinned library has no zlib dependency. Do not pick up a developer's
+# unrelated global installation through libssh2's optional package search.
+set(CMAKE_DISABLE_FIND_PACKAGE_ZLIB TRUE)
 set(BUILD_STATIC_LIBS OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(ENABLE_ZLIB_COMPRESSION OFF CACHE BOOL "" FORCE)
-set(ENABLE_ECDSA_WINCNG ON CACHE BOOL "" FORCE)
 # This backend is intentionally x64 / Windows 10+; legacy protocols do not
 # depend on it. Static CRT avoids an additional redistributable requirement.
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)

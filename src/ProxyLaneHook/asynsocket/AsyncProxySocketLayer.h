@@ -360,6 +360,8 @@ private:
 #define PROXYERROR_SSH_UNAVAILABLE       24
 #define PROXYERROR_SSH_HOSTKEY_UNKNOWN   25
 #define PROXYERROR_SSH_HOSTKEY_CHANGED   26
+#define PROXYERROR_SSH_KEY_AUTHFAILED 27
+#define PROXYERROR_SSH_KEY_FILE 28
 
 //Status messages
 #define PROXYSTATUS_LISTENSOCKETCREATED 8	//Called when a listen socket was created successfully. Unlike the normal listen function,

@@ -710,10 +710,11 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 					// PSK inside the PRC process even though it is stored in the INI.
 					SecureZeroMemory(pi.strTransportPsk.szbuf,
 						sizeof(pi.strTransportPsk.szbuf));
-					hdr.dataSize = sizeof(pi);
+					if (pi.sshAuth) SecureZeroMemory(pi.strProxyPass.szbuf, sizeof(pi.strProxyPass.szbuf));
+					hdr.dataSize = PROXYINFO_PIPE_SIZE;
 					if (! WritePipe(hPipe, &hdr, sizeof(hdr)))
 						goto SEC_ERROR;
-					if (! WritePipe(hPipe, &pi, sizeof(pi)))
+					if (! WritePipe(hPipe, &pi, PROXYINFO_PIPE_SIZE))
 						goto SEC_ERROR;
 				}else
 				{

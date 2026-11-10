@@ -733,7 +733,7 @@ PROXYERROR_CANTRESOLVEHOST 7
 				nCode == PROXYERROR_AUTHFAILED || nCode == PROXYERROR_AUTHREQUIRED ||
 				nCode == PROXYERROR_AUTHTYPEUNKNOWN || nCode == PROXYERROR_AUTHNOLOGON ||
                 nCode == PROXYERROR_SSH_UNAVAILABLE || nCode == PROXYERROR_SSH_HOSTKEY_UNKNOWN ||
-                nCode == PROXYERROR_SSH_HOSTKEY_CHANGED) &&
+                nCode == PROXYERROR_SSH_HOSTKEY_CHANGED || nCode == PROXYERROR_SSH_KEY_AUTHFAILED || nCode == PROXYERROR_SSH_KEY_FILE) &&
 				!m_chainFailureLogged)
 			{
 				m_chainFailureLogged = TRUE;
@@ -742,6 +742,8 @@ PROXYERROR_CANTRESOLVEHOST 7
 				detail.Format("hop %d of %d (%s:%d)", hop + 1, m_pChain->Count(),
 					failed.strProxyHost.szbuf, failed.nProxyPort);
                 if (nCode == PROXYERROR_SSH_HOSTKEY_UNKNOWN) detail += ": SSH host key is untrusted; test the profile to verify it";
+                else if (nCode == PROXYERROR_SSH_KEY_FILE) detail += ": SSH private key file unavailable or invalid";
+                else if (nCode == PROXYERROR_SSH_KEY_AUTHFAILED) detail += ": SSH private key authentication failed";
                 else if (nCode == PROXYERROR_SSH_HOSTKEY_CHANGED) detail += ": SSH host key changed; connection rejected";
                 else if (nCode == PROXYERROR_SSH_UNAVAILABLE) detail += ": SSH backend requires Windows 10+ x64 and ProxyLaneSsh64.dll";
 				else if ((nCode == PROXYERROR_REQUESTFAILED || (nCode == PROXYERROR_NOCONN && m_pChain->HasSsh())) && lParam)
@@ -771,6 +773,7 @@ PROXYERROR_CANTRESOLVEHOST 7
 			case PROXYERROR_AUTHTYPEUNKNOWN:
 				PrintText(_T("Proxy Error: Authentication type unknown or not supported.\r\n"));
 				break;
+			case PROXYERROR_SSH_KEY_AUTHFAILED:
 			case PROXYERROR_AUTHFAILED:
 				PrintText(_T("Proxy Error: Authentication failed.\r\n"));
 				break;

@@ -1,5 +1,8 @@
-"""Loopback-only real SSH/SOCKS5/CONNECT fixtures. No system sshd or accounts."""
+"""Loopback SSH/SOCKS5/CONNECT fixtures; Paramiko >=3.5 for AES-GCM. No system accounts."""
 import base64
+import io
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 import hashlib
 import json
 import select
@@ -7,11 +10,12 @@ import socket
 import threading
 import sys
 import time
+from pathlib import Path
 import paramiko
 
 lock = threading.Lock()
 stats = {"auth_a": 0, "auth_b": 0, "channels_a": 0, "channels_b": 0,
-         "keepalive": 0, "socks": 0, "http": 0, "open_held": 0,
+         "key_auth_a": 0, "key_auth_b": 0, "keepalive": 0, "socks": 0, "http": 0, "open_held": 0,
          "open_peak": 0, "fast_while_held": 0, "late_close": 0}
 open_gate = threading.Event()
 open_gate.set()
@@ -102,13 +106,36 @@ def http(s):
     s.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
     bridge(s,target)
 
+client_key = paramiko.RSAKey.generate(2048)
+key_folder = Path(sys.argv[1]).resolve().parent
+client_key.write_private_key_file(str(key_folder / 'client-key.pem'))
+client_key.write_private_key_file(str(key_folder / 'client-key-encrypted.pem'), password='key-passphrase')
+# Exercise real keys in each supported container, including encrypted variants.
+authorized_keys = [client_key]
+for algorithm, crypto_key in [('rsa', client_key.key), ('ecdsa', ec.generate_private_key(ec.SECP256R1())), ('ed25519', ed25519.Ed25519PrivateKey.generate())]:
+    openssh = crypto_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH, serialization.NoEncryption())
+    reader = {'rsa': paramiko.RSAKey, 'ecdsa': paramiko.ECDSAKey, 'ed25519': paramiko.Ed25519Key}[algorithm]
+    public_key = reader.from_private_key(io.StringIO(openssh.decode()))
+    authorized_keys.append(public_key)
+    if algorithm == 'ed25519': modern_host_key = public_key
+    formats = [('openssh', serialization.PrivateFormat.OpenSSH), ('pkcs8', serialization.PrivateFormat.PKCS8)]
+    if algorithm == 'ecdsa': formats.append(('pem', serialization.PrivateFormat.TraditionalOpenSSL))
+    for label, fmt in formats:
+        for encrypted in (False, True):
+            encryption = serialization.BestAvailableEncryption(b'key-passphrase') if encrypted else serialization.NoEncryption()
+            name = f'{algorithm}-{label}' + ('-encrypted' if encrypted else '') + '.pem'
+            (key_folder / name).write_bytes(crypto_key.private_bytes(serialization.Encoding.PEM, fmt, encryption))
+modern_fingerprint = 'SHA256:' + base64.b64encode(hashlib.sha256(modern_host_key.asbytes()).digest()).decode().rstrip('=')
 key = paramiko.RSAKey.generate(2048)
 fingerprint = 'SHA256:' + base64.b64encode(hashlib.sha256(key.asbytes()).digest()).decode().rstrip('=')
 
 class SshServer(paramiko.ServerInterface):
     def __init__(self, name):
         self.name = name; self.destinations = {}
-    def get_allowed_auths(self, username): return 'password'
+    def get_allowed_auths(self, username): return 'password,publickey'
+    def check_auth_publickey(self, username, offered):
+        count('key_auth_' + self.name)
+        return paramiko.AUTH_SUCCESSFUL if username == 'key-user' and offered in authorized_keys else paramiko.AUTH_FAILED
     def check_auth_password(self, username, password):
         count('auth_' + self.name)
         return paramiko.AUTH_SUCCESSFUL if (username,password) == ('test-user','test-password') else paramiko.AUTH_FAILED
@@ -123,14 +150,24 @@ class SshServer(paramiko.ServerInterface):
         if kind == 'keepalive@libssh2.org': count('keepalive')
         return False  # REQUEST_FAILURE is a valid keepalive response.
 
-def ssh(s, name):
+def ssh(s, name, modern=False):
     server = SshServer(name)
     transport = paramiko.Transport(s)
-    transport.add_server_key(key)
+    if modern:
+        options = transport.get_security_options()
+        options.kex = ('curve25519-sha256@libssh.org',)
+        options.ciphers = ('aes256-gcm@openssh.com',)
+        transport.add_server_key(modern_host_key)
+    else:
+        transport.add_server_key(key)
     with lock: transports.append(transport)
+    def dispatch(handler, message):
+        if getattr(handler, '__self__', None) is not None: handler(message)
+        else: handler(transport, message)
     original_global = transport._handler_table[80]
-    def global_request(instance, message):
-        if reply_keepalive: original_global(instance, message)
+    def global_request(*args):
+        message = args[-1]
+        if reply_keepalive: dispatch(original_global, message)
         else: count('keepalive')
     # Per-instance table, do not change Paramiko's class dispatch table.
     transport._handler_table = dict(transport._handler_table)
@@ -140,7 +177,8 @@ def ssh(s, name):
     held_ids = set()
     held_local_ids = set()
     local_pending = set()
-    def channel_open(instance, message):
+    def channel_open(*args):
+        message = args[-1]
         # Inspect a copy; retain the original cursor for Paramiko's parser.
         probe = paramiko.Message(message.asbytes())
         kind = probe.get_text(); remote_id = probe.get_int()
@@ -148,7 +186,7 @@ def ssh(s, name):
         host = probe.get_text() if kind == 'direct-tcpip' else ''
         if host in ('hold-open.test', 'hold-fail.test'):
             held_ids.add(remote_id)
-        original_open(instance, message)
+        dispatch(original_open, message)
     def send_message(message):
         wire = message.asbytes()
         if wire[0] in (91, 92):
@@ -219,6 +257,7 @@ def control(s):
 
 configuration = {'a': listen(lambda s: ssh(s,'a')), 'b': listen(lambda s: ssh(s,'b')),
                  'socks': listen(socks), 'http': listen(http), 'echo': listen(echo),
-                 'control': listen(control), 'fingerprint': fingerprint}
+                 'control': listen(control), 'fingerprint': fingerprint,
+                 'modern': listen(lambda s: ssh(s, 'a', modern=True)), 'modern_fingerprint': modern_fingerprint}
 with open(sys.argv[1], 'w') as output: json.dump(configuration, output)
 threading.Event().wait()

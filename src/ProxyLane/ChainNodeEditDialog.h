@@ -4,6 +4,7 @@
 #include "ProxyProfileStore.h"
 #include "ConfigStorage.h"
 #include "SshProfile.h"
+#include "SshAuthControls.h"
 #include "resource.h"
 #include "ProxyTestResultDialog.h"
 #include "ProxyTestError.h"
@@ -46,6 +47,9 @@ protected:
         m_save.Create(Localization::Get(L"common.save_profile"), child | WS_TABSTOP | BS_OWNERDRAW, empty, this, IDOK);
         m_save.SetVisualStyle(CModernButton::STYLE_PRIMARY);
         m_cancel.Create(Localization::Get(L"apps.cancel"), child | WS_TABSTOP | BS_OWNERDRAW, empty, this, IDCANCEL);
+        m_sshAuth.Create(this, &m_uiFont);
+        m_sshAuth.OrderAfter(&m_port);
+        m_sshAuth.Load(&m_item.pi);
         UiTheme::ApplyFontToChildren(this, &m_uiFont);
 
         const int type = m_item.pi.GetProxyType();
@@ -65,16 +69,27 @@ protected:
     }
     BOOL UsesSecondaryText(UINT id) const override
     {
-        return id == 1320 || (id >= 1311 && id <= 1317) || CModernDialog::UsesSecondaryText(id);
+        return id == CSshAuthControls::LabelId || id == CSshAuthControls::KeyLabelId || id == 1320 || (id >= 1311 && id <= 1317) || CModernDialog::UsesSecondaryText(id);
     }
     BOOL OnCommand(WPARAM wParam, LPARAM lParam) override
     {
         if (LOWORD(wParam) == 1309 && HIWORD(wParam) == BN_CLICKED) { TestConnection(); return TRUE; }
+        if (m_testing && LOWORD(wParam) == CSshAuthControls::ImportId) return TRUE;
         if (m_testing && (HIWORD(wParam) == CBN_SELCHANGE || HIWORD(wParam) == EN_CHANGE)) return TRUE;
+        if (m_ready && LOWORD(wParam) == CSshAuthControls::ImportId && HIWORD(wParam) == BN_CLICKED) {
+            if (m_sshAuth.Import()) { m_error.ShowWindow(SW_HIDE); } return TRUE;
+        }
+        if (m_ready && LOWORD(wParam) == CSshAuthControls::AuthId && HIWORD(wParam) == CBN_SELCHANGE) {
+            m_password.SetWindowText(L""); UpdateFields(); return TRUE;
+        }
         if (m_ready && HIWORD(wParam) == CBN_SELCHANGE && (LOWORD(wParam) == 1301 || LOWORD(wParam) == 1302))
         {
             const bool ssh = m_type.GetCurSel() == 2;
-            if (ssh != m_ssh) m_key.SetWindowText(L""); // A PSK is never an SSH host-key pin.
+            if (ssh != m_ssh) {
+                m_key.SetWindowText(L"");
+                if (m_sshAuth.IsKey()) m_password.SetWindowText(L"");
+                m_sshAuth.Load(NULL);
+            } // A PSK is never an SSH host-key pin.
             m_ssh = ssh;
             UpdateFields();
             m_error.SetStatus(L"", CStatusLabel::TONE_NEUTRAL);
@@ -110,6 +125,7 @@ protected:
         if (m_ssh)
         {
             key.Trim();
+            if (!m_sshAuth.Apply(edited.pi)) { Invalid(L"ssh.key_required", *GetDlgItem(CSshAuthControls::ImportId)); return false; }
             if (user.IsEmpty() || !SshProfile::Encode(user, edited.pi.strProxyUser.szbuf))
             { Invalid(L"profile.ssh_invalid", m_user); return false; }
             if (!SshProfile::Encode(password, edited.pi.strProxyPass.szbuf))
@@ -123,6 +139,7 @@ protected:
             if (CStringA(password).GetLength() >= (int)sizeof(edited.pi.strProxyPass.szbuf))
             { Invalid(L"chain.edit.field_too_long", m_password); return false; }
             edited.pi.strProxyUser = user; edited.pi.strProxyPass = password;
+            edited.pi.sshAuth = 0; SecureZeroMemory(edited.pi.strSshKeyFile.szbuf, sizeof(edited.pi.strSshKeyFile.szbuf));
         }
         if (edited.nTransportMode == PROXY_TRANSPORT_GONC_TLS_PSK)
         {
@@ -171,6 +188,8 @@ private:
     void UpdateFields()
     {
         if (m_ssh) m_transport.SetCurSel(0);
+        m_sshAuth.Show(m_ssh);
+        m_labels[5].SetWindowText(Localization::Get(m_ssh && m_sshAuth.IsKey() ? L"ssh.passphrase" : L"common.password"));
         m_transport.EnableWindow(!m_ssh && ProxySupportsOptionalModules());
         m_showKey = m_ssh || m_transport.GetCurSel() == 1;
         m_key.ShowWindow(m_showKey ? SW_SHOW : SW_HIDE);
@@ -185,7 +204,7 @@ private:
             SystemParametersInfo(SPI_GETWORKAREA, 0, &monitor.rcWork, 0);
         const CRect work(monitor.rcWork);
         const int width = min(S(460) + frame.Width(), work.Width() - S(24));
-        const int height = S(m_showKey ? 346 : 290) + frame.Height();
+        const int height = S((m_showKey ? 346 : 290) + (m_ssh ? 56 : 0)) + frame.Height();
         SetWindowPos(NULL, max(work.left, min(owner.CenterPoint().x-width/2, work.right-width)),
             max(work.top, min(owner.CenterPoint().y-height/2, work.bottom-height)), width, height, SWP_NOZORDER);
         Layout();
@@ -203,9 +222,11 @@ private:
         field(1, m_transport, left+half+gap, S(54), half, true);
         field(2, m_host, left, S(110), width-S(96)-gap);
         field(3, m_port, area.right-left-S(96), S(110), S(96));
-        field(4, m_user, left, S(166), half);
-        field(5, m_password, left+half+gap, S(166), half);
-        if (m_showKey) field(6, m_key, left, S(222), width);
+        if (m_ssh) m_sshAuth.Layout(left, S(166), width, gap, S(18), S(28));
+        const int shift = m_ssh ? 56 : 0;
+        field(4, m_user, left, S(166+shift), half);
+        field(5, m_password, left+half+gap, S(166+shift), half);
+        if (m_showKey) field(6, m_key, left, S(222+shift), width);
         const int bottom = area.bottom-S(12)-S(30);
         m_error.MoveWindow(left, bottom-S(28), width, S(24));
         m_test.MoveWindow(area.right-left-S(80)-2*gap-S(100)-S(112), bottom, S(112), S(30));
@@ -214,6 +235,7 @@ private:
     }
     void TestControls(bool running)
     {
+        m_sshAuth.Enable(!running);
         for (UINT id = 1301; id <= 1307; ++id) GetDlgItem(id)->EnableWindow(!running);
         if (!running) m_transport.EnableWindow(!m_ssh && ProxySupportsOptionalModules());
         m_save.EnableWindow(!running);
@@ -369,6 +391,7 @@ private:
     CIniFile& m_ini;
     CfgProxyItem m_item;
     bool m_ready = false, m_ssh = false, m_showKey = false;
+    CSshAuthControls m_sshAuth;
     CSoftCombo m_type, m_transport;
     CSoftEdit m_host, m_port, m_user, m_password, m_key;
     CStatic m_labels[7], m_notice;

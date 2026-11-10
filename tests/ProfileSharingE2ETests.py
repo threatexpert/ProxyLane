@@ -103,8 +103,9 @@ def check_menu(page, pid, locale, can_delete, directory=None):
         USER.GetMenuItemID.argtypes = [wintypes.HMENU, ctypes.c_int]
         USER.GetMenuState.argtypes = [wintypes.HMENU, wintypes.UINT, wintypes.UINT]
         USER.GetMenuStringW.argtypes = [wintypes.HMENU, wintypes.UINT, wintypes.LPWSTR, ctypes.c_int, wintypes.UINT]
-        assert USER.GetMenuItemCount(menu) == 4
-        for index, command_id, key in ((0, 1129, 'share.copy'), (1, 1130, 'share.paste'), (3, 1023, 'profile.delete_action')):
+        assert USER.GetMenuItemCount(menu) == 7
+        for index, command_id, key in ((0, 0x2401, 'profile.new'), (1, 0x240b, 'profile.new_chain'),
+                                       (3, 1129, 'share.copy'), (4, 1130, 'share.paste'), (6, 1023, 'profile.delete_action')):
             assert USER.GetMenuItemID(menu, index) == command_id
             label = ctypes.create_unicode_buffer(128)
             USER.GetMenuStringW(menu, index, label, len(label), 0x400)
@@ -318,9 +319,15 @@ TargetFilterMode=0
         minimum_width = 674 if language == 'en-US' else 640
         assert USER.SetWindowPos(main, None, 0, 0, minimum_width * dpi // 96, 488 * dpi // 96, 0x16)
         outer = window_rect(main)
-        for control in (1132, 1052, 1066):
+        for control in (1132, 1052):
             child = window_rect(USER.GetDlgItem(page, control))
             assert child[0] >= outer[0] and child[1] >= outer[1] and child[2] <= outer[2] and child[3] <= outer[3], (control, child, outer)
+        # Lower options belong to the scrollable page; they need to be reachable,
+        # not simultaneously visible in the minimum-size viewport.
+        USER.SendMessageW(page, 0x115, 7, 0)  # WM_VSCROLL / SB_BOTTOM
+        child = window_rect(USER.GetDlgItem(page, 1066))
+        assert child[0] >= outer[0] and child[1] >= outer[1] and child[2] <= outer[2] and child[3] <= outer[3], (1066, child, outer)
+        USER.SendMessageW(page, 0x115, 6, 0)  # SB_TOP
         USER.RedrawWindow.argtypes = [wintypes.HWND, ctypes.c_void_p, wintypes.HRGN, wintypes.UINT]
         USER.RedrawWindow(main, None, None, 0x185)
         capture_dialog(main, directory / 'minimum-window.png')

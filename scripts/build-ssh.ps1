@@ -9,7 +9,9 @@ $patch = Join-Path $repo 'third_party/libssh2/concurrent-channel-open.patch'
 $patchHash = (Get-FileHash -LiteralPath $patch -Algorithm SHA256).Hash.ToLowerInvariant()
 $source = Join-Path $deps "libssh2-1.11.1-$($patchHash.Substring(0,16))"
 $archive = Join-Path $deps 'libssh2-1.11.1.tar.gz'
-$build = Join-Path $deps "libssh2-$Platform-$($patchHash.Substring(0,16))"
+$opensslSpec = Get-Content -LiteralPath (Join-Path $repo 'third_party/openssl/dependency.json') -Raw | ConvertFrom-Json
+$openssl = & (Join-Path $PSScriptRoot 'prepare-openssl.ps1')
+$build = Join-Path $deps "libssh2-$Platform-$($patchHash.Substring(0,16))-openssl-$($opensslSpec.version)-$($opensslSpec.sha256.Substring(0,16))"
 New-Item -ItemType Directory -Force -Path $deps | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $repo 'bin') | Out-Null
 if (-not (Test-Path -LiteralPath "$source/.proxylane-patched")) {
@@ -32,7 +34,7 @@ if (-not (Test-Path -LiteralPath "$source/.proxylane-patched")) {
     if ($LASTEXITCODE) { throw 'libssh2 patch application failed' }
     Set-Content -LiteralPath "$source/.proxylane-patched" -Value $patchHash -Encoding ASCII
 }
-& cmake -S (Join-Path $repo 'src/ProxyLaneSsh') -B "$build-wrapper" -G 'Visual Studio 16 2019' -A $Platform "-DLIBSSH2_SOURCE=$source"
+& cmake -S (Join-Path $repo 'src/ProxyLaneSsh') -B "$build-wrapper" -G 'Visual Studio 16 2019' -A $Platform "-DLIBSSH2_SOURCE=$source" "-DPROXYLANE_OPENSSL_ROOT=$openssl" "-DPROXYLANE_OPENSSL_VERSION=$($opensslSpec.version)"
 if ($LASTEXITCODE) { throw 'libssh2 configuration failed' }
 & cmake --build "$build-wrapper" --config Release --parallel
 if ($LASTEXITCODE) { throw 'libssh2 build failed' }
@@ -44,4 +46,4 @@ Copy-Item -LiteralPath $dll.FullName -Destination (Join-Path $repo "bin/ProxyLan
 # Mark the successful build outputs current so MSBuild does not run us again.
 $now = Get-Date
 (Get-Item -LiteralPath (Join-Path $repo "bin/ProxyLaneSsh$bits.dll")).LastWriteTime = $now
-Set-Content -LiteralPath (Join-Path $deps 'ssh-backend.stamp') -Value "libssh2 1.11.1 + $patchHash, x64, WinCNG" -Encoding ASCII
+Set-Content -LiteralPath (Join-Path $deps 'ssh-backend.stamp') -Value "libssh2 1.11.1 + $patchHash, x64, OpenSSL $($opensslSpec.version) static v142 MT, $($opensslSpec.sha256)" -Encoding ASCII

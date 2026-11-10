@@ -1,4 +1,4 @@
-// Real SSH loopback integration against ssh_test_servers.py: multiplexing,
+﻿// Real SSH loopback integration against ssh_test_servers.py: multiplexing,
 // mixed routes, host trust, flow control, keepalive and demand reconnection.
 #define WIN32_LEAN_AND_MEAN
 #define _WIN32_WINNT 0x0600
@@ -13,6 +13,8 @@
 #include <vector>
 #include <memory>
 #include <algorithm>
+#include <fstream>
+#include <iterator>
 #include "../src/ProxyLaneHook/ProxyModule.h"
 
 static void Check(bool ok, const char* message)
@@ -298,11 +300,105 @@ int main(int argc, char** argv)
         ProxyInfo hop = Hop(L"SSH", port, L"test-user", L"test-password");
         strcpy_s(hop.strTransportPsk.szbuf, argv[7]); return hop;
     };
+    auto privateKey = [&](WORD port, bool encrypted = false) {
+        ProxyInfo hop = ssh(port); hop.sshAuth = 1; hop.strProxyUser = L"key-user";
+        hop.strProxyPass = encrypted ? L"key-passphrase" : L"";
+        char module[MAX_PATH]; GetModuleFileNameA(NULL,module,MAX_PATH);
+        std::string file = module; file.erase(file.find_last_of("\\/")+1);
+        file += encrypted ? "client-key-encrypted.pem" : "client-key.pem";
+        strcpy_s(hop.strSshKeyFile.szbuf,file.c_str()); return hop;
+    };
     Settings settings; Log log;
     settings.chain = { ssh(a) };
     IGlobalProxy* proxy = GetGlobalProxyInstance(); Check(proxy != NULL, "global proxy");
     proxy->GetSettingsInstance()->AddInstance(&settings); proxy->GetLogInstance()->AddInstance(&log);
     Check(proxy->EnableProxy() != FALSE, "enable proxy");
+    for (bool encrypted : {false,true}) {
+        TestResult result = Test(proxy,{privateKey(a,encrypted)},target);
+        Pass(result.code == 0 && WaitSessions(0), encrypted ? "encrypted RSA PEM authentication" : "RSA PEM authentication");
+    }
+    auto modernKey = [&](const char* name, bool encrypted) {
+        ProxyInfo hop = privateKey(a, encrypted);
+        std::string path = hop.strSshKeyFile.szbuf; path.erase(path.find_last_of("\\/")+1);
+        path += name; strcpy_s(hop.strSshKeyFile.szbuf, path.c_str()); return hop;
+    };
+    for (const char* kind : {"rsa-openssh", "rsa-pkcs8", "ecdsa-openssh", "ecdsa-pkcs8", "ecdsa-pem", "ed25519-openssh", "ed25519-pkcs8"}) {
+        for (bool encrypted : {false, true}) {
+            std::string name = std::string(kind) + (encrypted ? "-encrypted" : "") + ".pem";
+            ProxyInfo hop = modernKey(name.c_str(), encrypted);
+            TestResult result = Test(proxy,{hop},target);
+            if (result.code) printf("Key format diagnostic: %s code %d, %s\n",name.c_str(),result.code,result.detail.c_str());
+            Pass(result.code == 0 && WaitSessions(0), name.c_str());
+            if (encrypted) {
+                hop.strProxyPass = L"wrong-passphrase";
+                Pass(Test(proxy,{hop},target).code == PROXYERROR_SSH_KEY_AUTHFAILED && WaitSessions(0), "modern key rejects wrong passphrase");
+            }
+        }
+    }
+    {
+        ProxyInfo unicode = modernKey("ed25519-openssh-encrypted.pem",true);
+        const std::string source = unicode.strSshKeyFile.szbuf;
+        const std::string destination = source + u8".\u5bc6\u94a5\U0001f511";
+        auto wide = [](const std::string& value) {
+            std::wstring result(MultiByteToWideChar(CP_UTF8,0,value.c_str(),-1,NULL,0), L'\0');
+            MultiByteToWideChar(CP_UTF8,0,value.c_str(),-1,&result[0],static_cast<int>(result.size()));
+            return result;
+        };
+        Check(CopyFileW(wide(source).c_str(),wide(destination).c_str(),TRUE) != FALSE, "Unicode key fixture");
+        strcpy_s(unicode.strSshKeyFile.szbuf,destination.c_str());
+        const auto result = Test(proxy,{unicode},target);
+        const bool released = WaitSessions(0);
+        Check(DeleteFileW(wide(destination).c_str()) != FALSE, "remove Unicode fixture");
+        Pass(result.code == 0 && released, "encrypted Ed25519 key at a Unicode / emoji path");
+    }
+    if (const char* port = getenv("PROXYLANE_TEST_MODERN_PORT")) {
+        ProxyInfo modern = ssh(static_cast<WORD>(atoi(port)));
+        strcpy_s(modern.strTransportPsk.szbuf, getenv("PROXYLANE_TEST_MODERN_FINGERPRINT"));
+        Pass(Test(proxy,{modern},target).code == 0 && WaitSessions(0), "password login with Ed25519-only host key, Curve25519-only KEX and AES-GCM-only cipher");
+        ProxyInfo keyed = modernKey("ed25519-openssh-encrypted.pem",true);
+        keyed.nProxyPort = modern.nProxyPort;
+        strcpy_s(keyed.strTransportPsk.szbuf, modern.strTransportPsk.szbuf);
+        Pass(Test(proxy,{Hop(L"SOCKS5",socks),keyed,ssh(b)},target).code == 0 && WaitSessions(0), "SOCKS5 / modern Ed25519 SSH / RSA-host SSH chain");
+    }
+    auto readKey = [](const char* path) {
+        std::ifstream stream(path,std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(stream)),std::istreambuf_iterator<char>());
+    };
+    auto fileVariant = [&](const std::string& data, const char* suffix) {
+        ProxyInfo hop = privateKey(a,true);
+        std::string path = std::string(hop.strSshKeyFile.szbuf) + suffix;
+        std::ofstream stream(path,std::ios::binary|std::ios::trunc); stream << data; stream.close();
+        strcpy_s(hop.strSshKeyFile.szbuf,path.c_str()); return hop;
+    };
+    const std::string encryptedPem = readKey(privateKey(a,true).strSshKeyFile.szbuf);
+    std::string crlf;
+    for (char c : encryptedPem) { if (c == '\r') continue; if (c == '\n') crlf += '\r'; crlf += c; }
+    TestResult crlfResult = Test(proxy,{fileVariant(crlf,".crlf")},target);
+    if (crlfResult.code) printf("CRLF diagnostic: code %d, %s\n",crlfResult.code,crlfResult.detail.c_str());
+    Pass(crlfResult.code == 0 && WaitSessions(0), "encrypted PEM with CRLF authentication");
+    for (int kind=0; kind<4; ++kind) {
+        std::string broken = encryptedPem;
+        if (kind == 0) broken.erase(broken.find("-----END"));
+        if (kind == 1) broken.replace(broken.find("DEK-Info:"), broken.find('\n',broken.find("DEK-Info:"))-broken.find("DEK-Info:"), "DEK-Info: AES-256-CBC,00");
+        if (kind == 2) broken = "-----BEGIN RSA PRIVATE KEY-----\nA\n-----END RSA PRIVATE KEY-----\n";
+        if (kind == 3) broken = "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-256-CBC,00112233445566778899AABBCCDDEEFF\n\nAAAA\n-----END RSA PRIVATE KEY-----\n";
+        const int code = Test(proxy,{fileVariant(broken,".malformed")},target).code;
+        Pass((code == PROXYERROR_SSH_KEY_FILE || code == PROXYERROR_SSH_KEY_AUTHFAILED) && WaitSessions(0), "malformed key file fails without hanging or retaining sessions");
+    }
+    ProxyInfo invalidKey = privateKey(a,true); invalidKey.strProxyPass = L"wrong-passphrase";
+    int passwordAttempts = Stat("auth_a");
+    Pass(Test(proxy,{invalidKey},target).code == PROXYERROR_SSH_KEY_AUTHFAILED && WaitSessions(0), "wrong private-key passphrase fails explicitly");
+    invalidKey = privateKey(a); invalidKey.strSshKeyFile = L"";
+    Pass(Test(proxy,{invalidKey},target).code == PROXYERROR_SSH_KEY_FILE && WaitSessions(0), "missing private key fails closed");
+    invalidKey = privateKey(a); invalidKey.strProxyUser = L"unauthorized-key-user";
+    Pass(Test(proxy,{invalidKey},target).code == PROXYERROR_SSH_KEY_AUTHFAILED && WaitSessions(0), "unauthorized public key rejected");
+    Pass(Stat("auth_a") == passwordAttempts, "private-key failure never falls back to password");
+    invalidKey = privateKey(a); invalidKey.strTransportPsk = L"";
+    int keyAttempts = Stat("key_auth_a");
+    Pass(Test(proxy,{invalidKey},target).code == PROXYERROR_SSH_HOSTKEY_UNKNOWN && WaitSessions(0) && Stat("key_auth_a") == keyAttempts,
+        "host fingerprint checked before private-key authentication");
+    Pass(Test(proxy,{Hop(L"SOCKS5",socks),privateKey(a,true),ssh(b)},target).code == 0 && WaitSessions(0), "SOCKS5 / private-key SSH / password SSH chain");
+    Pass(Test(proxy,{ssh(a),privateKey(b)},target).code == 0 && WaitSessions(0), "password SSH / private-key SSH chain");
     ProxyInfo unknown = ssh(a); unknown.strTransportPsk = L"";
     TestResult tested = Test(proxy,{unknown},target);
     Pass(tested.code == PROXYERROR_SSH_HOSTKEY_UNKNOWN && tested.detail == argv[7], "tester returns untrusted fingerprint before authentication");
@@ -487,6 +583,25 @@ int main(int argc, char** argv)
         Pass(Echo(first) && Stat("auth_a") == auth, "idle business session survives old 60 second limit and reuses authentication");
     }
     closesocket(first);
+    settings.chain = {fileVariant(encryptedPem,".mutable")};
+    SOCKET keyed = Open(proxy,target); Pass(Echo(keyed), "business private-key channel");
+    keyAttempts = Stat("key_auth_a");
+    SOCKET keyedSecond = Open(proxy,target);
+    Pass(Echo(keyedSecond) && Stat("key_auth_a") == keyAttempts, "business private-key channels reuse session");
+    closesocket(keyedSecond);
+    settings.chain[0].strProxyPass = L"wrong-passphrase";
+    SOCKET wrongKey = Open(proxy,target);
+    Pass(recv(wrongKey,&byte,1,0) <= 0 && Echo(keyed), "changed key passphrase cannot reuse authenticated session");
+    closesocket(wrongKey);
+    settings.chain = {fileVariant(encryptedPem,".mutable")};
+    fileVariant("invalid-key-material", ".mutable");
+    wrongKey = Open(proxy,target);
+    Pass(recv(wrongKey,&byte,1,0) <= 0 && Echo(keyed), "changed key material cannot reuse authenticated session");
+    closesocket(wrongKey);
+    Check(DeleteFileA(settings.chain[0].strSshKeyFile.szbuf) != FALSE,"remove owned key file");
+    wrongKey = Open(proxy,target);
+    Pass(recv(wrongKey,&byte,1,0) <= 0 && Echo(keyed), "missing file cannot reuse authenticated session");
+    closesocket(wrongKey); closesocket(keyed);
     Check(proxy->DisableProxy() != FALSE,"disable proxy");
     Pass(WaitSessions(0), "stopping proxy closes retained SSH sessions immediately");
     settings.Detach(); log.Detach(); ReleaseGlobalProxyInstance();

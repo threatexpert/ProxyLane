@@ -185,6 +185,8 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_EN_CHANGE(IDC_EDIT_USER, &CPage1::OnProfileFieldChanged)
 	ON_EN_CHANGE(IDC_EDIT_PASS, &CPage1::OnProfileFieldChanged)
 	ON_EN_CHANGE(IDC_EDIT_TRANSPORT_PSK, &CPage1::OnProfileFieldChanged)
+    ON_CBN_SELCHANGE(CSshAuthControls::AuthId, &CPage1::OnSshAuthChanged)
+    ON_BN_CLICKED(CSshAuthControls::ImportId, &CPage1::OnImportSshKey)
 	ON_EN_CHANGE(IDC_EDIT_CHILDFILTER, &CPage1::OnProfileFieldChanged)
 	ON_EN_CHANGE(IDC_EDIT_TARGETFILTER, &CPage1::OnProfileFieldChanged)
 	ON_CBN_SELCHANGE(IDC_CB_PROXYTYPE, &CPage1::OnProtocolChanged)
@@ -275,6 +277,8 @@ BOOL CPage1::OnInitDialog()
 	m_cbTransport.AddString(Localization::Get(_T("transport.plain")));
 	m_cbTransport.AddString(Localization::Get(_T("transport.gonc_tls_psk")));
 	m_cbTransport.SetCurSel(PROXY_TRANSPORT_PLAIN);
+    m_sshAuth.Create(this, &m_uiFont);
+    m_sshAuth.OrderAfter(&m_edit_Port);
 	UpdateTransportEnable();
 
 	g_ini.SetIniFileName(_T(""));
@@ -377,6 +381,7 @@ void CPage1::LayoutSettingsPage()
 	if (client.Width() <= 0 || client.Height() <= 0)
 		return;
 	m_inLayout = TRUE;
+    m_sshAuth.Show(false);
 	// WM_SETREDRAW TRUE also sets WS_VISIBLE, so only use it on a page that is shown.
 	const BOOL freezeRedraw = IsWindowVisible();
 	if (freezeRedraw) SetRedraw(FALSE);
@@ -571,7 +576,13 @@ void CPage1::LayoutSettingsPage()
 				control->ShowWindow(m_advancedOpen && !m_chainMode ? SW_SHOW : SW_HIDE);
 		if (m_advancedOpen && !m_chainMode)
 		{
-			const int half = (innerW - gapX) / 2;
+			CString authProtocol; m_cbProxyType.GetWindowText(authProtocol);
+            if (authProtocol == L"SSH") {
+                m_sshAuth.Show(true);
+                m_sshAuth.Layout(innerX, row - m_scrollY, innerW, gapX, labelH, fieldH);
+                row += rowStep;
+            }
+            const int half = (innerW - gapX) / 2;
 			place(IDC_STATIC_USER_LABEL, innerX, row, half, labelH);
 			place(IDC_EDIT_USER, innerX, row + labelH + S(2), half, fieldH);
 			place(IDC_STATIC_PASSWORD_LABEL, innerX + half + gapX, row, half, labelH);
@@ -756,6 +767,8 @@ BOOL CPage1::UsesSecondaryText(UINT controlId) const
 {
 	switch (controlId)
 	{
+	case CSshAuthControls::LabelId:
+    case CSshAuthControls::KeyLabelId:
 	case IDC_STATIC_TYPE_LABEL:
 	case IDC_STATIC_HOST_LABEL:
 	case IDC_STATIC_PORT_LABEL:
@@ -966,6 +979,7 @@ BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 	if (!szHost.GetLength() || !szPort.GetLength() || _ttoi(szPort) <= 0 || _ttoi(szPort) > 65535)
 		return FALSE;
     if (szType == L"SSH") {
+        if (!m_sshAuth.Apply(pi)) { m_settingsValidationKey = L"ssh.key_required"; return FALSE; }
         szTransportPsk.Trim();
         if (szUser.IsEmpty() || !SshProfile::Encode(szUser, pi.strProxyUser.szbuf) ||
             !SshProfile::Encode(szPass, pi.strProxyPass.szbuf) ||
@@ -1130,12 +1144,28 @@ void CPage1::OnProtocolChanged()
         !ProxyTransportPolicy::SupportsUdpProxy(selectedProxy.GetProxyType()))
         m_btnBlockUDP.SetCheck(BST_CHECKED);
     if (wasSsh || protocol == L"SSH") m_editTransportPsk.SetWindowText(L"");
+    if (wasSsh != (protocol == L"SSH")) {
+        if (m_sshAuth.IsKey()) m_edit_Pass.SetWindowText(L"");
+        m_sshAuth.Load(NULL);
+    }
     if (protocol == L"SSH") {
         m_advancedOpen = TRUE; UpdateAdvancedCaption();
         CString port; m_edit_Port.GetWindowText(port);
         if (port.IsEmpty() || port == L"1080" || port == L"8080") m_edit_Port.SetWindowText(L"22");
     }
     OnProfileFieldChanged(); LayoutSettingsPage();
+}
+
+void CPage1::OnSshAuthChanged()
+{
+    if (m_loadingProfile) return;
+    m_edit_Pass.SetWindowText(L""); // Password and private-key passphrase are separate credentials.
+    UpdateTransportEnable(); LayoutSettingsPage(); OnProfileFieldChanged();
+}
+
+void CPage1::OnImportSshKey()
+{
+    if (m_sshAuth.Import()) OnProfileFieldChanged();
 }
 
 void CPage1::UpdateTransportEnable()
@@ -1184,6 +1214,7 @@ void CPage1::UpdateTransportEnable()
 	m_editTransportPsk.EnableWindow(ssh || (supportsModules && supportsSecureTransport &&
         m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK));
     SetDlgItemText(IDC_STATIC_PSK_LABEL, Localization::Get(ssh ? L"ssh.host_key" : L"common.psk"));
+    SetDlgItemText(IDC_STATIC_PASSWORD_LABEL, Localization::Get(ssh && m_sshAuth.IsKey() ? L"ssh.passphrase" : L"common.password"));
     const TCHAR passwordChar = ssh ? 0 : L'\x25cf';
     if (m_editTransportPsk.GetPasswordChar() != passwordChar) {
         m_editTransportPsk.SetPasswordChar(passwordChar); m_editTransportPsk.Invalidate();
@@ -2203,6 +2234,7 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 {
 	m_loadingProfile = TRUE;
 	m_chainMode = item ? item->bChain : FALSE;
+    m_sshAuth.Load(item ? &item->pi : NULL);
 	if (item == NULL)
 	{
 		m_cbProxyType.SelectString(0, _T("SOCKS5"));
