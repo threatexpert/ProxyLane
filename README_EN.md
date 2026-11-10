@@ -37,6 +37,7 @@ Prefer launching applications through ProxyLane. Attaching to a running process 
 
 - **SOCKS5**: TCP and UDP; UDP requires server support.
 - **HTTP**: TCP through HTTP/1.1 CONNECT, without UDP proxying. Legacy HTTP10 and HTTP11 profiles load as HTTP with other settings preserved, and are saved as HTTP. Legacy HTTP10 profiles therefore switch to HTTP/1.1 CONNECT.
+- **SSH**: TCP through an encrypted SSH tunnel, with password or private-key authentication. The server must allow TCP port forwarding; UDP proxying is not supported. Use SSH alone or as a proxy-chain node. Requires the 64-bit host on Windows 10 / Server 2016 x64 or later; see [SSH Proxy](#ssh-proxy).
 - **NOPROXY**: direct connections for monitoring and decryption without an external proxy. No server address or port is needed.
 - **Child-process / target rules**: by default, all child processes (with **Proxy child processes** enabled) and all network destinations are proxied. To limit the scope, follow the matching examples in the interface.
 - **Block UDP / Block IPv6**: restrict the corresponding traffic as needed. Blocking UDP takes priority over UDP proxying or capture.
