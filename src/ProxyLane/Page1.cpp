@@ -7,6 +7,8 @@
 #include "ProxyLane.h"
 #include "Page1.h"
 #include "ProxyTestResultDialog.h"
+#include "ProxyTestError.h"
+#include "ChainNodeEditDialog.h"
 #include "MainTab.h"
 #include "Page2.h"
 #include "Page3.h"
@@ -158,10 +160,13 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
  ON_BN_CLICKED(0x2402, &CPage1::OnToggleAdvanced)
 	ON_COMMAND(0x240B, &CPage1::OnNewChainProfile)
 	ON_BN_CLICKED(0x2406, &CPage1::OnChainAdd)
+	ON_BN_CLICKED(0x240A, &CPage1::OnChainEdit)
+	ON_NOTIFY(NM_DBLCLK, 0x2405, &CPage1::OnChainDoubleClick)
 	ON_BN_CLICKED(0x2407, &CPage1::OnChainUp)
 	ON_BN_CLICKED(0x2408, &CPage1::OnChainDown)
 	ON_BN_CLICKED(0x2409, &CPage1::OnChainRemove)
 	ON_NOTIFY(LVN_ITEMCHANGED, 0x2405, &CPage1::OnChainItemChanged)
+	ON_NOTIFY(NM_CUSTOMDRAW, 0x2405, &CPage1::OnChainCustomDraw)
 
 	ON_WM_SIZE()
 	ON_WM_VSCROLL()
@@ -236,9 +241,13 @@ BOOL CPage1::OnInitDialog()
 		m_listChain.InsertColumn(2, Localization::Get(L"page1.chain_column_server"), LVCFMT_LEFT,
 			UiTheme::ScaleForWindow(m_hWnd, 320));
 		struct { CModernButton* button; UINT id; LPCWSTR key; } buttons[] = {
-			{ &m_btnChainAdd, 0x2406, L"page1.chain_add" }, { &m_btnChainUp, 0x2407, L"page1.chain_up" },
+			{ &m_btnChainAdd, 0x2406, L"page1.chain_add" }, { &m_btnChainEdit, 0x240A, L"chain.edit.button" },
+			{ &m_btnChainUp, 0x2407, L"page1.chain_up" },
 			{ &m_btnChainDown, 0x2408, L"page1.chain_down" }, { &m_btnChainRemove, 0x2409, L"page1.chain_remove" } };
+		m_listChain.InsertColumn(3, Localization::Get(L"chain.test.status"), LVCFMT_LEFT, UiTheme::ScaleForWindow(m_hWnd, 190));
+		m_listChain.InsertColumn(4, Localization::Get(L"chain.test.elapsed"), LVCFMT_RIGHT, UiTheme::ScaleForWindow(m_hWnd, 74));
 		m_listChain.SetFont(&m_uiFont);
+		m_listChain.Initialize();
 		order(m_listChain);
 		for (auto& entry : buttons)
 		{
@@ -348,6 +357,7 @@ void CPage1::PreloadRecentApplications()
 void CPage1::OnTimer(UINT_PTR timer)
 {
 	if (timer == 0x311) { KillTimer(0x311); PreloadRecentApplications(); }
+	if (timer == 0x312) { UpdateChainProgress(); return; }
 	CModernDialog::OnTimer(timer);
 }
 
@@ -476,7 +486,7 @@ void CPage1::LayoutSettingsPage()
 		}
 		const UINT serverIds[] = { IDC_STATIC_TYPE_LABEL, IDC_CB_PROXYTYPE, IDC_STATIC_HOST_LABEL,
 			IDC_EDIT_ADDR, IDC_STATIC_PORT_LABEL, IDC_EDIT_PORT, 0x2402 };
-		const UINT chainIds[] = { 0x2405, 0x2406, 0x2407, 0x2408, 0x2409 };
+		const UINT chainIds[] = { 0x2405, 0x2406, 0x2407, 0x2408, 0x2409, 0x240A };
 		for (int i = 0; i < _countof(serverIds); ++i)
 			if (CWnd* control = GetDlgItem(serverIds[i]))
 				control->ShowWindow(m_chainMode ? SW_HIDE : SW_SHOW);
@@ -490,9 +500,28 @@ void CPage1::LayoutSettingsPage()
 			for (int i = 0; i < _countof(optionalIds); ++i)
 				if (CWnd* control = GetDlgItem(optionalIds[i]))
 					control->ShowWindow(SW_HIDE);
-			// Hop list (header + four rows), then its buttons.
-			const int listH = S(26) * 5 + S(4);
+			// Use the native row/header metrics: fixed logical heights can expose
+			// five or six rows depending on the font and display scaling.
+			CRect itemRect, headerRect(0, 0, 0, 0), listRect, clientRect;
+			CClientDC listDc(&m_listChain);
+			CFont* oldFont = listDc.SelectObject(m_listChain.GetFont());
+			TEXTMETRIC metrics = {}; listDc.GetTextMetrics(&metrics);
+			listDc.SelectObject(oldFont);
+			const int itemH = m_listChain.GetItemRect(0, &itemRect, LVIR_BOUNDS)
+				? itemRect.Height() : metrics.tmHeight + S(2);
+			if (CHeaderCtrl* header = m_listChain.GetHeaderCtrl()) header->GetWindowRect(&headerRect);
+			m_listChain.GetWindowRect(&listRect); m_listChain.GetClientRect(&clientRect);
+			const int headerH = headerRect.Height() > 0 ? headerRect.Height() : metrics.tmHeight + S(6);
+			const int listH = headerH + itemH * 4 + max(2, listRect.Height()-clientRect.Height());
 			place(0x2405, innerX, row, innerW, listH);
+			const int listWidth = innerW - GetSystemMetrics(SM_CXVSCROLL) - S(4);
+			const int nameWidth = min(S(140), max(S(80), listWidth / 5));
+			const int statusWidth = min(S(210), max(S(150), listWidth / 3));
+			m_listChain.SetColumnWidth(0, S(30));
+			m_listChain.SetColumnWidth(1, nameWidth);
+			m_listChain.SetColumnWidth(2, max(S(70), listWidth - S(104) - nameWidth - statusWidth));
+			m_listChain.SetColumnWidth(3, statusWidth);
+			m_listChain.SetColumnWidth(4, S(74));
 			row += listH + S(8);
 			const int addW = textWidth(0x2406) + S(30);
 			place(0x2406, innerX, row, addW, fieldH);
@@ -505,6 +534,9 @@ void CPage1::LayoutSettingsPage()
 			place(0x2408, x, row, downW, fieldH);
 			x -= gap + upW;
 			place(0x2407, x, row, upW, fieldH);
+			const int editW = textWidth(0x240A) + S(24);
+			x -= editW + S(8);
+			place(0x240A, x, row, editW, fieldH);
 			row += fieldH + S(12);
 		}
 		const int typeW = S(92), portW = S(64), endpointGap = S(8);
@@ -1076,12 +1108,13 @@ void CPage1::SetRuntimeDirty(BOOL dirty)
 
 void CPage1::OnProfileFieldChanged()
 {
+	// SetWindowText sends EN_CHANGE while UILoadCfg is still populating controls.
+	// Normalize only the complete profile, never a mixture of old and new fields.
+	if (m_loadingProfile) return;
+	if (!m_bIsTesting) ClearChainProgress();
 	UpdateTransportEnable();
-	if (!m_loadingProfile)
-	{
-		SetProfileDirty(TRUE);
-		SetRuntimeDirty(TRUE);
-	}
+	SetProfileDirty(TRUE);
+	SetRuntimeDirty(TRUE);
 }
 
 void CPage1::OnProtocolChanged()
@@ -1594,6 +1627,13 @@ void CPage1::OnBnClickedTestproxy()
 		m_testIpv6Result = IPV6_TEST_NOT_RUN;
 		m_btnTest.SetWindowText(Localization::Get(_T("action.test_current")));
 		UpdateProxyTestStatus();
+		if (!m_chainProgress.empty())
+		{
+			m_chainElapsed = GetTickCount() - m_chainStarted;
+			m_chainProgressRunning = false; KillTimer(0x312);
+			m_chainConclusion = Localization::Get(L"chain.test.cancelled");
+			UpdateChainProgress();
+		}
 		return;
 	}
 
@@ -1609,6 +1649,7 @@ void CPage1::OnBnClickedTestproxy()
 	m_testUdpPassed = FALSE;
 	m_testUdpError = 0;
 
+	ClearChainProgress();
 	ProxyInfo testProxyInfo;
 	if (!GetRoute(&testProxyInfo, &m_testChain))
 	{
@@ -1620,8 +1661,16 @@ void CPage1::OnBnClickedTestproxy()
 	}
 	m_testProxyInfo = testProxyInfo;
 	m_testChainNames = !m_testChain.empty() ? m_chainHops : std::vector<CString>();
-	m_testUdpRequested = m_btnHookUDP.GetCheck() == BST_CHECKED &&
-		testProxyInfo.GetProxyType() == PROXYTYPE_SOCKS5 && m_testChain.empty();
+	if (m_testChain.size() > 1)
+	{
+		m_chainProgress.assign(m_testChain.size(), ProxyTestHopProgress());
+		m_chainErrors.resize(m_testChain.size());
+		m_chainStarted = GetTickCount(); m_chainElapsed = 0;
+		m_chainProgressRunning = true; m_listChain.followProgress = true;
+		SetTimer(0x312, 100, NULL);
+		UpdateChainProgress();
+	}
+	m_testUdpRequested = testProxyInfo.GetProxyType() == PROXYTYPE_SOCKS5 && m_testChain.empty();
 
 	PRCClient client;
 
@@ -1696,42 +1745,6 @@ BOOL CPage1::StartProxyTestPhase(const PRCClient& client, int phase,
 		m_staticTestProxy.SetStatus(Localization::Get(statusKey),
 			CStatusLabel::TONE_INFO);
 	return TRUE;
-}
-
-static CString ProxyTestErrorDescription(int error, BOOL direct)
-{
-	if (direct && (error == PROXYERROR_NOCONN || error == PROXYERROR_REQUESTFAILED))
-		return Localization::Get(L"test.direct_connection_failed");
-	// Proxy negotiation errors share numeric values with Win32 errors; do not
-	// pass these application codes to the Windows system message table.
-	LPCTSTR key = NULL;
-	switch (error)
-	{
-	case PROXYERROR_NOCONN: key = _T("test.no_connection"); break;
-	case PROXYERROR_REQUESTFAILED: key = _T("test.target_failed"); break;
-	case PROXYERROR_AUTHREQUIRED: key = _T("test.auth_required"); break;
-	case PROXYERROR_AUTHTYPEUNKNOWN: key = _T("test.auth_unknown"); break;
-	case PROXYERROR_AUTHFAILED:
-	case PROXYERROR_AUTHNOLOGON: key = _T("test.auth_failed"); break;
-	case PROXYERROR_CANTRESOLVEHOST: key = _T("test.resolve_failed"); break;
-	case PROXYERROR_SECURE_UNAVAILABLE: key = _T("test.secure_unavailable"); break;
-	case PROXYERROR_SECURE_HANDSHAKE: key = _T("test.secure_handshake_failed"); break;
-	case PROXYERROR_UDP_UNSUPPORTED: key = _T("test.udp_unsupported"); break;
-	case PROXYERROR_UDP_RELAY_FAILED: key = _T("test.udp_relay_failed"); break;
-	}
-	if (key) return Localization::Get(key);
-
-	LPTSTR buffer = NULL;
-	CString description;
-	if (::FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
-		FORMAT_MESSAGE_IGNORE_INSERTS, NULL, static_cast<DWORD>(error), 0,
-		reinterpret_cast<LPTSTR>(&buffer), 0, NULL))
-	{
-		description = buffer;
-		description.Trim();
-	}
-	if (buffer) LocalFree(buffer);
-	return description.IsEmpty() ? Localization::Get(_T("test.error_description_unavailable")) : description;
 }
 
 BOOL CPage1::SupportsIpv6ProxyTest()
@@ -1820,9 +1833,12 @@ INT_PTR CPage1::ShowProxyTestResult(const CString& error, LPCTSTR actionKey)
 	CString udpNote = text(direct ? _T("test.result.udp_direct") : m_testUdpPassed ? _T("test.result.udp_ok") :
 		!m_testChain.empty() ? _T("test.result.udp_chain") : !udpSupported ? _T("test.result.udp_protocol") :
 		udpUnsupported ? _T("test.result.udp_server") : !m_testUdpRequested ? _T("test.result.udp_disabled") : _T("test.result.prerequisite"));
-	if (udpFailed) udpNote = error;
+	if (udpFailed) udpNote = ProxyTestErrorDescription(m_testUdpError, FALSE);
+	const bool suggestBlockUdp = !direct && udpUnsupported && m_btnBlockUDP.GetCheck() != BST_CHECKED;
+	if (suggestBlockUdp)
+		udpNote = text(L"test.result.udp_suggest_block");
 	rows.push_back({ m_testUdpPassed ? Result::Passed : udpFailed ? Result::Failed : Result::Skipped,
-		text(_T("test.result.udp")), text(udpStatus), udpNote });
+		text(_T("test.result.udp")), text(udpStatus), udpNote, suggestBlockUdp });
 	Result::State ipv6State = Result::Skipped;
 	LPCTSTR ipv6Status = _T("test.result.skipped"), ipv6Note = _T("test.result.prerequisite");
 	switch (m_testIpv6Result)
@@ -1843,6 +1859,16 @@ INT_PTR CPage1::ShowProxyTestResult(const CString& error, LPCTSTR actionKey)
 	if (!m_testIpv6Address.IsEmpty() && m_testIpv6Result != IPV6_TEST_NOT_RUN)
 		ipv6Target = Localization::Format(_T("test.result.ipv6_target"), (LPCTSTR)m_testIpv6Address);
 	rows.push_back({ ipv6State, text(_T("test.result.ipv6")), text(ipv6Status), ipv6Target });
+	if (!m_chainProgress.empty())
+	{
+		m_chainElapsed = GetTickCount() - m_chainStarted;
+		m_chainProgressRunning = false; KillTimer(0x312);
+		m_chainConclusion = Localization::Format(L"chain.test.results",
+			(LPCTSTR)rows[0].status, (LPCTSTR)rows[1].status, (LPCTSTR)rows[2].status);
+		for (int i = 0; i < (int)m_chainProgress.size(); ++i)
+			if (ChainLinkFailed(i)) { m_chainConclusion = L"\u00d7 " + ChainLinkText(i); break; }
+		UpdateChainProgress();
+	}
 	CProxyTestResultDialog dialog(rows, actionKey ? error : CString(), this);
 	return dialog.DoModal();
 }
@@ -1855,9 +1881,21 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 	int nCode = LOWORD(nErrorCode);
 
 	CString szText;
+	if (nType == LAYERCALLBACK_TESTPROGRESS)
+	{
+		const int hop = (int)wParam;
+		if (m_proxyTestPhase == PROXY_TEST_TCP && hop >= 0 && hop < (int)m_chainProgress.size())
+		{
+			m_chainProgress[hop].Apply(nCode, (DWORD)lParam);
+			UpdateChainProgress(true);
+			m_listChain.RedrawItems(hop, hop);
+		}
+		return;
+	}
 
 	if (nType == LAYERCALLBACK_STATECHANGE)
 	{
+		if (m_chainProgressRunning) { UpdateChainProgress(); return; }
 		if (m_proxyTestPhase == PROXY_TEST_IPV6)
 		{
 			szText = Localization::Get(_T("status.testing_ipv6"));
@@ -1891,6 +1929,17 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 		// Stop callbacks before entering the result dialog's modal message loop.
 		pTester->Stop();
 
+		if (completedPhase == PROXY_TEST_TCP && nCode && !m_chainProgress.empty())
+		{
+			m_chainFailureCode = nCode;
+			const int hop = pTester->GetFailedHop();
+			if (hop >= 0 && hop < (int)m_chainErrors.size())
+				// The legacy generic error names the final test target even when
+				// the failed request was actually directed at the next proxy.
+				m_chainErrors[hop] = ChainLinkFailed(hop) &&
+					(nCode == PROXYERROR_REQUESTFAILED || nCode == PROXYERROR_NOCONN)
+					? CString() : ProxyTestErrorDescription(nCode, FALSE);
+		}
 		if (completedPhase == PROXY_TEST_IPV6)
 		{
 			m_testIpv6Error = nCode;
@@ -1913,10 +1962,11 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 			if (StartProxyTestPhase(udpClient, PROXY_TEST_UDP,
 				_T("status.testing_udp")))
 				return;
-			nCode = PROXYERROR_UDP_RELAY_FAILED;
+			m_testUdpError = PROXYERROR_UDP_RELAY_FAILED;
+			if (StartIpv6ProxyTest()) return;
+			nCode = 0;
 		}
-		else if (nCode == 0 && (completedPhase == PROXY_TEST_TCP ||
-			completedPhase == PROXY_TEST_UDP))
+		else if ((nCode == 0 && completedPhase == PROXY_TEST_TCP) || completedPhase == PROXY_TEST_UDP)
 		{
 			pTester->Release();
 			m_pProxyTester = NULL;
@@ -1934,7 +1984,11 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 				m_testIpv6Result == IPV6_TEST_UNSUPPORTED;
 			const BOOL ipv6AlreadyBlocked =
 				m_btnBlockIPv6.GetCheck() == BST_CHECKED;
-			if (m_profileDirty && m_runtimeDirty)
+			if (m_testUdpError && m_testUdpError != PROXYERROR_UDP_UNSUPPORTED)
+			{
+				m_staticTestProxy.SetStatus(Localization::Get(L"status.test_failed"), CStatusLabel::TONE_DANGER);
+			}
+			else if (m_profileDirty && m_runtimeDirty)
 			{
 				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_unsaved_unapplied")), CStatusLabel::TONE_WARNING);
 			}
@@ -2009,7 +2063,9 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 			}
 			// In a chain, say which hop the failure belongs to.
 			const int failedHop = m_testChain.size() > 1 && m_pProxyTester ? m_pProxyTester->GetFailedHop() : -1;
-			if (failedHop >= 0 && failedHop < (int)m_testChainNames.size())
+			if (ChainLinkFailed(failedHop))
+				szText = ChainLinkText(failedHop);
+			else if (failedHop >= 0 && failedHop < (int)m_testChainNames.size())
 				szText = Localization::Format(_T("test.chain_hop"), failedHop + 1,
 					(LPCTSTR)m_testChainNames[failedHop], (LPCTSTR)szText);
 			LPCTSTR statusKey = _T("status.test_failed");
@@ -2146,6 +2202,7 @@ void CPage1::OnCfgoptDelete()
 void CPage1::UILoadCfg( CfgProxyItem *item )
 {
 	m_loadingProfile = TRUE;
+	m_chainMode = item ? item->bChain : FALSE;
 	if (item == NULL)
 	{
 		m_cbProxyType.SelectString(0, _T("SOCKS5"));
@@ -2218,7 +2275,6 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_radioTargetFilterBypass.SetCheck(bTgtProxy ? BST_UNCHECKED : BST_CHECKED);
 		UpdateChildFilterEnable();
 	}
-	m_chainMode = item ? item->bChain : FALSE;
 	m_chainHops = item ? item->chainHops : std::vector<CString>();
 	RefreshChainList();
 	ExpandConfiguredOptions();
@@ -2606,8 +2662,174 @@ void CPage1::UpdateProfileTag()
 	m_cfgls.SetFieldTag(tag, m_chainMode);
 }
 
+namespace
+{
+    CString ChainDuration(DWORD milliseconds)
+    {
+        CString text;
+        if (milliseconds < 1000) text.Format(L"%lu ms", milliseconds);
+        else text.Format(L"%.2f s", milliseconds / 1000.0);
+        return text;
+    }
+}
+
+void CPage1::ClearChainProgress()
+{
+    if (GetSafeHwnd()) KillTimer(0x312);
+    m_chainProgress.clear(); m_chainErrors.clear(); m_chainConclusion.Empty();
+    m_chainProgressRunning = false; m_chainFollowed = -1;
+    m_chainFailureCode = 0;
+    m_listChain.ClearTips();
+    if (m_staticTestProxy.GetSafeHwnd()) m_staticTestProxy.SetDetailText(CString());
+    if (!m_listChain.GetSafeHwnd()) return;
+    for (int i = 0; i < m_listChain.GetItemCount(); ++i)
+    {
+        m_listChain.SetItemText(i, 3, Localization::Get(L"status.test_not_run"));
+        m_listChain.SetItemText(i, 4, L"—");
+    }
+    m_listChain.Invalidate(FALSE);
+}
+
+bool CPage1::ChainNodeNegotiated(int index) const
+{
+    if (index < 0 || index >= (int)m_chainProgress.size() || index >= (int)m_testChain.size()) return false;
+    const auto& progress = m_chainProgress[index];
+    if (progress.stage == PTS_PASSED) return true;
+    // SOCKS5 and SSH begin OPEN only after successful negotiation/authentication.
+    // HTTP CONNECT combines authentication and tunnel establishment in one reply.
+    ProxyInfo hop = m_testChain[index];
+    const int type = hop.GetProxyType();
+    return (type == PROXYTYPE_SOCKS5 || type == PROXYTYPE_SSH) &&
+        (progress.stage == PTS_OPENING || progress.lastActiveStage == PTS_OPENING);
+}
+
+bool CPage1::ChainLinkFailed(int index) const
+{
+    if (index < 0 || index >= (int)m_chainProgress.size()) return false;
+    const auto& progress = m_chainProgress[index];
+    // An HTTP 407 is a node authentication failure, not a failed next-hop link.
+    if (m_chainFailureCode == PROXYERROR_AUTHREQUIRED || m_chainFailureCode == PROXYERROR_AUTHFAILED ||
+        m_chainFailureCode == PROXYERROR_AUTHTYPEUNKNOWN || m_chainFailureCode == PROXYERROR_AUTHNOLOGON) return false;
+    return (progress.stage == PTS_FAILED || progress.stage == PTS_TIMED_OUT) &&
+        progress.lastActiveStage == PTS_OPENING;
+}
+
+CString CPage1::ChainLinkText(int index) const
+{
+    const CString from = Localization::Format(L"chain.test.node", index + 1);
+    const CString to = index + 1 < (int)m_chainProgress.size()
+        ? Localization::Format(L"chain.test.node", index + 2) : Localization::Get(L"chain.test.target");
+    const auto& progress = m_chainProgress[index];
+    const CString result = Localization::Get(progress.stage == PTS_TIMED_OUT ? L"chain.test.link_timeout" :
+        progress.Active() ? L"chain.test.link_connecting" : L"chain.test.link_failed");
+    return Localization::Format(L"chain.test.link", (LPCTSTR)from, (LPCTSTR)to, (LPCTSTR)result);
+}
+
+CString CPage1::ChainStageText(int index, int stage) const
+{
+    if (stage == PTS_OPENING)
+        return index + 1 < (int)m_chainProgress.size()
+            ? Localization::Format(L"chain.test.open_next", index + 2)
+            : Localization::Get(L"chain.test.open_target");
+    static LPCTSTR keys[PTS_COUNT] = {
+        L"chain.test.waiting", L"chain.test.connecting", L"chain.test.tls", L"chain.test.negotiating",
+        L"chain.test.ssh", L"chain.test.hostkey", L"chain.test.auth", L"chain.test.open_target",
+        L"chain.test.passed", L"chain.test.failed", L"chain.test.timeout", L"chain.test.cancelled", L"chain.test.skipped"
+    };
+    return Localization::Get(keys[stage >= 0 && stage < PTS_COUNT ? stage : PTS_WAITING]);
+}
+
+void CPage1::UpdateChainProgress(bool follow)
+{
+    if (!m_listChain.GetSafeHwnd() || m_chainProgress.empty() ||
+        m_listChain.GetItemCount() != (int)m_chainProgress.size()) return;
+    const DWORD now = GetTickCount();
+    int passed = 0, current = -1;
+    bool failed = false;
+    m_listChain.tips.resize(m_chainProgress.size());
+    for (int i = 0; i < (int)m_chainProgress.size(); ++i)
+    {
+        const auto& progress = m_chainProgress[i];
+        const bool negotiated = ChainNodeNegotiated(i);
+        const bool linkFailed = ChainLinkFailed(i);
+        if (negotiated) ++passed;
+        if (progress.Active() || progress.stage == PTS_FAILED || progress.stage == PTS_TIMED_OUT) current = i;
+        if (progress.stage == PTS_FAILED || progress.stage == PTS_TIMED_OUT) failed = true;
+        CString status = ChainStageText(i, progress.stage);
+        if (negotiated) status = L"\u2713 " + Localization::Get(L"chain.test.passed");
+        else if (linkFailed) status = L"\u2713 " + Localization::Get(L"chain.test.connected");
+        else if (progress.stage == PTS_SKIPPED && ChainLinkFailed(i - 1)) status = Localization::Get(L"chain.test.not_reached");
+        else if (progress.stage == PTS_FAILED || progress.stage == PTS_TIMED_OUT)
+            status = L"\u00d7 " + Localization::Format(L"chain.test.stage_result",
+                (LPCTSTR)status, (LPCTSTR)ChainStageText(i,
+                    progress.lastActiveStage == PTS_OPENING ? PTS_AUTH : progress.lastActiveStage));
+        else if (progress.Active()) status = L"… " + status;
+        const CString elapsed = progress.started ? ChainDuration(progress.Elapsed(now)) : CString(L"—");
+        if (m_listChain.GetItemText(i, 3) != status)
+        {
+            m_listChain.SetItemText(i, 3, status);
+            // SetItemText invalidates only its cell. Repaint the entire row to
+            // remove the previous active background even if its time was 0 ms.
+            m_listChain.RedrawItems(i, i);
+        }
+        if (m_listChain.GetItemText(i, 4) != elapsed) m_listChain.SetItemText(i, 4, elapsed);
+        CString tip = m_listChain.GetItemText(i, 1) + L"\r\n" + m_listChain.GetItemText(i, 2) + L"\r\n" + status;
+        if (linkFailed || progress.stage == PTS_OPENING) tip += L"\r\n" + ChainLinkText(i);
+        if (progress.stage == PTS_SKIPPED && ChainLinkFailed(i - 1)) tip += L"\r\n" + ChainLinkText(i - 1);
+        if (!m_chainErrors[i].IsEmpty()) tip += L"\r\n" + m_chainErrors[i];
+        tip += L"\r\n" + Localization::Format(L"chain.test.node_elapsed", (LPCTSTR)elapsed);
+        for (int stage = PTS_CONNECTING; stage < PTS_PASSED; ++stage)
+        {
+            DWORD duration = progress.stages[stage];
+            if (progress.Active() && progress.stage == stage) duration += now - progress.changed;
+            if (duration) tip += L"\r\n" + ChainStageText(i, stage) + L": " + ChainDuration(duration);
+        }
+        tip += L"\r\n" + Localization::Get(L"chain.test.timing_hint");
+        m_listChain.tips[i] = tip;
+    }
+    m_listChain.RefreshTip();
+    if (follow && current >= 0 && current != m_chainFollowed)
+    { m_listChain.Follow(current); m_chainFollowed = current; }
+    CString status;
+    const CString total = ChainDuration(m_chainProgressRunning ? now - m_chainStarted : m_chainElapsed);
+    if (m_chainProgressRunning)
+    {
+        CString activity = m_proxyTestPhase == PROXY_TEST_IPV6 ? Localization::Get(L"chain.test.ipv6_probe") :
+            current >= 0 && (m_chainProgress[current].stage == PTS_OPENING || ChainLinkFailed(current)) ? ChainLinkText(current) :
+            current >= 0 ? Localization::Format(L"chain.test.current", current + 1,
+                (LPCTSTR)ChainStageText(current, m_chainProgress[current].stage)) : Localization::Get(L"chain.test.finishing");
+        status = Localization::Format(L"chain.test.progress", passed, (int)m_chainProgress.size(),
+            (LPCTSTR)activity, (LPCTSTR)total);
+    }
+    else status = Localization::Format(L"chain.test.finished", (LPCTSTR)m_chainConclusion, (LPCTSTR)total);
+    CString previous; m_staticTestProxy.GetWindowText(previous);
+    if (previous != status)
+        m_staticTestProxy.SetStatus(status, m_chainProgressRunning ? CStatusLabel::TONE_INFO : failed ?
+            CStatusLabel::TONE_DANGER : m_testIpv6Result == IPV6_TEST_AVAILABLE ? CStatusLabel::TONE_SUCCESS : CStatusLabel::TONE_WARNING);
+}
+
+void CPage1::OnChainCustomDraw(NMHDR* header, LRESULT* result)
+{
+    NMLVCUSTOMDRAW* draw = reinterpret_cast<NMLVCUSTOMDRAW*>(header);
+    *result = CDRF_DODEFAULT;
+    if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) { *result = CDRF_NOTIFYITEMDRAW; return; }
+    if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) { *result = CDRF_NOTIFYSUBITEMDRAW; return; }
+    if (draw->nmcd.dwDrawStage != (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) return;
+    const size_t row = draw->nmcd.dwItemSpec;
+    // The themed list reports CDIS_SELECTED for unselected rows as well.
+    if (row >= m_chainProgress.size() || (m_listChain.GetItemState((int)row, LVIS_SELECTED) & LVIS_SELECTED)) return;
+    const auto& progress = m_chainProgress[row];
+    draw->clrTextBk = progress.Active() ? UiTheme::AccentSoft() : m_listChain.GetBkColor();
+    draw->clrText = m_listChain.GetTextColor();
+    if (draw->iSubItem == 3 || draw->iSubItem == 4)
+        draw->clrText = ChainNodeNegotiated((int)row) || ChainLinkFailed((int)row) ? UiTheme::Success() :
+            progress.stage == PTS_FAILED || progress.stage == PTS_TIMED_OUT ? UiTheme::Danger() :
+            progress.Active() ? UiTheme::Accent() : UiTheme::TextSecondary();
+}
+
 void CPage1::RefreshChainList(int select)
 {
+	ClearChainProgress();
 	if (!m_listChain.GetSafeHwnd())
 		return;
 	m_listChain.SetRedraw(FALSE);
@@ -2620,6 +2842,8 @@ void CPage1::RefreshChainList(int select)
 		number.Format(L"%d", i + 1);
 		m_listChain.InsertItem(i, number);
 		m_listChain.SetItemText(i, 1, m_chainHops[i]);
+		m_listChain.SetItemText(i, 3, Localization::Get(L"status.test_not_run"));
+		m_listChain.SetItemText(i, 4, L"—");
 		m_listChain.SetItemText(i, 2, !m_profileStore.Load(item) ? Localization::Get(L"page1.chain_hop_missing") :
 			!CProxyProfileStore::IsChainHop(item) ? Localization::Get(L"page1.chain_hop_invalid") : DescribeServer(item));
 	}
@@ -2637,6 +2861,9 @@ void CPage1::UpdateChainButtons()
 	const int selected = m_listChain.GetNextItem(-1, LVNI_SELECTED);
 	const int count = (int)m_chainHops.size();
 	m_btnChainAdd.EnableWindow(!m_bIsTesting);
+	m_btnChainEdit.EnableWindow(!m_bIsTesting && selected >= 0 && selected < count);
+	m_cfgls.EnableWindow(!m_bIsTesting);
+	if (GetDlgItem(IDC_BUTTON_PROFILE_MENU)) GetDlgItem(IDC_BUTTON_PROFILE_MENU)->EnableWindow(!m_bIsTesting);
 	m_btnChainUp.EnableWindow(!m_bIsTesting && selected > 0);
 	m_btnChainDown.EnableWindow(!m_bIsTesting && selected >= 0 && selected < count - 1);
 	m_btnChainRemove.EnableWindow(!m_bIsTesting && selected >= 0);
@@ -2648,9 +2875,44 @@ void CPage1::OnChainItemChanged(NMHDR*, LRESULT* result)
 	*result = 0;
 }
 
+void CPage1::OnChainDoubleClick(NMHDR* header, LRESULT* result)
+{
+    *result = 0;
+    const int row = reinterpret_cast<NMITEMACTIVATE*>(header)->iItem;
+    if (m_bIsTesting || row < 0 || row >= (int)m_chainHops.size()) return;
+    m_listChain.SetItemState(-1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    m_listChain.SetItemState(row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    OnChainEdit();
+}
+
+void CPage1::OnChainEdit()
+{
+    const int selected = m_listChain.GetNextItem(-1, LVNI_SELECTED);
+    if (m_bIsTesting || !m_chainMode || selected < 0 || selected >= (int)m_chainHops.size()) return;
+    CfgProxyItem item; item.strName = m_chainHops[selected];
+    if (!m_profileStore.Load(item) || !CProxyProfileStore::IsChainHop(item))
+    {
+        ShowProfileNotice(Localization::Get(L"profile.load_failed"), NULL, CStatusLabel::TONE_DANGER);
+        return;
+    }
+    CChainNodeEditDialog dialog(m_profileStore, g_ini, item, this);
+    if (dialog.DoModal() != IDOK) return;
+    // Change cells in place: rebuilding the list would lose its scroll offset,
+    // selection, and the user's place in a long chain. Never save the chain draft.
+    for (int i = 0; i < (int)m_chainHops.size(); ++i)
+        if (m_chainHops[i].CompareNoCase(item.strName) == 0)
+            m_listChain.SetItemText(i, 2, DescribeServer(dialog.Profile()));
+    ClearChainProgress();
+    RefreshProfileEntries();
+    SetRuntimeDirty(TRUE);
+    if (!m_profileDirty && !m_runtimeDirty)
+        m_staticTestProxy.SetStatus(Localization::Get(L"chain.edit.saved"), CStatusLabel::TONE_INFO);
+    UpdateChainButtons();
+}
+
 void CPage1::OnChainAdd()
 {
-	// Offer saved Server-mode SOCKS5/HTTP profiles that are not already hops
+	// Offer saved Server-mode SOCKS5/HTTP/SSH profiles that are not already hops
 	// (and not this profile itself).
 	std::vector<CString> names, offered;
 	m_profileStore.ListNames(names);

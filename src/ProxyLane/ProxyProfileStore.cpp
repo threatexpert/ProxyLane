@@ -166,6 +166,29 @@ BOOL CProxyProfileStore::ListNames(std::vector<CString>& names) const
 	return TRUE;
 }
 
+
+namespace
+{
+	bool WriteConnection(CIniFile& ini, const CString& section, CfgProxyItem& item)
+	{
+		const int proxyType = item.pi.GetProxyType();
+		const CString type = (proxyType == PROXYTYPE_HTTP10 || proxyType == PROXYTYPE_HTTP11)
+			? CString(L"HTTP") : (CString)item.pi.strProxyType;
+		if (!ini.SetString(section, _T("Type"), type)) return false;
+		if (!ini.SetString(section, _T("Host"), (CString)item.pi.strProxyHost)) return false;
+		if (!ini.SetInt(section, _T("Port"), item.pi.nProxyPort)) return false;
+		if (!ini.SetString(section, _T("User"), (proxyType == PROXYTYPE_SSH ? SshProfile::Decode(item.pi.strProxyUser.szbuf) : (CString)item.pi.strProxyUser))) return false;
+		if (!ini.SetString(section, _T("Pass"), (proxyType == PROXYTYPE_SSH ? SshProfile::Decode(item.pi.strProxyPass.szbuf) : (CString)item.pi.strProxyPass))) return false;
+		if (!ini.SetString(section, _T("Transport"), item.nTransportMode ==
+			PROXY_TRANSPORT_GONC_TLS_PSK ? _T("GONC_TLS_PSK") : _T("PLAIN"))) return false;
+		// Initial secure-transport format intentionally stores the PSK directly
+		// in the profile, as selected by the user.
+		if (!ini.SetString(section, proxyType == PROXYTYPE_SSH ? L"SshHostKey" : L"PSK", item.strTransportPsk)) return false;
+        if (!ini.DeleteKeyName(section, proxyType == PROXYTYPE_SSH ? L"PSK" : L"SshHostKey")) return false;
+		return true;
+	}
+}
+
 BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 {
 	return ConfigStorage::Update(m_ini.GetIniFileName(), [&](const CString& path) {
@@ -194,20 +217,7 @@ BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 	}
 	else
 	{
-		const int proxyType = item.pi.GetProxyType();
-		const CString type = (proxyType == PROXYTYPE_HTTP10 || proxyType == PROXYTYPE_HTTP11)
-			? CString(L"HTTP") : (CString)item.pi.strProxyType;
-		if (!ini.SetString(section, _T("Type"), type)) return false;
-		if (!ini.SetString(section, _T("Host"), (CString)item.pi.strProxyHost)) return false;
-		if (!ini.SetInt(section, _T("Port"), item.pi.nProxyPort)) return false;
-		if (!ini.SetString(section, _T("User"), (proxyType == PROXYTYPE_SSH ? SshProfile::Decode(item.pi.strProxyUser.szbuf) : (CString)item.pi.strProxyUser))) return false;
-		if (!ini.SetString(section, _T("Pass"), (proxyType == PROXYTYPE_SSH ? SshProfile::Decode(item.pi.strProxyPass.szbuf) : (CString)item.pi.strProxyPass))) return false;
-		if (!ini.SetString(section, _T("Transport"), item.nTransportMode ==
-			PROXY_TRANSPORT_GONC_TLS_PSK ? _T("GONC_TLS_PSK") : _T("PLAIN"))) return false;
-		// Initial secure-transport format intentionally stores the PSK directly
-		// in the profile, as selected by the user.
-		if (!ini.SetString(section, proxyType == PROXYTYPE_SSH ? L"SshHostKey" : L"PSK", item.strTransportPsk)) return false;
-        if (!ini.DeleteKeyName(section, proxyType == PROXYTYPE_SSH ? L"PSK" : L"SshHostKey")) return false;
+		if (!WriteConnection(ini, section, item)) return false;
 	}
 	// Write the hops, then drop the keys a longer chain (or a chain this profile
 	// never was) may have left behind.
@@ -226,6 +236,21 @@ BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 	}
 	return ini.SetString(L"options", L"lastselected", item.strName) != FALSE;
 	});
+}
+
+BOOL CProxyProfileStore::SaveConnection(CfgProxyItem& item)
+{
+    if (!IsChainHop(item)) { SetLastError(ERROR_INVALID_DATA); return FALSE; }
+    return ConfigStorage::Update(m_ini.GetIniFileName(), [&](const CString& path) {
+        CIniFile ini; ini.SetIniFileName(path); ini.staging = true;
+        CProxyProfileStore current(ini);
+        CfgProxyItem existing; existing.strName = item.strName;
+        // Do not recreate a deleted profile or overwrite a different profile kind.
+        if (!current.Load(existing) || !IsChainHop(existing)) {
+            SetLastError(ERROR_NOT_FOUND); return false;
+        }
+        return WriteConnection(ini, kProfilePrefix + item.strName, item);
+    });
 }
 
 BOOL CProxyProfileStore::Delete(LPCTSTR name)

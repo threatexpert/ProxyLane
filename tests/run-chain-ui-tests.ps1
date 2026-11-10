@@ -117,7 +117,7 @@ try {
     Wait-Check { [ChainUiProbe]::Text($test) -ne $idleCaption } 'chain test starts'
     Wait-Check { $listener.Pending() } 'first local handshake connects'
     $peer = $listener.AcceptTcpClient()
-    foreach ($id in @(0x2406, 0x2407, 0x2408, 0x2409)) {
+    foreach ($id in @(0x2406, 0x2407, 0x2408, 0x2409, 0x240a)) {
         if ([ChainUiProbe]::IsWindowEnabled([ChainUiProbe]::GetDlgItem($page, $id))) {
             throw "Chain editing control $id remains enabled during testing"
         }

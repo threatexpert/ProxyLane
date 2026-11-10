@@ -359,6 +359,7 @@
 	<ClInclude Include="ElevatedLauncher.h" />
 	<ClInclude Include="ElevatedLaunchProtocol.h" />
 	<ClInclude Include="AppLauncherProtocol.h" />
+    <ClInclude Include="ProxyTestProgress.h" />
     <ClInclude Include="asynsocket\types.h" />
     <ClInclude Include="GlobalProxy.h" />
     <ClInclude Include="ProcessIdentity.h" />

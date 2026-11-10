@@ -43,6 +43,10 @@ public:
 private:
 	void Complete(int nCode, WPARAM wParam = 0, LPARAM lParam = 0);
 	BOOL ConnectTcp(const LPPRCClient lpPRCClient);
+	BOOL FailedToStart();
+	void Progress(int hop, int stage, DWORD tick);
+	void FinishProgress(int error, bool cancelled = false);
+	std::vector<ProxyTestHopProgress> m_progress;
 	CAsyncProxySocketLayer *m_pProxyLayer;
 	CAsyncSecureSocketLayer *m_pSecureLayer;
 	// Allocated only for a chain test; it owns every layer of the chain, and

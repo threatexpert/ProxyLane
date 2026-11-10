@@ -64,6 +64,7 @@ to tim.kosse@gmx.de
 
 */
 #pragma once
+#include "../ProxyTestProgress.h"
 #include "AsyncSocketEx.h"	// Hinzugef�gt von der Klassenansicht
 #include "..\structinfo.h"
 
@@ -250,4 +251,9 @@ public:
 	__WSARecvFrom m_pReal_WSARecvFrom;
 
 	void BypassHook(BOOL bBypass);
+	void EnableTestProgress(bool enabled) { m_testProgress = enabled; }
+	void ReportTestProgress(int stage, int hop = -1, DWORD tick = GetTickCount())
+	{ if (m_testProgress) DoLayerCallback(LAYERCALLBACK_TESTPROGRESS, stage, (WPARAM)hop, (LPARAM)tick); }
+private:
+	bool m_testProgress = false;
 };

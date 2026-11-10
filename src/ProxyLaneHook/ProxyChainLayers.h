@@ -51,7 +51,8 @@ public:
 				m_proxy[i] = new CAsyncSshSocketLayer(ProxyChain(hops, hops + i + 1), sshUse, dependent);
 				// The shared session owns all preceding hops. This socket owns
 				// only its channel adapter and the hops above that adapter.
-				return socket.AddLayer(m_proxy[i]);
+				m_proxy[i]->EnableTestProgress(sshUse == SshSessionUse::Test);
+                return socket.AddLayer(m_proxy[i]);
 			}
 			m_proxy[i] = new CAsyncProxySocketLayer;
 			if (!m_proxy[i])
@@ -59,6 +60,7 @@ public:
 				WSASetLastError(WSAENOBUFS);
 				return FALSE;
 			}
+			m_proxy[i]->EnableTestProgress(sshUse == SshSessionUse::Test);
 			m_proxy[i]->SetProxy(type, (CStringA)hop.strProxyHost, hop.nProxyPort,
 				(CStringA)hop.strProxyUser, (CStringA)hop.strProxyPass);
 			if (!socket.AddLayer(m_proxy[i]))
@@ -72,6 +74,7 @@ public:
 					WSASetLastError(WSAENOBUFS);
 					return FALSE;
 				}
+				m_secure[i]->EnableTestProgress(sshUse == SshSessionUse::Test);
 				if (!m_secure[i]->Configure(hop.strTransportPsk.szbuf, hop.strProxyHost.szbuf) ||
 					!socket.AddLayer(m_secure[i]))
 					return FALSE;

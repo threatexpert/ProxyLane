@@ -14,10 +14,13 @@ public:
 	enum State { Passed, Failed, Warning, Skipped };
 	State state = Skipped;
 	CFont* headingFont = NULL;
+	bool emphasizeDetail = false;
 	CString title, status, detail;
-	void Set(State value, const CString& heading, const CString& label, const CString& description)
+	void Set(State value, const CString& heading, const CString& label, const CString& description, bool emphasis = false)
 	{
 		state = value; title = heading; status = label; detail = description;
+		emphasizeDetail = emphasis;
+		m_detailAction = emphasis ? Localization::Get(L"test.result.udp_suggest_action") : CString();
 		SetWindowText(title + _T(" — ") + status + _T("\r\n") + detail);
 		// Set is called after Create has finished; avoid nested MFC window
 		// creation from PreSubclassWindow for dynamically-created rows.
@@ -87,14 +90,62 @@ protected:
 		dc.SelectObject(GetFont());
 		CRect detailRect = DetailRect();
 		dc.SetTextColor(UiTheme::TextSecondary());
-		dc.DrawText(detail, detailRect, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+		if (emphasizeDetail)
+		{
+			// A quiet advisory strip, separate from the factual result badge.
+			CRect strip(s(8), s(30), rect.right-s(8), rect.bottom-s(5));
+			UiTheme::FillRoundRect(dc, strip, s(4), RGB(255, 248, 222), CLR_NONE);
+			dc.FillSolidRect(strip.left, strip.top+s(3), max(2, s(2)), strip.Height()-s(6), RGB(202, 165, 48));
+			const int cx = s(19), cy = strip.CenterPoint().y;
+			CPen alertPen(PS_SOLID, max(1, s(1)), RGB(185, 145, 39));
+			CBrush alertBrush(RGB(247, 213, 109));
+			CPen* oldPen = dc.SelectObject(&alertPen);
+			CBrush* oldBrush = dc.SelectObject(&alertBrush);
+			POINT triangle[] = {{cx, cy-s(6)}, {cx+s(7), cy+s(6)}, {cx-s(7), cy+s(6)}};
+			dc.Polygon(triangle, 3);
+			CPen markPen(PS_SOLID, max(1, s(1)), RGB(76, 65, 34));
+			dc.SelectObject(&markPen);
+			dc.MoveTo(cx, cy-s(3)); dc.LineTo(cx, cy+s(1));
+			dc.MoveTo(cx, cy+s(3)); dc.LineTo(cx, cy+s(4));
+			dc.SelectObject(oldBrush); dc.SelectObject(oldPen);
+			dc.SetTextColor(UiTheme::TextPrimary());
+		}
+		RenderDetail(dc, &detailRect);
 		dc.RestoreDC(saved); dc.Detach();
 	}
 private:
+	// Measure and paint the same mixed-weight text so overflow tooltips stay accurate.
+	CSize RenderDetail(CDC& dc, const CRect* bounds = NULL)
+	{
+		CString parts[] = {detail, CString(), CString()};
+		const int action = m_detailAction.IsEmpty() ? -1 : detail.Find(m_detailAction);
+		if (action >= 0)
+		{
+			parts[0] = detail.Left(action); parts[1] = m_detailAction;
+			parts[2] = detail.Mid(action+m_detailAction.GetLength());
+		}
+		CSize extent(0, 0);
+		CFont* old = dc.SelectObject(GetFont());
+		for (int i=0; i<3; ++i)
+		{
+			dc.SelectObject(i == 1 && headingFont ? headingFont : GetFont());
+			const CSize size = dc.GetTextExtent(parts[i]);
+			if (bounds && !parts[i].IsEmpty() && extent.cx < bounds->Width())
+			{
+				CRect segment(*bounds); segment.left += extent.cx;
+				dc.DrawText(parts[i], segment, DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX |
+					(emphasizeDetail ? DT_VCENTER : 0));
+			}
+			extent.cx += size.cx; extent.cy = max(extent.cy, size.cy);
+		}
+		dc.SelectObject(old);
+		return extent;
+	}
 	CRect DetailRect() const
 	{
 		CRect rect; GetClientRect(&rect);
-		return CRect(UiTheme::ScaleForWindow(m_hWnd, 12), UiTheme::ScaleForWindow(m_hWnd, 32),
+		return CRect(UiTheme::ScaleForWindow(m_hWnd, emphasizeDetail ? 32 : 12),
+			UiTheme::ScaleForWindow(m_hWnd, emphasizeDetail ? 30 : 32),
 			rect.right-UiTheme::ScaleForWindow(m_hWnd, 12), rect.bottom-UiTheme::ScaleForWindow(m_hWnd, 5));
 	}
 	void UpdateOverflowTooltip()
@@ -102,10 +153,7 @@ private:
 		if (!GetSafeHwnd() || !m_tooltip.GetSafeHwnd()) return;
 		const CRect rect = DetailRect();
 		CClientDC dc(this);
-		CFont* font = GetFont();
-		CFont* old = font ? dc.SelectObject(font) : NULL;
-		const CSize extent = dc.GetTextExtent(detail);
-		if (old) dc.SelectObject(old);
+		const CSize extent = RenderDetail(dc);
 		const bool truncated = !rect.IsRectEmpty() && !detail.IsEmpty() &&
 			(extent.cx > rect.Width() || extent.cy > rect.Height() ||
 			 detail.Find(_T('\n')) >= 0 || detail.Find(_T('\r')) >= 0);
@@ -128,7 +176,7 @@ private:
 		}
 		m_tooltip.SetToolRect(this, 1, rect);
 	}
-	CString m_tooltipText;
+	CString m_tooltipText, m_detailAction;
 	CToolTipCtrl m_tooltip;
 };
 
@@ -137,7 +185,7 @@ private:
 class CProxyTestResultDialog : public CModernDialog
 {
 public:
-	struct Row { CProxyTestResultRow::State state; CString title, status, detail; };
+	struct Row { CProxyTestResultRow::State state; CString title, status, detail; bool emphasizeDetail = false; };
 	CProxyTestResultDialog(const std::vector<Row>& rows, const CString& trustMessage, CWnd* parent)
 		: CModernDialog(IDD_PROXY_TEST_RESULT, parent), m_rows(rows), m_trustMessage(trustMessage) {}
 protected:
@@ -153,7 +201,7 @@ protected:
 			m_cards[i].Create(_T(""), WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, empty, this, 1201 + (UINT)i);
 			m_cards[i].SetFont(&m_uiFont);
 			m_cards[i].headingFont = &m_headingFont;
-			m_cards[i].Set(row.state, row.title, row.status, row.detail);
+			m_cards[i].Set(row.state, row.title, row.status, row.detail, row.emphasizeDetail);
 		}
 		if (!m_trustMessage.IsEmpty())
 		{

@@ -204,6 +204,9 @@
     <ClInclude Include="ProxyChainLayers.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ProxyTestProgress.h">
+        <Filter>Header Files</Filter>
+      </ClInclude>
     <ClInclude Include="ProxyTaskMgr.h">
       <Filter>Header Files</Filter>
     </ClInclude>

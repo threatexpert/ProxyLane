@@ -337,6 +337,7 @@ BOOL CAsyncSecureSocketLayer::FinishHandshake()
 	{
 		SecureTrace(_T("TLS ready, key=%d\r\n"), m_bUdpKeyReady);
 		m_bConnectNotified = TRUE;
+		ReportTestProgress(PTS_NEGOTIATING);
 		TriggerEvent(FD_CONNECT, 0, TRUE);
 	}
 	return TRUE;
@@ -378,6 +379,7 @@ void CAsyncSecureSocketLayer::OnConnect(int nErrorCode)
 		TriggerEvent(FD_CONNECT, nErrorCode, TRUE);
 		return;
 	}
+	ReportTestProgress(PTS_TLS);
 	if (!StartHandshake() || !FinishHandshake())
 		ReportFailure(_T("Secure transport handshake failed"));
 }

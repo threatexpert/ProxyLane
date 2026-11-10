@@ -43,10 +43,12 @@ public:
 	int LoadAll(std::list<CfgProxyItem>& items, CString& lastSelectedName) const;
 	BOOL ListNames(std::vector<CString>& names) const;
 	BOOL Save(CfgProxyItem& item);
+	// Update only an existing node's connection fields; keep rules and last selection.
+	BOOL SaveConnection(CfgProxyItem& item);
 	BOOL Delete(LPCTSTR name);
 	void SetLastSelected(LPCTSTR name);
 
-	// A saved Server-mode SOCKS5 or HTTP profile, the only kind a chain can use.
+	// A saved Server-mode SOCKS5, HTTP or SSH profile, the only kind a chain can use.
 	static BOOL IsChainHop(const CfgProxyItem& item);
 	// Chain profiles that list `name` as a hop.
 	BOOL ListChainUsers(LPCTSTR name, std::vector<CString>& users) const;

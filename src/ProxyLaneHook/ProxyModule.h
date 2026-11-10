@@ -5,6 +5,7 @@
 
 
 #pragma once
+#include "ProxyTestProgress.h"
 
 #include "structinfo.h"
 #include <vector>

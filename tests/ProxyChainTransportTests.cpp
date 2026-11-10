@@ -79,6 +79,7 @@ public:
 	~Server() { Stop(); }
 
 	bool reject = false;
+	DWORD replyDelay = 0;
 	std::string user, pass;
 
 	WORD Start()
@@ -186,6 +187,7 @@ private:
 		Record(host + ":" + port);
 
 		unsigned char reply[10] = { 5, 0, 0, 1 };
+		Sleep(replyDelay);
 		if (!reject) upstream = ConnectTo(host, port);
 		if (upstream == INVALID_SOCKET)
 		{
@@ -211,6 +213,7 @@ private:
 		const std::string target = request.substr(8, end - 8);
 		Record(target);
 		const size_t colon = target.rfind(':');
+		Sleep(replyDelay);
 		if (!reject) upstream = ConnectTo(target.substr(0, colon), target.substr(colon + 1));
 		if (upstream == INVALID_SOCKET)
 		{
@@ -412,8 +415,21 @@ class TesterResult : public IProxyTesterCallback
 public:
 	volatile LONG done = 0;
 	int code = -1;
-	void OnProxyTesterCallback(IProxyTester*, int error, WPARAM, LPARAM) override
+	std::vector<ProxyTestHopProgress> progress;
+	bool ordered = true;
+	void OnProxyTesterCallback(IProxyTester*, int error, WPARAM hop, LPARAM tick) override
 	{
+		if (HIWORD(error) == LAYERCALLBACK_TESTPROGRESS)
+		{
+			if (hop >= progress.size()) progress.resize(hop + 1);
+			const int stage = LOWORD(error);
+			if (stage > PTS_WAITING && stage <= PTS_PASSED)
+			{
+				for (size_t i = 0; i < hop; ++i) ordered &= progress[i].stage == PTS_PASSED;
+				if (stage == PTS_PASSED) ordered &= progress[hop].Active();
+			}
+			ordered &= progress[hop].Apply(stage, (DWORD)tick);
+		}
 		if (HIWORD(error) == LAYERCALLBACK_LAYERSPECIFIC)
 		{
 			code = LOWORD(error);
@@ -423,7 +439,7 @@ public:
 };
 
 // Runs the tester through the chain; returns the failed hop (-1 = none).
-static int TestChain(const ProxyChain& chain, WORD targetPort, int& code)
+static int TestChain(const ProxyChain& chain, WORD targetPort, int& code, TesterResult* captured = NULL, DWORD cancelAfter = 0)
 {
 	IGlobalProxy* proxy = GetGlobalProxyInstance();
 	Check(proxy != NULL, "tester global proxy");
@@ -437,7 +453,7 @@ static int TestChain(const ProxyChain& chain, WORD targetPort, int& code)
 	TesterResult result;
 	Check(tester->StartChain(&result, &client, &chain[0], (INT)chain.size()) != FALSE, "start chain test");
 	const DWORD started = GetTickCount();
-	while (!result.done && GetTickCount() - started < 20000)
+	while (!result.done && GetTickCount() - started < 35000)
 	{
 		MSG msg;
 		while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
@@ -446,8 +462,11 @@ static int TestChain(const ProxyChain& chain, WORD targetPort, int& code)
 			DispatchMessage(&msg);
 		}
 		Sleep(5);
+		if (cancelAfter && GetTickCount() - started >= cancelAfter) { tester->Stop(); break; }
 	}
-	Check(result.done != 0, "chain test completes");
+	Check(cancelAfter || result.done != 0, "chain test completes");
+	Check(result.ordered, "progress is sequential and starts before passing");
+	if (captured) *captured = result;
 	code = result.code;
 	const int hop = tester->GetFailedHop();
 	tester->Stop();
@@ -475,10 +494,46 @@ int main()
 	WSADATA wsa;
 	Check(WSAStartup(MAKEWORD(2, 2), &wsa) == 0, "Winsock");
 	bool passed = true;
+	{
+		ProxyTestHopProgress p;
+		p.Apply(PTS_NEGOTIATING, 1000); p.Apply(PTS_AUTH, 1200);
+		Check(!p.Apply(PTS_AUTH, 1500), "duplicate stage ignored");
+		p.Apply(PTS_OPENING, 1600); p.Apply(PTS_PASSED, 1900);
+		passed &= Report(p.elapsed == 900 && p.stages[PTS_AUTH] == 400 &&
+			p.Elapsed(5000) == 900 && !p.Apply(PTS_FAILED, 5100), "elapsed excludes queue time and freezes at completion");
+		ProxyTestHopProgress wrap; wrap.Apply(PTS_CONNECTING, 0xfffffff0u); wrap.Apply(PTS_CANCELLED, 0x30);
+		passed &= Report(wrap.elapsed == 64 && wrap.Elapsed(1000) == 64, "cancel freezes elapsed across tick wrap");
+	}
 	Server echo(Server::ECHO);
 	const WORD target = echo.Start();
 	const std::string targetIp = "127.0.0.1:" + std::to_string(target);
 	const std::string targetName = "localhost:" + std::to_string(target);
+	for (int outcome = 0; outcome < 4; ++outcome)
+	{
+		std::vector<std::unique_ptr<Server>> servers;
+		ProxyChain route;
+		for (int i = 0; i < 7; ++i)
+		{
+			servers.emplace_back(new Server(i % 2 ? Server::HTTP : Server::SOCKS5));
+			servers.back()->replyDelay = i == 3 ? (outcome == 3 ? 27000 : 600) : 120;
+			servers.back()->reject = outcome == 1 && i == 3;
+			servers.back()->Start();
+			route.push_back(Hop(i % 2 ? TEXT("HTTP") : TEXT("SOCKS5"), servers.back()->Port()));
+		}
+		int code; TesterResult result;
+		const int failed = TestChain(route, target, code, &result, outcome == 2 ? 600 : 0);
+		Check(result.progress.size() == 7, "all seven rows receive terminal results");
+		for (int i = 0; i < 7; ++i)
+		{
+			const int expected = outcome && i > 3 ? PTS_SKIPPED : outcome && i == 3 ?
+				(outcome == 1 ? PTS_FAILED : outcome == 3 ? PTS_TIMED_OUT : PTS_CANCELLED) : PTS_PASSED;
+			Check(result.progress[i].stage == expected, "seven-hop terminal state");
+			if (i < 3 || !outcome && i > 3)
+				Check(result.progress[i].elapsed >= 100 && result.progress[i].elapsed < 500, "hop duration excludes preceding delays");
+		}
+		passed &= Report(outcome == 2 || (outcome == 1 ? code != 0 && failed == 3 : outcome == 3 ? code == WSAETIMEDOUT && failed == 3 : code == 0),
+			outcome == 0 ? "seven-hop live progress and per-hop timing" : outcome == 1 ? "failure preserves passed hops and skips downstream" : outcome == 3 ? "timeout belongs to pending hop and skips downstream" : "cancel preserves passed hops and freezes active hop");
+	}
 
 	{
 		Server a(Server::SOCKS5), b(Server::SOCKS5);

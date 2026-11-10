@@ -158,6 +158,7 @@ public:
     void Schedule();
     void Fail(int code, int error, const CStringA& detail, int hop = -1);
     void Dispose();
+    void Progress(int hop, int stage, DWORD tick = GetTickCount());
     bool HasObservers() const { for (const auto& c : channels) if (c->m->observer) return true; return false; }
     bool HasClients() const {
         for (const auto& c : channels)
@@ -179,6 +180,7 @@ private:
     bool disposed = false, transportReady = false;
     DWORD started = GetTickCount(), lastReceive = GetTickCount(), nextKeepalive = 0;
     size_t nextChannel = 0;
+    int progressHop = 0, progressStage = PTS_CONNECTING;
     bool Flush();
     void ChannelFailure(SshChannel::State& channel, int code, int error, const CStringA& detail, int hop);
     static ssize_t SendCallback(libssh2_socket_t, const void*, size_t, int, void**);
@@ -361,6 +363,11 @@ void SshSession::OnReceive(int error) { if (error) Fail(PROXYERROR_NOCONN, error
 void SshSession::OnSend(int error) { if (error) Fail(PROXYERROR_NOCONN, error, "SSH transport write failed"); Schedule(); }
 void SshSession::OnClose(int error) { Fail(PROXYERROR_NOCONN, error ? error : WSAECONNRESET, "SSH transport disconnected"); }
 int SshSession::OnLayerCallback(const CAsyncSocketExLayer* layer, int type, int code, WPARAM error, LPARAM detail) {
+    if (type == LAYERCALLBACK_TESTPROGRESS) {
+        const int hop = (int)error >= 0 ? (int)error : lower.HopOf(layer);
+        Progress(hop >= 0 ? hop : 0, code, (DWORD)detail);
+        return 0;
+    }
     if (type == LAYERCALLBACK_LAYERSPECIFIC && code && code != PROXYSTATUS_LISTENSOCKETCREATED) {
         const int hop = lower.HopOf(layer);
         Fail(code, error ? static_cast<int>(error) : WSAECONNREFUSED,
@@ -403,10 +410,19 @@ void SshSession::ChannelFailure(SshChannel::State& c, int code, int error, const
 void SshSession::Fail(int code, int error, const CStringA& detail, int hop) {
     if (failed) return;
     failed = true;
-    if (hop < 0) hop = static_cast<int>(route.size()) - 1;
+    if (hop < 0) hop = use == SshSessionUse::Test && phase == TRANSPORT
+        ? min(progressHop + (progressStage == PTS_PASSED ? 1 : 0), static_cast<int>(route.size()) - 1)
+        : static_cast<int>(route.size()) - 1;
     const auto snapshot = channels;
     for (auto& channel : snapshot) ChannelFailure(*channel->m, code, error, detail, hop);
     Schedule();
+}
+void SshSession::Progress(int hop, int stage, DWORD tick) {
+    if (use != SshSessionUse::Test || failed || disposed) return;
+    progressHop = hop; progressStage = stage;
+    const auto snapshot = channels;
+    for (const auto& c : snapshot)
+        if (c->m->observer) c->m->observer->ReportTestProgress(stage, hop, tick);
 }
 void SshSession::Dispose() {
     if (disposed) return;
@@ -431,6 +447,7 @@ void SshSession::Drive() {
         api.session_callback_set2(session, LIBSSH2_CALLBACK_SEND, reinterpret_cast<libssh2_cb_generic*>(SendCallback));
         api.session_callback_set2(session, LIBSSH2_CALLBACK_RECV, reinterpret_cast<libssh2_cb_generic*>(ReceiveCallback));
         phase = HANDSHAKE;
+        Progress(static_cast<int>(route.size()) - 1, PTS_SSH);
     }
     Flush(); if (failed) return;
     if (wire.size >= WIRE_HIGH_WATER && phase != READY) return;
@@ -439,6 +456,7 @@ void SshSession::Drive() {
         const int result = api.session_handshake(session, GetSocketHandle());
         Flush(); if (failed || result == LIBSSH2_ERROR_EAGAIN) return;
         if (result) { Fail(PROXYERROR_REQUESTFAILED, WSAEPROTONOSUPPORT, "SSH key exchange failed"); return; }
+        Progress(static_cast<int>(route.size()) - 1, PTS_HOSTKEY);
         const char* digest = api.hostkey_hash(session, LIBSSH2_HOSTKEY_HASH_SHA256);
         if (!digest) { Fail(PROXYERROR_REQUESTFAILED, WSAEACCES, "SSH host key unavailable"); return; }
         const CStringA fingerprint = Fingerprint(digest);
@@ -449,6 +467,7 @@ void SshSession::Drive() {
             Fail(PROXYERROR_SSH_HOSTKEY_CHANGED, WSAEACCES, fingerprint); return;
         }
         phase = AUTH;
+        Progress(static_cast<int>(route.size()) - 1, PTS_AUTH);
     }
     if (phase == AUTH) {
         const int result = api.userauth_password_ex(session, endpoint.strProxyUser.szbuf,
@@ -485,6 +504,7 @@ void SshSession::Drive() {
         if (c.openOperation && (!c.observer || c.error)) api.channel_open_cancel(c.openOperation);
         if (wire.size >= WIRE_HIGH_WATER) continue;
         if (!c.openOperation && !c.error && c.observer && pending < MAX_PENDING_OPENS) {
+            Progress(static_cast<int>(route.size()) - 1, PTS_OPENING);
             c.openOperation = api.channel_direct_tcpip_begin(session, c.target, c.port, "127.0.0.1", 0);
             if (!c.openOperation) {
                 ChannelFailure(c, PROXYERROR_REQUESTFAILED, WSAENOBUFS,
@@ -502,6 +522,7 @@ void SshSession::Drive() {
         c.openOperation = NULL; --pending;
         if (!result) {
             c.ready = true;
+            Progress(static_cast<int>(route.size()) - 1, PTS_PASSED);
             if (c.observer) c.observer->Ready();
         } else if (result == LIBSSH2_ERROR_CHANNEL_FAILURE || result == LIBSSH2_ERROR_CHANNEL_CLOSED) {
             c.closed = true;

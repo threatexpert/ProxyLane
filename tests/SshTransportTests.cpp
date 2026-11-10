@@ -252,7 +252,18 @@ static void WaitStat(const char* key, int minimum) {
 
 struct TestResult : IProxyTesterCallback {
     bool done = false; int code = -1, hop = -1; std::string detail;
-    void OnProxyTesterCallback(IProxyTester* tester, int error, WPARAM, LPARAM data) override {
+    std::vector<ProxyTestHopProgress> progress;
+    void OnProxyTesterCallback(IProxyTester* tester, int error, WPARAM node, LPARAM data) override {
+        if (HIWORD(error) == LAYERCALLBACK_TESTPROGRESS) {
+            if (progress.size() <= node) progress.resize(node + 1);
+            const int stage = LOWORD(error);
+            if (stage > PTS_WAITING && stage <= PTS_PASSED) {
+                for (size_t i = 0; i < node; ++i) Check(progress[i].stage == PTS_PASSED, "nested SSH progress follows tunnel order");
+                if (stage == PTS_PASSED) Check(progress[node].Active(), "SSH hop started before passing");
+            }
+            Check(progress[node].Apply(stage, (DWORD)data), "SSH progress has no duplicates or late updates");
+            return;
+        }
         if (HIWORD(error) != LAYERCALLBACK_LAYERSPECIFIC) return;
         code = LOWORD(error); hop = tester->GetFailedHop();
         if (data) detail = reinterpret_cast<const char*>(data);
@@ -307,6 +318,10 @@ int main(int argc, char** argv)
     tested = Test(proxy,{ssh(a),ssh(b)},target);
     Pass(tested.code == 0 && Stat("auth_a") == testAuth+1 && WaitSessions(0),
         "next test authenticates anew and releases its entire SSH chain");
+    Pass(tested.progress.size() == 2 && tested.progress[0].stage == PTS_PASSED &&
+        tested.progress[1].stage == PTS_PASSED, "nested SSH exposes progress for each node");
+    tested = Test(proxy,{Hop(L"SOCKS5",socks),ssh(a),Hop(L"HTTP",http),ssh(b)},target);
+    Pass(tested.code == 0 && tested.progress.size() == 4 && WaitSessions(0), "mixed SOCKS5 / SSH / HTTP / SSH progress");
 
     // Cancel while a nested test's final OPEN awaits confirmation.
     Control("hold-opens");
@@ -320,7 +335,11 @@ int main(int argc, char** argv)
     DWORD cancelStart = GetTickCount();
     while (!Stat("open_held") && GetTickCount()-cancelStart < 10000) { PumpMessages(); Sleep(10); }
     Check(Stat("open_held") == 1 && !cancelled.done,"test OPEN is pending");
+    Pass(cancelled.progress.size() == 2 && cancelled.progress[0].stage == PTS_PASSED &&
+        cancelled.progress[1].stage == PTS_OPENING, "SSH waits for final OPEN before marking success");
     pendingTest->Release();
+    Pass(cancelled.progress[0].stage == PTS_PASSED && cancelled.progress[1].stage == PTS_CANCELLED,
+        "SSH cancellation preserves completed node and cancels pending node");
     Pass(WaitSessions(0), "cancelling pending nested test releases every SSH hop");
     Control("release-opens");
     while (Stat("open_held")) Sleep(10);
