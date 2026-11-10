@@ -511,6 +511,7 @@ void CPRCTcpPeer::OnSend(int nErrorCode)
 
 void CPRCTcpPeer::OnConnect(int nErrorCode)
 {
+    if (nErrorCode && !m_bForwardingReady && m_pNotify->RetryDohAddress(this, nErrorCode)) return;
     if (m_pNotify->m_pMitm) m_pNotify->m_pMitm->Connected(nErrorCode);
     if (m_pNotify->m_pProtocol) m_pNotify->m_pProtocol->Connected(nErrorCode);
 	m_ppi.errcode = nErrorCode;
@@ -556,6 +557,7 @@ void CPRCTcpPeer::OnConnect(int nErrorCode)
 
 void CPRCTcpPeer::OnClose(int nErrorCode)
 {
+    if (!m_bForwardingReady && m_pNotify->RetryDohAddress(this, nErrorCode)) return;
 	if (m_pNotify->m_pMitm && nErrorCode == 0)
 	{
 		m_pNotify->m_pMitm->OnRead(this, 0);

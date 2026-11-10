@@ -61,8 +61,11 @@
   "share.invalid_rules": "配置规则无效或过长，每组规则最多为 32767 个 UTF-8 字节和 4096 行。",
   "share.invalid_udp": "此代理类型不支持 UDP，请关闭“代理 UDP”后重试。",
   "share.too_large": "配置码过长，最多支持 256 KiB。",
-  "share.invalid_code": "剪贴板中没有有效的 ProxyLane 配置码，或配置码已损坏。请复制完整的一行 proxylane://profile/v1/… 后重试。",
+  "share.invalid_code": "剪贴板中没有有效的 ProxyLane 配置码，或配置码已损坏。请复制完整的一行 proxylane://profile/… 后重试。",
   "share.unsupported_version": "此配置码使用了不支持的格式版本，请更新 ProxyLane 后重试。",
+  "share.unsupported_features": "此配置需要当前版本不支持的能力：%s。请更新 ProxyLane；本次未导入，不会忽略这些设置。",
+  "share.unknown_fields": "此配置包含无法识别的字段：%s。请使用支持这些字段的版本；本次未导入，不会丢弃这些设置。",
+  "share.feature_mismatch": "配置中的能力声明与实际设置不一致，无法导入。请使用发送方程序重新复制完整配置码。",
   "share.clipboard_busy": "剪贴板正在被其他程序使用，请稍后重试。",
   "share.no_text": "剪贴板中没有可读取的文本，请先复制完整配置码。",
   "share.clipboard_failed": "无法写入剪贴板，请稍后重试。",
@@ -712,5 +715,12 @@
   "test.ssh_key_auth_failed": "SSH 私钥认证失败，请检查私钥、口令及服务器公钥授权。",
   "share.includes_private_key": "包含私钥及口令，请仅分享给可信的人",
   "ssh.key_write_failed": "无法将私钥保存到本地 keys 目录，请检查访问权限或文件是否损坏。",
-  "test.ssh_key_file_failed": "私钥文件缺失、无法读取或内容无效，请重新导入。"
+  "test.ssh_key_file_failed": "私钥文件缺失、无法读取或内容无效，请重新导入。",
+  "page1.dns_doh": "经代理加密解析",
+  "page1.doh_url": "DoH 服务地址（HTTPS）",
+  "page1.doh_bootstrap": "连接 IP（必填，多个用逗号分隔）",
+  "profile.invalid_doh": "请填写有效的 HTTPS DoH 地址和 1–8 个连接 IP。IP 不能包含端口；禁止 IPv6 时请使用 IPv4。",
+  "profile.doh_unavailable": "加密 DNS（DoH）需要受支持的 64 位 ProxyLane 主程序。32 位目标应用可以通过它使用 DoH。",
+  "profile.doh_requires_proxy": "经代理加密解析需要 SOCKS5、HTTP、SSH 或代理链配置，不能用于 NOPROXY。",
+  "test.doh_failed": "加密 DNS（DoH）查询失败。请检查服务地址、连接 IP 和代理链；不会改用本地或普通 DNS。"
 }

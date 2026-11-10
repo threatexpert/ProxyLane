@@ -20,6 +20,8 @@ struct CfgProxyItem
 	BOOL bBlockIPv6;
 	BOOL bHookChildProcess;
 	int dnsOpt;
+    CString strDohUrl;
+    CString strDohBootstrap;
 	BOOL bRedirectPrivateDNS;
 	CString strRedirectDNS;
 	CString strChildFilter;

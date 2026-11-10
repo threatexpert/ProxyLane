@@ -83,6 +83,12 @@ BOOL CHookWinsock::IsUdpAllowedLoopback(const _SockAddr& address)
 		!(address.IsIPv6() && m_DummyDNS.IsDummyIPv6(address.GetAddr6()));
 }
 
+BOOL CHookWinsock::IsDohDnsRequest(const SOCKADDR* destination, int length)
+{
+    _SockAddr address;
+    return NormalizeSocketAddress(destination, length, &address) && IsDohDnsDestination(address);
+}
+
 BOOL CHookWinsock::IsUdpLoopbackDestination(SOCKET socketHandle,
 	const SOCKADDR *destination, int destinationLength)
 {
@@ -670,7 +676,7 @@ BOOL CHookWinsock::HackDNS(const char *name)
 	{
 		return FALSE;
 	}
-	else if (m_psi.nDNSOption == PSI_DNSOPT_REMOTE)
+	else if (m_psi.nDNSOption == PSI_DNSOPT_REMOTE || m_psi.nDNSOption == PSI_DNSOPT_DOH)
 	{
 		return !IsHostNameReserved(name);
 	}
@@ -1220,7 +1226,6 @@ BOOL PASCAL CHookWinsock::inhook_ConnectEx(
 }
 
 static __WSASENDMSG Original_WSASendMsg = NULL;
-
 INT PASCAL hook_WSASendMsg(SOCKET s, LPWSAMSG lpMsg, DWORD dwFlags,
 	LPDWORD lpNumberOfBytesSent, LPWSAOVERLAPPED lpOverlapped,
 	LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine)
@@ -1267,7 +1272,7 @@ INT PASCAL CHookWinsock::inhook_WSASendMsg(SOCKET s, LPWSAMSG lpMsg,
 		WSASetLastError(WSAEHOSTUNREACH);
 		return SOCKET_ERROR;
 	}
-	if (!m_psi.bHookUDP || !lpMsg)
+	if (!lpMsg || (!m_psi.bHookUDP && !IsDohDnsRequest(lpMsg->name, lpMsg->namelen)))
 		return Original_WSASendMsg(s, lpMsg, dwFlags, lpNumberOfBytesSent,
 			lpOverlapped, lpCompletionRoutine);
 	if (!lpMsg->name)
@@ -1359,9 +1364,9 @@ HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 		WSASetLastError(WSAEHOSTUNREACH);
 		return HOOK_FAILED;
 	}
-	if (nSockType == SOCK_DGRAM && !m_psi.bHookUDP)
+	if (nSockType == SOCK_DGRAM && !m_psi.bHookUDP && !IsDohDnsDestination(addrname))
 		return HOOK_BYPASS;
-	if (nSockType == SOCK_STREAM && !m_psi.bHookTCP)
+	if (nSockType == SOCK_STREAM && !m_psi.bHookTCP && !IsDohDnsDestination(addrname))
 		return HOOK_BYPASS;
 
 	// 127.255.0.0/16 is ProxyLane's IPv4 dummy-DNS range.  It is part of
@@ -1462,7 +1467,7 @@ HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 	if (nSockType == SOCK_DGRAM)
 	{
 		size_t maxPayload = UdpPayloadPolicy::MaxPayload(
-			proxyInfo.GetProxyType() == PROXYTYPE_SOCKS5,
+			proxyInfo.GetProxyType() == PROXYTYPE_SOCKS5 && !IsDohDnsDestination(prcc.dstAddr),
 			prcc.IsDNValid() ? prcc.szDomainName : NULL,
 			prcc.dstAddr.IsIPv6());
 		m_HackedSocket.SetUDPMaxPayload(&prcc, maxPayload, TRUE);
@@ -1512,7 +1517,7 @@ MyDetourProc(has_Return,
 
 int WSAAPI CHookWinsock::inhook_getpeername(SOCKET s, struct sockaddr* name, int* namelen)
 {
-	if (!m_psi.bHookTCP && !m_psi.bHookUDP)
+	if (!m_psi.bHookTCP && !m_psi.bHookUDP && m_psi.nDNSOption != PSI_DNSOPT_DOH)
 	{
 		return CallTrampoline(getpeername)(s, name, namelen);
 	}
@@ -1521,6 +1526,7 @@ int WSAAPI CHookWinsock::inhook_getpeername(SOCKET s, struct sockaddr* name, int
 	比如之前connect的原目的是aa.aa.aa.aa， 然后被HackConnect修改为PRC的服务地址, 为了避免getpeername得到PRC的地址，这里要做处理
 	*/
 	PRCClient prcc;
+	// UDP exposes the actual local relay endpoint; never rewrite its peer address.
 	if (m_HackedSocket.GetInfo(s, &prcc) && prcc.sType == SOCK_STREAM)
 	{
 		const int requiredLength = prcc.dstAddr.Size();
@@ -1548,7 +1554,7 @@ MyDetourProc(has_Return,
 
 int WSAAPI CHookWinsock::inhook_closesocket(SOCKET s)
 {
-	if (!m_psi.bHookTCP && !m_psi.bHookUDP)
+	if (!m_psi.bHookTCP && !m_psi.bHookUDP && m_psi.nDNSOption != PSI_DNSOPT_DOH)
 	{
 		return CallTrampoline(closesocket)(s);
 	}
@@ -1628,7 +1634,7 @@ int WSAAPI CHookWinsock::inhook_sendto(SOCKET s, const char* buf, int len, int f
 		WSASetLastError(WSAEHOSTUNREACH);
 		return SOCKET_ERROR;
 	}
-	if (!m_psi.bHookUDP)
+	if (!m_psi.bHookUDP && !IsDohDnsRequest(to, tolen))
 	{
 		return CallTrampoline(sendto)(s, buf, len, flags, to, tolen);
 	}
@@ -1687,7 +1693,7 @@ int WSAAPI CHookWinsock::inhook_WSASendTo(
 		WSASetLastError(WSAEHOSTUNREACH);
 		return SOCKET_ERROR;
 	}
-	if (!m_psi.bHookUDP)
+	if (!m_psi.bHookUDP && !IsDohDnsRequest(lpTo, iToLen))
 	{
 		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped, lpCompletionRoutine);
 	}
@@ -1757,7 +1763,7 @@ int WSAAPI CHookWinsock::inhook_WSASendTo(
 HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname,
 	LPPRCClient lpC, size_t *maxPayload)
 {
-	if (!m_psi.bHookUDP)
+	if (!m_psi.bHookUDP && !IsDohDnsDestination(addrname))
 		return HOOK_BYPASS;
 
 	int nSockType;
@@ -1896,7 +1902,7 @@ HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname,
 
 	m_HackedSocket.push(&prcc);
 	size_t routeMaxPayload = UdpPayloadPolicy::MaxPayload(
-		proxyInfo.GetProxyType() == PROXYTYPE_SOCKS5,
+		proxyInfo.GetProxyType() == PROXYTYPE_SOCKS5 && !IsDohDnsDestination(prcc.dstAddr),
 		prcc.IsDNValid() ? prcc.szDomainName : NULL,
 		prcc.dstAddr.IsIPv6());
 	m_HackedSocket.SetUDPMaxPayload(&prcc, routeMaxPayload, FALSE);

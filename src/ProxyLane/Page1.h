@@ -227,6 +227,9 @@ public:
 	CToggleButton m_btnBlockIPv6;
 	CToggleButton m_btnDNSLocal;
 	CToggleButton m_btnDNSRemote;
+    CToggleButton m_btnDNSDoh;
+    CSoftEdit m_editDohUrl, m_editDohBootstrap;
+    BOOL ApplyDohSettings(ProxyInfo& proxy);
 	CToggleButton m_btnRedirectPrivateDNS;
 	CSoftEdit   m_editRedirectDNS;
 	CToggleButton m_btnHookChildProcess;

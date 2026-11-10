@@ -59,6 +59,14 @@ BOOL CProxyProfileStore::Load(CfgProxyItem& item) const
 	item.bBlockUDP = !!m_ini.GetDWORD(section, _T("BlockUDP"), FALSE);
 	item.bBlockIPv6 = !!m_ini.GetDWORD(section, _T("BlockIPv6"), FALSE);
 	item.dnsOpt = m_ini.GetDWORD(section, _T("dnsOpt"), PSI_DNSOPT_REMOTE);
+    if (item.dnsOpt < PSI_DNSOPT_LOCAL || item.dnsOpt > PSI_DNSOPT_DOH) return FALSE;
+    // Older modes may prefill the editor; an incomplete DoH profile must not
+    // silently select another resolver or bootstrap address.
+    item.strDohUrl = m_ini.GetString(section, L"DohUrl",
+        item.dnsOpt == PSI_DNSOPT_DOH ? L"" : L"https://dns.google/dns-query");
+    item.strDohBootstrap = m_ini.GetString(section, L"DohBootstrap",
+        item.dnsOpt == PSI_DNSOPT_DOH ? L"" : L"8.8.8.8, 8.8.4.4");
+    item.pi.dohEnabled = 0; // The active profile, not its chain nodes, chooses DNS.
 	item.bRedirectPrivateDNS = !!m_ini.GetDWORD(section,
 		_T("RedirectPrivateDNS"), TRUE);
 	item.strRedirectDNS = m_ini.GetString(section, _T("RedirectDNS"));
@@ -231,6 +239,8 @@ BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 	if (!ini.SetDWORD(section, _T("BlockIPv6"), item.bBlockIPv6)) return false;
 	if (!ini.DeleteKeyName(section, _T("UDPAddr"))) return false;
 	if (!ini.SetDWORD(section, _T("dnsOpt"), item.dnsOpt)) return false;
+    if (!ini.SetString(section, L"DohUrl", item.strDohUrl)) return false;
+    if (!ini.SetString(section, L"DohBootstrap", item.strDohBootstrap)) return false;
 	if (!ini.SetDWORD(section, _T("RedirectPrivateDNS"), item.bRedirectPrivateDNS)) return false;
 	if (!ini.SetString(section, _T("RedirectDNS"), item.strRedirectDNS)) return false;
 	if (!ini.SetString(section, _T("ChildFilter"), EncodeFilter(item.strChildFilter))) return false;

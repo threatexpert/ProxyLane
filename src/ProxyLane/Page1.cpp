@@ -6,6 +6,7 @@
 #include "SshProfile.h"
 #include "ProxyLane.h"
 #include "Page1.h"
+#include "../ProxyLaneHook/DohPolicy.h"
 #include "ProxyTestResultDialog.h"
 #include "ProxyTestError.h"
 #include "ChainNodeEditDialog.h"
@@ -22,6 +23,9 @@
 #include <shlwapi.h>
 #pragma comment(lib, "shlwapi.lib")
 
+static_assert(IDC_RADIO_DNSDOH > CSshAuthControls::ImportId ||
+    IDC_STATIC_DOH_BOOTSTRAP < CSshAuthControls::LabelId,
+    "DoH and dynamically created SSH controls share the settings dialog; IDs must not overlap");
 
 CIniFile g_ini;
 
@@ -132,6 +136,9 @@ void CPage1::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_CHECK_BLOCK_IPV6, m_btnBlockIPv6);
 	DDX_Control(pDX, IDC_RADIO_DNSLOCAL, m_btnDNSLocal);
 	DDX_Control(pDX, IDC_RADIO_DNSREMOTE, m_btnDNSRemote);
+    DDX_Control(pDX, IDC_RADIO_DNSDOH, m_btnDNSDoh);
+    DDX_Control(pDX, IDC_EDIT_DOH_URL, m_editDohUrl);
+    DDX_Control(pDX, IDC_EDIT_DOH_BOOTSTRAP, m_editDohBootstrap);
 	DDX_Control(pDX, IDC_CHECK_REDIRECT_PRIVATE_DNS, m_btnRedirectPrivateDNS);
 	DDX_Control(pDX, IDC_EDIT_REDIRECT_DNS, m_editRedirectDNS);
 	DDX_Control(pDX, IDC_CHECK_HOOKCHILDPROCESS, m_btnHookChildProcess);
@@ -198,6 +205,9 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_BN_CLICKED(IDC_CHECK_BLOCK_IPV6, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_RADIO_DNSLOCAL, &CPage1::OnDnsSettingsChanged)
 	ON_BN_CLICKED(IDC_RADIO_DNSREMOTE, &CPage1::OnDnsSettingsChanged)
+    ON_BN_CLICKED(IDC_RADIO_DNSDOH, &CPage1::OnDnsSettingsChanged)
+    ON_EN_CHANGE(IDC_EDIT_DOH_URL, &CPage1::OnProfileFieldChanged)
+    ON_EN_CHANGE(IDC_EDIT_DOH_BOOTSTRAP, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_CHECK_REDIRECT_PRIVATE_DNS, &CPage1::OnDnsSettingsChanged)
 	ON_EN_CHANGE(IDC_EDIT_REDIRECT_DNS, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_RADIO_CHILDFILTER_EXCLUDE, &CPage1::OnProfileFieldChanged)
@@ -668,7 +678,11 @@ void CPage1::LayoutSettingsPage()
         flow({IDC_CHECK_BLOCKUDP, IDC_CHECK_BLOCK_IPV6}, 44, innerX);
         const int dnsLabelW = textWidth(IDC_STATIC_DNS_LABEL) + S(12);
         place(IDC_STATIC_DNS_LABEL, innerX, row + S(4), dnsLabelW, labelH);
-        flow({IDC_RADIO_DNSLOCAL, IDC_RADIO_DNSREMOTE}, 24, innerX + dnsLabelW);
+        const int dnsOptionsW = textWidth(IDC_RADIO_DNSLOCAL) + textWidth(IDC_RADIO_DNSREMOTE)
+            + textWidth(IDC_RADIO_DNSDOH) + S(24 * 3 + 12 * 2);
+        int dnsLeft = innerX + dnsLabelW;
+        if (dnsLabelW + dnsOptionsW > innerW) { row += rowH; dnsLeft = innerX; }
+        flow({IDC_RADIO_DNSLOCAL, IDC_RADIO_DNSREMOTE, IDC_RADIO_DNSDOH}, 24, dnsLeft);
         const int redirectW = min(innerW, textWidth(IDC_CHECK_REDIRECT_PRIVATE_DNS) + S(44));
         place(IDC_CHECK_REDIRECT_PRIVATE_DNS, innerX, row, redirectW, checkH);
         if (innerW - redirectW - S(12) < S(120)) {
@@ -677,6 +691,32 @@ void CPage1::LayoutSettingsPage()
         } else {
             place(IDC_EDIT_REDIRECT_DNS, innerX + redirectW + S(12), row - (fieldH - checkH) / 2,
                 innerW - redirectW - S(12), fieldH);
+        }
+        const bool doh = m_btnDNSDoh.GetCheck() == BST_CHECKED;
+        for (UINT id : {IDC_STATIC_DOH_URL, IDC_EDIT_DOH_URL, IDC_STATIC_DOH_BOOTSTRAP, IDC_EDIT_DOH_BOOTSTRAP})
+            GetDlgItem(id)->ShowWindow(m_activeTab == 0 && doh ? SW_SHOW : SW_HIDE);
+        GetDlgItem(IDC_CHECK_REDIRECT_PRIVATE_DNS)->ShowWindow(m_activeTab == 0 && !doh ? SW_SHOW : SW_HIDE);
+        GetDlgItem(IDC_EDIT_REDIRECT_DNS)->ShowWindow(m_activeTab == 0 && !doh ? SW_SHOW : SW_HIDE);
+        if (doh) {
+            const int columnW = (innerW - gapX) / 2;
+            int labelsH = labelH;
+            for (UINT id : {IDC_STATIC_DOH_URL, IDC_STATIC_DOH_BOOTSTRAP}) {
+                CWnd* label = GetDlgItem(id);
+                CString text; label->GetWindowText(text);
+                CClientDC dc(label);
+                CFont* font = label->GetFont();
+                CFont* oldFont = font ? dc.SelectObject(font) : NULL;
+                CRect bounds(0, 0, max(1, columnW), 0);
+                dc.DrawText(text, bounds, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
+                if (oldFont) dc.SelectObject(oldFont);
+                labelsH = max(labelsH, bounds.Height());
+            }
+            place(IDC_STATIC_DOH_URL, innerX, row, columnW, labelsH);
+            place(IDC_STATIC_DOH_BOOTSTRAP, innerX + columnW + gapX, row, columnW, labelsH);
+            row += labelsH + S(3);
+            place(IDC_EDIT_DOH_URL, innerX, row, columnW, fieldH);
+            place(IDC_EDIT_DOH_BOOTSTRAP, innerX + columnW + gapX, row, columnW, fieldH);
+            row += fieldH;
         }
         const int height = m_activeTab == 0 ? row + max(fieldH, checkH) + S(16) - top
             : max(S(220), client.Height() - margin - top);
@@ -869,9 +909,10 @@ INT CPage1::GetProxyChain(const LPPRCClient pPRCC, LPProxyInfo lpHops, INT nCapa
 {
 	// The caller asks only for a connection GetProxyInfo routed through a
 	// proxy, so the target filter has already had its say.
-	if (!pPRCC || pPRCC->sType != SOCK_STREAM)
+	if (!pPRCC)
 		return 0;
 	CSingleLock runtimeLock(&m_runtimeLock, TRUE);
+	if (pPRCC->sType != SOCK_STREAM && !DohPolicy::Intercept(*pPRCC, m_ProxyInfo)) return 0;
 	if (!m_runtimeSettingsValid || m_runtimeChain.size() < 2)
 		return 0;
 	const INT hops = (INT)m_runtimeChain.size();
@@ -906,7 +947,7 @@ BOOL CPage1::GetProxySettingsFromUi(LPProxySettingsInfo lpPSI)
 	psi.bBlockUDP = m_btnBlockUDP.GetCheck() == BST_CHECKED;
 	psi.bBlockIPv6 = m_btnBlockIPv6.GetCheck() == BST_CHECKED;
 	psi.bHookCreateProcess = m_btnHookChildProcess.GetCheck();
-	psi.nDNSOption = m_btnDNSLocal.GetCheck() ? PSI_DNSOPT_LOCAL : PSI_DNSOPT_REMOTE;
+	psi.nDNSOption = m_btnDNSDoh.GetCheck() ? PSI_DNSOPT_DOH : m_btnDNSLocal.GetCheck() ? PSI_DNSOPT_LOCAL : PSI_DNSOPT_REMOTE;
 	psi.bHookLanIP = m_bHookLanIP;
 	psi.bDisableLLMNR = m_bDisableLLMNR;
 	psi.bDisableMDNS = m_bDisableMDNS;
@@ -1032,7 +1073,7 @@ BOOL CPage1::GetRoute(LPProxyInfo first, ProxyChain* chain)
 {
 	chain->clear();
 	if (!m_chainMode)
-		return GetSettings(first);
+        return GetSettings(first) && ApplyDohSettings(*first);
 
 	m_settingsValidationName.Empty();
 	if (!m_profileStore.ResolveChain(m_chainHops, *chain, m_settingsValidationKey,
@@ -1049,7 +1090,32 @@ BOOL CPage1::GetRoute(LPProxyInfo first, ProxyChain* chain)
 		}
 	}
 	*first = chain->front();
-	return TRUE;
+    if (!ApplyDohSettings(*first)) return FALSE;
+    chain->front() = *first;
+    return TRUE;
+}
+
+BOOL CPage1::ApplyDohSettings(ProxyInfo& proxy)
+{
+    proxy.dohEnabled = m_btnDNSDoh.GetCheck() == BST_CHECKED;
+    proxy.dohUrl.szbuf[0] = proxy.dohBootstrap.szbuf[0] = 0;
+    proxy.dohBlockIPv6 = m_btnBlockIPv6.GetCheck() == BST_CHECKED;
+    if (!proxy.dohEnabled) return TRUE;
+    m_settingsValidationName.Empty();
+    m_settingsValidationKey = L"profile.doh_unavailable";
+    if (!ProxySupportsOptionalModules()) return FALSE;
+    m_settingsValidationKey = L"profile.doh_requires_proxy";
+    if (proxy.GetProxyType() == PROXYTYPE_NOPROXY) return FALSE;
+    m_settingsValidationKey = L"profile.invalid_doh";
+    CString url, ips;
+    m_editDohUrl.GetWindowText(url); m_editDohBootstrap.GetWindowText(ips);
+    url.Trim(); ips.Trim();
+    for (int i=0; i<url.GetLength(); ++i) if (url[i] > 127) return FALSE;
+    for (int i=0; i<ips.GetLength(); ++i) if (ips[i] > 127) return FALSE;
+    std::vector<_SockAddr> endpoints;
+    if (!DohPolicy::Parse(CStringA(url), CStringA(ips), proxy.dohBlockIPv6 != FALSE, endpoints)) return FALSE;
+    proxy.dohUrl = url; proxy.dohBootstrap = ips;
+    return TRUE;
 }
 
 CString CPage1::SettingsValidationMessage() const
@@ -1235,11 +1301,37 @@ void CPage1::UpdateTransportEnable()
 void CPage1::OnDnsSettingsChanged()
 {
 	UpdateDnsRedirectEnable();
-	OnProfileFieldChanged();
+    OnProfileFieldChanged();
+    LayoutSettingsPage();
+    if (m_activeTab == 0 && m_btnDNSDoh.GetCheck() == BST_CHECKED) {
+        // Reveal the expanded DNS settings using the page's existing scroll
+        // position. Leave focus on the selected radio for keyboard navigation.
+        CRect settings, bootstrap, client;
+        m_btnDNSDoh.GetWindowRect(&settings);
+        m_editDohBootstrap.GetWindowRect(&bootstrap);
+        settings.UnionRect(settings, bootstrap);
+        ScreenToClient(&settings);
+        GetClientRect(&client);
+        const int margin = UiTheme::ScaleForWindow(m_hWnd, 8);
+        settings.InflateRect(0, margin);
+        int next = m_scrollY;
+        if (settings.bottom > client.bottom)
+            next += settings.bottom - client.bottom;
+        else if (settings.top < client.top)
+            next += settings.top - client.top;
+        SCROLLINFO info = { sizeof(info), SIF_ALL };
+        GetScrollInfo(SB_VERT, &info);
+        next = max(0, min(next, info.nMax - static_cast<int>(info.nPage) + 1));
+        if (next != m_scrollY) {
+            m_scrollY = next;
+            LayoutSettingsPage();
+        }
+    }
 }
 
 void CPage1::UpdateDnsRedirectEnable()
 {
+    m_btnDNSDoh.EnableWindow(ProxySupportsOptionalModules());
 	const BOOL remote = m_btnDNSRemote.GetCheck() == BST_CHECKED;
 	m_btnRedirectPrivateDNS.EnableWindow(remote);
 	m_editRedirectDNS.EnableWindow(remote &&
@@ -1248,6 +1340,12 @@ void CPage1::UpdateDnsRedirectEnable()
 
 BOOL CPage1::ValidateDnsRedirectSettings(BOOL showError)
 {
+    if (m_btnDNSDoh.GetCheck() == BST_CHECKED) {
+        ProxyInfo proxy; ProxyChain chain;
+        if (GetRoute(&proxy, &chain)) return TRUE;
+        if (showError) MessageBox(SettingsValidationMessage(), Localization::Get(L"status.invalid_config"), MB_ICONERROR);
+        return FALSE;
+    }
 	if (m_btnDNSRemote.GetCheck() != BST_CHECKED ||
 		m_btnRedirectPrivateDNS.GetCheck() != BST_CHECKED)
 		return TRUE;
@@ -1701,6 +1799,7 @@ void CPage1::OnBnClickedTestproxy()
 		SetTimer(0x312, 100, NULL);
 		UpdateChainProgress();
 	}
+	// This explicit UDP capability probe is independent of business DNS mode.
 	m_testUdpRequested = testProxyInfo.GetProxyType() == PROXYTYPE_SOCKS5 && m_testChain.empty();
 
 	PRCClient client;
@@ -2250,6 +2349,9 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_btnBlockIPv6.SetCheck(BST_UNCHECKED);
 		m_btnDNSLocal.SetCheck(BST_UNCHECKED);
 		m_btnDNSRemote.SetCheck(BST_CHECKED);
+        m_btnDNSDoh.SetCheck(BST_UNCHECKED);
+        m_editDohUrl.SetWindowText(L"https://dns.google/dns-query");
+        m_editDohBootstrap.SetWindowText(L"8.8.8.8, 8.8.4.4");
 		m_btnRedirectPrivateDNS.SetCheck(BST_CHECKED);
 		m_editRedirectDNS.SetWindowText(_T("8.8.8.8"));
 		m_btnHookChildProcess.SetCheck(BST_CHECKED);
@@ -2293,7 +2395,10 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_btnBlockIPv6.SetCheck(item->bBlockIPv6 ? BST_CHECKED : BST_UNCHECKED);
 		m_btnHookChildProcess.SetCheck(item->bHookChildProcess ? BST_CHECKED : BST_UNCHECKED);
 		m_btnDNSLocal.SetCheck(item->dnsOpt==PSI_DNSOPT_LOCAL ? BST_CHECKED : BST_UNCHECKED);
-		m_btnDNSRemote.SetCheck(!m_btnDNSLocal.GetCheck());
+		m_btnDNSRemote.SetCheck(item->dnsOpt == PSI_DNSOPT_REMOTE);
+        m_btnDNSDoh.SetCheck(item->dnsOpt == PSI_DNSOPT_DOH);
+        m_editDohUrl.SetWindowText(item->strDohUrl);
+        m_editDohBootstrap.SetWindowText(item->strDohBootstrap);
 		m_btnRedirectPrivateDNS.SetCheck(item->bRedirectPrivateDNS ? BST_CHECKED : BST_UNCHECKED);
 		m_editRedirectDNS.SetWindowText(item->strRedirectDNS);
 
@@ -2351,7 +2456,9 @@ void CPage1::UIGetCfg( CfgProxyItem *item )
 	item->bBlockUDP = m_btnBlockUDP.GetCheck() == BST_CHECKED;
 	item->bBlockIPv6 = m_btnBlockIPv6.GetCheck() == BST_CHECKED;
 	item->bHookChildProcess = m_btnHookChildProcess.GetCheck() == BST_CHECKED;
-	item->dnsOpt = m_btnDNSLocal.GetCheck() ? PSI_DNSOPT_LOCAL : PSI_DNSOPT_REMOTE;
+	item->dnsOpt = m_btnDNSDoh.GetCheck() ? PSI_DNSOPT_DOH : m_btnDNSLocal.GetCheck() ? PSI_DNSOPT_LOCAL : PSI_DNSOPT_REMOTE;
+    m_editDohUrl.GetWindowText(item->strDohUrl); item->strDohUrl.Trim();
+    m_editDohBootstrap.GetWindowText(item->strDohBootstrap); item->strDohBootstrap.Trim();
 	item->bRedirectPrivateDNS =
 		m_btnRedirectPrivateDNS.GetCheck() == BST_CHECKED;
 	m_editRedirectDNS.GetWindowText(item->strRedirectDNS);
@@ -2422,7 +2529,8 @@ void CPage1::ShowTab(int nTab)
 	static const int idsBasic[] = {
 		IDC_CHECK_HOOKTCP, IDC_CHECK_HOOK_UDP, IDC_CHECK_HOOKCHILDPROCESS, IDC_CHECK_BLOCKUDP,
 		IDC_CHECK_BLOCK_IPV6,
-		IDC_RADIO_DNSLOCAL, IDC_RADIO_DNSREMOTE, IDC_STATIC_GROUP_OTHER, IDC_STATIC_DNS_LABEL,
+		IDC_RADIO_DNSLOCAL, IDC_RADIO_DNSREMOTE, IDC_RADIO_DNSDOH, IDC_STATIC_GROUP_OTHER, IDC_STATIC_DNS_LABEL,
+        IDC_STATIC_DOH_URL, IDC_EDIT_DOH_URL, IDC_STATIC_DOH_BOOTSTRAP, IDC_EDIT_DOH_BOOTSTRAP,
 		IDC_CHECK_REDIRECT_PRIVATE_DNS, IDC_EDIT_REDIRECT_DNS };
 	static const int idsChild[] = {
 		IDC_EDIT_CHILDFILTER, IDC_RADIO_CHILDFILTER_EXCLUDE, IDC_RADIO_CHILDFILTER_INCLUDE,
@@ -2603,6 +2711,9 @@ void CPage1::NewProfile(BOOL chain)
 		m_btnBlockUDP.SetCheck(BST_CHECKED);
 		m_btnDNSLocal.SetCheck(BST_UNCHECKED);
 		m_btnDNSRemote.SetCheck(BST_CHECKED);
+        m_btnDNSDoh.SetCheck(BST_UNCHECKED);
+        m_editDohUrl.SetWindowText(L"https://dns.google/dns-query");
+        m_editDohBootstrap.SetWindowText(L"8.8.8.8, 8.8.4.4");
 		m_btnRedirectPrivateDNS.SetCheck(BST_CHECKED);
 		m_editRedirectDNS.SetWindowText(_T("8.8.8.8"));
 		UpdateChildFilterEnable();

@@ -1,4 +1,4 @@
-/************************************************************************/
+﻿/************************************************************************/
 /*                                                                      */
 /*                                                                      */
 /************************************************************************/
@@ -8,10 +8,13 @@
 #include "ProxyTaskMgr.h"
 #include "PRCTcpPeer.h"
 #include "MitmBridge.h"
+#include "DohPolicy.h"
+#include "ProxyLog.h"
 
 CTcpProxyTask::CTcpProxyTask(CProxyTCPTaskMgr *pTaskmgr)
 {
 	m_pTaskmgr = pTaskmgr;
+    m_dohWake = std::make_shared<CDohWakeup>(GetHwnd(), [this] { m_bDeletePending = TRUE; });
 
 	m_pClient = NULL;
 	m_pServer = NULL;
@@ -45,6 +48,12 @@ BOOL CTcpProxyTask::SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxy
 	IProxyLog::ConnectionStage& stage, const ProxyChain *lpChain)
 {
 	stage = IProxyLog::STAGE_ALLOCATE;
+    if (DohPolicy::Intercept(*lpPRCClient, *lpProxyInfo)) {
+        m_PRCClient = *lpPRCClient; m_ProxyInfo = *lpProxyInfo;
+        m_dnsTcp.reset(new CDnsDohTcp(m_PRCClient, m_ProxyInfo, lpChain, m_pTaskmgr->m_pPRC));
+        if (!m_dnsTcp->StartDeadline()) { WSASetLastError(WSAENOBUFS); return FALSE; }
+        return m_dnsTcp->Attach(sClient, FD_READ | FD_WRITE | FD_CLOSE);
+    }
 	do 
 	{
 		m_pClient = new CPRCTcpPeer(this);
@@ -65,6 +74,13 @@ BOOL CTcpProxyTask::SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxy
 		m_ProxyInfo = *lpProxyInfo;
 		m_pClient->SetPartner(m_pServer);
 		m_pServer->SetPartner(m_pClient);
+        if (DohPolicy::Needed(m_PRCClient, m_ProxyInfo)) {
+            if (!m_pClient->Attach(sClient, FD_CLOSE)) break;
+            if (lpChain) m_dohChain = *lpChain;
+            m_doh = CDohQuery::Resolve(m_PRCClient, m_ProxyInfo, lpChain);
+            if (!m_doh->NotifyWhenReady(m_dohWake)) { WSASetLastError(WSAENOBUFS); break; }
+            return TRUE;
+        }
 		if (CMitmBridge::Enabled())
 		{
 			m_pMitm = new CMitmBridge(this);
@@ -127,6 +143,9 @@ VOID CTcpProxyTask::OnPeerClosed(CPRCTcpPeer *pPeer)
 
 VOID CTcpProxyTask::EndTask()
 {
+    m_dohWake->Cancel();
+    m_doh.reset();
+    m_dnsTcp.reset();
 	if (m_pProtocol) m_pProtocol->CloseReason("TCP forwarding task released");
 	delete m_pProtocol;
 	m_pProtocol = NULL;
@@ -144,4 +163,48 @@ VOID CTcpProxyTask::EndTask()
 		delete m_pServer;
 		m_pServer = NULL;
 	}
+}
+
+BOOL CTcpProxyTask::ConnectResolved() {
+    m_PRCClient.proxyDstAddr = m_dohAddresses[m_dohAddress];
+    m_PRCClient.proxyDstAddr.SetPort(m_PRCClient.dstAddr.GetPort());
+    m_PRCClient.routingFlags |= PRC_CLIENT_FLAG_DOH_RESOLVED;
+    LogDnsRedirect(&m_PRCClient, NULL, m_pTaskmgr->m_pPRC);
+    // Capture metadata is created only after an effective address is known.
+    if (CMitmBridge::Enabled()) {
+        m_pMitm = new CMitmBridge(this);
+        if (!m_pMitm->Initialize()) return FALSE;
+    } else if (CProtocolTap::Enabled()) m_pProtocol = new CProtocolTap(this);
+    IProxyLog::ConnectionStage stage = IProxyLog::STAGE_CONNECT;
+    return m_pServer->ConnectProxy(&m_PRCClient, &m_ProxyInfo, stage, m_dohChain.empty() ? NULL : &m_dohChain);
+}
+bool CTcpProxyTask::RetryDohAddress(CPRCTcpPeer* peer, int error) {
+    if (!error || peer != m_pServer || m_dohAddress + 1 >= m_dohAddresses.size()) return false;
+    m_dohRetry = true;
+    return m_dohWake->Notify();
+}
+void CTcpProxyTask::OnMessage(UINT message, WPARAM low, LPARAM high, BOOL& handled) {
+    if (!m_dohWake->Accept(message, low, high)) return;
+    handled = TRUE;
+    if (m_bDeletePending) { m_doh.reset(); return; }
+    if (m_doh && !m_doh->Done()) return;
+    if (m_doh) {
+        if (!m_doh->Succeeded()) {
+            PrintText(_T("DoH resolution failed for %hs: %hs (no DNS fallback).\r\n"), m_PRCClient.szDomainName, (LPCSTR)m_doh->Error());
+            EndTask(); m_bDeletePending = TRUE; return;
+        }
+        m_dohAddresses = m_doh->Addresses(); m_doh.reset();
+    }
+    if (m_dohRetry) {
+        m_dohRetry = false; ++m_dohAddress;
+        delete m_pProtocol; m_pProtocol = NULL;
+        delete m_pMitm; m_pMitm = NULL;
+        delete m_pServer; m_pServer = new CPRCTcpPeer(this);
+        m_pClient->SetPartner(m_pServer); m_pServer->SetPartner(m_pClient);
+    }
+    if (!ConnectResolved()) {
+        if (RetryDohAddress(m_pServer, WSAECONNREFUSED)) return;
+        PrintText(_T("DoH resolved %hs, but the selected proxy route could not connect to the answer IP.\r\n"), m_PRCClient.szDomainName);
+        EndTask(); m_bDeletePending = TRUE;
+    }
 }

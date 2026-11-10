@@ -83,6 +83,12 @@
 #define IDC_COMBO_LANGUAGE              1064
 #define IDC_CHECK_REDIRECT_PRIVATE_DNS  1065
 #define IDC_EDIT_REDIRECT_DNS           1066
+// 0x2410..0x2413 belong to CSshAuthControls on this same dialog.
+#define IDC_RADIO_DNSDOH                0x2420
+#define IDC_EDIT_DOH_URL                0x2421
+#define IDC_EDIT_DOH_BOOTSTRAP          0x2422
+#define IDC_STATIC_DOH_URL              0x2423
+#define IDC_STATIC_DOH_BOOTSTRAP        0x2424
 #define IDC_STATIC_TRANSPORT_LABEL      1067
 #define IDC_COMBO_TRANSPORT             1068
 #define IDC_STATIC_PSK_LABEL            1069

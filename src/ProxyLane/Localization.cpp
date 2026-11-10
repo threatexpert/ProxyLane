@@ -223,6 +223,8 @@ void Localization::ApplyDialog(CWnd* dialog, UINT dialogId)
 		{ IDC_CHECK_BLOCKUDP, _T("page1.block_udp") }, { IDC_CHECK_BLOCK_IPV6, _T("page1.block_ipv6") },
 		{ IDC_STATIC_DNS_LABEL, _T("page1.dns") },
 		{ IDC_RADIO_DNSLOCAL, _T("page1.dns_local") }, { IDC_RADIO_DNSREMOTE, _T("page1.dns_remote") },
+        { IDC_RADIO_DNSDOH, L"page1.dns_doh" },
+        { IDC_STATIC_DOH_URL, L"page1.doh_url" }, { IDC_STATIC_DOH_BOOTSTRAP, L"page1.doh_bootstrap" },
 		{ IDC_CHECK_REDIRECT_PRIVATE_DNS, _T("page1.redirect_private_dns") },
 		{ IDC_STATIC_CHILDFILTER_GROUP, _T("page1.child_group") }, { IDC_RADIO_CHILDFILTER_EXCLUDE, _T("page1.child_exclude") },
 		{ IDC_RADIO_CHILDFILTER_INCLUDE, _T("page1.child_include") }, { IDC_STATIC_CHILDFILTER_HINT, _T("page1.child_hint") },

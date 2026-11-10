@@ -1,4 +1,36 @@
-# ProxyLane end-to-end test tools
+﻿# ProxyLane end-to-end test tools
+
+## DoH through the selected proxy chain
+
+After building x64 Release and the Rust DLL, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run-doh-tests.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run-doh-tests.ps1 -Online
+```
+
+The first command runs offline DNS TTL/CNAME/validation and TLS/HTTP tests.
+`-Online` adds real certificate-verified Google DoH over local SOCKS5 and
+SOCKS5 → HTTP fixtures. It checks shared concurrent requests, cancellation of
+one waiter, subsequent cache hits, numeric business destinations and explicit
+HTTP failure without fallback. Only the DoH service is external; fixtures echo
+business payloads locally. No user profiles or certificate trust are changed.
+The SOCKS5 UDP echo case runs only when an independent loopback UDP probe works;
+otherwise the test reports that part as skipped, not passed.
+
+For the DNS settings layout after building x64 Release:
+
+```powershell
+python tests/DohLayoutE2ETests.py
+python tests/DohLayoutE2ETests.py --language en-US
+```
+
+This uses the existing GUI test harness with an isolated portable profile. It
+checks unique child-control IDs (including dynamic SSH controls), exclusive DNS
+mode selection, DoH/legacy field visibility, non-overlapping rows at two window
+sizes, settings-tab changes, and SSH authentication alongside DoH. Screenshots
+and measured rectangles are retained under `build/qa/doh-layout-*`. No proxy or
+certificate trust is enabled.
 
 ## Desktop startup regression
 
@@ -337,3 +369,13 @@ inheritance path requires Vista or later; XP retains the existing PID-based
 cross-bitness helper and is not covered by this test matrix. The installation
 directory must be readable/executable by the target account; production file
 ACLs and account privileges are not modified.
+
+### DNS packets through DoH
+
+Run `tests/run-dns-relay-tests.ps1 -Online` after building x64 release binaries and the Rust DoH DLL. This owns a PRC host and installs its hook only in the test host. Before starting test threads or sockets, it removes any automatically inherited PL hooks from its own process (including DLL copies loaded from other paths); other processes and running PL instances are untouched. It checks private/public DNS targets, TCP framing, shared queries across transaction IDs and transports, UDP send APIs with Proxy UDP disabled, strict Block UDP precedence, and TCP DNS while UDP is blocked. SOCKS5, HTTP CONNECT and a SOCKS5→HTTP chain connect to Google's DoH service; invalid endpoints must yield SERVFAIL without any upstream port-53 connection. It requires real UDP replies for both a fresh UDP-only AAAA query and cached A queries, and checks that recvfrom, IOCP WSARecvFrom and event-based WSARecvMsg expose the actual local relay source without rewriting; connected UDP getpeername must also expose the local relay. Clients requiring the original resolver source are unsupported. Private IPv4 PTR receives local REFUSED over UDP and TCP even with a broken DoH endpoint; the fixture request count verifies those lookups never reach DoH, while a public PTR does. UDP reply timeouts fail the test; an unrelated loopback probe must not turn this coverage into a passing skip. No user profile, system DNS, certificate trust or firewall setting is modified.
+
+The relay test also sends 80 cached queries in one TCP burst followed by a half-close to verify message-driven continuation past the per-dispatch limit. `run-doh-tests.ps1 -Online` covers ordinary TCP/UDP hostname destinations, shared-query cancellation and a proxy tester that deliberately discards WM_TIMER while awaiting both network and cached completions; a locally rejected bootstrap IP tests retry notifications. Both runners accept `-DohUrl` and `-Bootstrap` for an accessible standard DoH endpoint without changing application defaults. The Python fixture and C++ host isolate their own inherited hooks; UDP tests are mandatory, not environment-dependent skips. For example: `tests/run-doh-tests.ps1 -Online -DohUrl https://dns.alidns.com/dns-query -Bootstrap 223.5.5.5`.
+
+Rust DoH TLS tests exercise the actual FFI feed operation with both seven-byte fragments and coalesced 16 KiB input chunks, a certificate flight larger than 4 KiB and a padded HTTP response. The feed must consume the entire caller buffer or report an error; short rustls reads must not discard the remainder. Certificate rejection remains covered. The DNS relay runner also accepts `--query-name` to reproduce a particular lookup.
+
+`tests/run-doh-deadline-tests.ps1` is a local-only, approximately one-minute test. A fixture accepts connections but withholds proxy negotiation or TLS replies. It verifies that a persistent TCP DNS session (without send-side shutdown) and a concurrent UDP request receive SERVFAIL after a 12-second tunnel connection deadline (initial proxy negotiation or target CONNECT withheld); two blocked bootstrap IPs finish after approximately 24 seconds. Once CONNECT succeeds, a stalled TLS exchange retains the 60-second total query deadline, or approximately 30 seconds for two 15-second attempts. No timeout constants are shortened for testing.

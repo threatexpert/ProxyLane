@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -304,6 +304,7 @@
   <ItemGroup>
 	<ClCompile Include="ElevatedLauncher.cpp" />
     <ClCompile Include="GlobalProxy.cpp" />
+    <ClCompile Include="DohResolver.cpp" />
     <ClCompile Include="DetourHooks.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="AppContainerPipeAccess.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -409,6 +410,9 @@
     <ClInclude Include="TSSTL.h" />
 	<ClInclude Include="UdpAssociationPolicy.h" />
 	<ClInclude Include="DnsRedirectPolicy.h" />
+    <ClInclude Include="DohPolicy.h" />
+    <ClInclude Include="DohResolver.h" />
+    <ClInclude Include="DohWakeup.h" />
 	<ClInclude Include="UdpPayloadPolicy.h" />
 	<ClInclude Include="InetCompat.h" />
     <ClInclude Include="UdpProxyTask.h" />

@@ -1,4 +1,4 @@
-<h1 align="center">ProxyLane</h1>
+﻿<h1 align="center">ProxyLane</h1>
 
 <p align="center">
   <strong>Transparent per-process proxy for Windows · HTTPS / QUIC traffic decryption</strong><br>
@@ -41,6 +41,28 @@ Prefer launching applications through ProxyLane. Attaching to a running process 
 - **NOPROXY**: direct connections for monitoring and decryption without an external proxy. No server address or port is needed.
 - **Child-process / target rules**: by default, all child processes (with **Proxy child processes** enabled) and all network destinations are proxied. To limit the scope, follow the matching examples in the interface.
 - **Block UDP / Block IPv6**: restrict the corresponding traffic as needed. Blocking UDP takes priority over UDP proxying or capture.
+
+### DNS Resolution
+
+- **Local resolution** uses the computer's DNS results.
+- **Remote resolution** passes the destination hostname to the proxy, which chooses the IP.
+- **Encrypted DNS via Proxy** obtains destination IPs through the selected business proxy chain, then connects to those IPs through the same chain. Requires a supported x64 host and the bundled `ProxyLaneMitm64.dll`; traffic decryption and CA installation are not required. NOPROXY is not supported.
+
+Provide an HTTPS endpoint and explicit **connection (bootstrap) IPs**, for example `https://dns.google/dns-query` and `8.8.8.8,8.8.4.4`. Connections use those IPs while TLS certificates and the HTTPS Host are validated against the endpoint. Standard `application/dns-message` POST over HTTP/1.1 is supported; redirects are rejected. Failure terminates the request with a log message, without falling back to local DNS, proxy-side hostname resolution or TCP/UDP port 53. Proxy-node address resolution retains its existing behavior; configure the first proxy with an IP to avoid local resolution of that node too.
+
+Results are cached in host memory according to DNS TTL, CNAME TTL and HTTP cache restrictions, capped at one hour without extending any TTL. Zero-TTL answers are not cached. Concurrent queries with the same hostname, address family, DoH settings and proxy chain share one lookup; cancelling one connection does not cancel other waiters. Cache entries are not persisted and are cleared when the proxy stops. Different settings, chains, host instances and proxy tests remain isolated. Ordinary UDP remains limited to a single SOCKS5 proxy.
+
+Establishing a proxy tunnel to each DoH bootstrap IP has a 12-second timeout, including an SSH server opening the target connection; failure may advance to the next bootstrap IP. The overall query deadline remains 60 seconds, and each full attempt with multiple bootstrap IPs remains limited to 15 seconds.
+
+DoH I/O is driven by socket events. Completion notifies waiting tasks through the host message loop; cached answers, local refusals and retries also use notifications rather than 25 ms completion polling. One-second deadline/idle checks remain and do not advance DoH I/O.
+
+This mode also intercepts ordinary TCP/UDP DNS requests on port 53 from managed applications whose traffic selects a proxy, for both private and public DNS destinations. The hook hands the query to the PL host, which sends it as DoH through the selected chain and returns the full DNS response. It never contacts the original resolver or opens a local port-53 listener. Record types, transaction IDs and remaining TTLs are preserved. Equivalent packets (identical except for ID) share queries across TCP/UDP within the same DoH configuration and chain. Negative, empty and truncated responses are not cached. PTR queries in `in-addr.arpa` for private IPv4 addresses (10/8, 172.16/12, 192.168/16) receive a local REFUSED response without DoH or local-DNS fallback; public PTR queries still use DoH. Invalid queries, zone transfers and updates are rejected; DoH transport failures return SERVFAIL without plain-DNS fallback.
+
+UDP DNS replies retain the actual local relay source address and port. Clients requiring the original resolver source are unsupported. Do not rewrite addresses through receive APIs, asynchronous completion hooks or UDP `getpeername`. This technique is currently considered insufficiently reliable and stable and is not adopted; explicit user approval is required before reconsidering it. See [project constraints](AGENTS.md).
+
+**Block UDP takes priority, including UDP DNS; there is no DNS exception.** When UDP is allowed, DNS interception works even with Proxy UDP off and can use HTTP, SSH or proxy chains because its upstream transport is HTTPS. TCP DNS is unaffected by Block UDP; whether an application retries with TCP is up to that application. Explicit direct routes, loopback, mDNS/LLMNR and application-managed DoH/DoT are outside this interception scope. Block IPv6 retains its existing behavior.
+
+Existing INI files and sharing codes remain readable by the new version. DoH profiles, including inactive custom DoH preferences, use the generic `proxylane://profile/v3/` format; other profiles retain v1/v2 when they can be represented without losing settings. Restart proxied applications after changing DNS modes so they do not continue using previously resolved addresses.
 
 ### Proxy a Command-Line Workspace
 
@@ -91,9 +113,26 @@ After stopping monitoring, choose **Options → View saved recording…** and op
 
 ### Share One Proxy Profile
 
-Choose **Actions ▾ → Copy full profile** on the settings page and send the complete `proxylane://profile/v1/…` line. The recipient copies it and selects **Actions ▾ → Paste profile** to fill the settings, then saves or starts the proxy. If the proxy is already running, click **Save & Apply** for the new settings to take effect.
+Choose **Actions ▾ → Copy full profile** on the settings page and send the complete `proxylane://profile/…` line. The recipient copies it and selects **Actions ▾ → Paste profile** to fill the settings, then saves or starts the proxy. If the proxy is already running, click **Save & Apply** for the new settings to take effect.
 
 The code includes current unsaved edits, username, **password and PSK**, network options and filtering rules. It is not encrypted, so share it only with trusted recipients. Global options, decryption settings, CA material, recordings and recent applications are not included.
+
+### Share Format Versions and Future Compatibility
+
+`v3` is a generic extensible format, not a DoH-specific version. Its Base64URL JSON envelope contains `required_features` and `profile`. An optional `metadata` object may contain only non-behavioral information; it is ignored and not preserved on export. Current capability identifiers are `dns.doh.v2` (including DNS-packet interception) and `ssh.private-key.v1`. The exporter derives them from the settings; the importer verifies that the declaration matches the profile. Earlier `dns.doh.v1` sharing codes remain readable and acquire the current DoH mode defaults. New exports retain the v3 prefix and require `dns.doh.v2`, so older importers reject the unsupported behavior rather than silently losing it.
+
+| Incoming code | Import behavior |
+| --- | --- |
+| Valid v1, v2, or the flat DoH v3 from the development build | Readable; flat v3 is a read-only migration path, while new v3 exports use the envelope |
+| v3 with supported capabilities and fields | Validate and populate the editor, without activating the profile |
+| Future capability, such as `dns.doh.v3` | Reject and list unsupported capabilities |
+| Unknown behavioral field, including a new option set to `false` | Reject and identify the field; never silently discard it |
+| Missing/mismatched capability declaration, unknown enum value or invalid field type | Reject before changing the editor, profile or key files |
+| Unknown envelope version, such as v4 | Report an unsupported format version |
+
+Exports retain v1/v2 only when settings and custom values can be preserved. Disabling DoH does not discard custom URLs or bootstrap IPs. For old codes without custom DoH preferences, the editor defaults are frozen at `https://dns.google/dns-query` and `8.8.8.8, 8.8.4.4`, independently of future application presets.
+
+New settings normally stay on v3. Developers must update the known-field and value validation rules, capability derivation and support registry in `ProfileShareCodec.h`, editor import, persistence and round-trip tests together. Never expand the frozen legacy field vocabulary. New execution or preservation requirements must declare a capability; receivers that do not support it reject the code. Never reinterpret an existing capability identifier: incompatible semantics need a new identifier, such as `dns.doh.v3`. Bump the envelope version only for incompatible envelope or foundational interpretation changes. Application version numbers are not a substitute for these checks. These rules apply to sharing codes, not new-INI compatibility with old executables.
 
 ### Import All Settings
 
@@ -109,7 +148,7 @@ Select `SSH`, enter the server address, port (usually 22) and username, then cho
 
 Imported keys are managed in the current user's `%LOCALAPPDATA%\ProxyLane\keys\` folder. The profile stores only a filename reference in `SshKeyFile`; moving or deleting the original import file does not affect it. Encrypted keys retain their encrypted contents; passphrases continue to use the existing configuration storage. Content-based SHA-256 names, a cross-process lock and atomic publication let multiple instances reuse identical keys without overwriting different keys. Deleting or replacing a profile never automatically deletes shared keys.
 
-Copy Complete Profile includes the key and passphrase in a `proxylane://profile/v2/` code. Pasting writes the key into the recipient's local keys folder and creates its reference; cancelling a paste writes nothing. Missing keys produce explicit test/copy errors. An INI-only backup must include the keys folder separately. Previous inline-key profiles can be loaded into local storage; their next save removes the embedded key from the INI. Password profiles retain the compatible v1 share format.
+Copy Complete Profile includes the key and passphrase in a `proxylane://profile/v2/` code when legacy representation is sufficient, or v3 when combined with DoH or other extended settings. Pasting writes the key into the recipient's local keys folder and creates its reference; cancelling a paste writes nothing. Missing keys produce explicit test/copy errors. An INI-only backup must include the keys folder separately. Previous inline-key profiles can be loaded into local storage; their next save removes the embedded key from the INI. Password profiles without extended settings retain the compatible v1 share format.
 
 Authentication reads a bounded snapshot from the local key file and uses libssh2/OpenSSL's native memory API for parsing/signing, then erases the snapshot. Profiles still store only file references. This also supports Unicode paths without a private-key parsing patch.
 

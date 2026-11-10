@@ -1,6 +1,7 @@
-#include <iostream>
+﻿#include <iostream>
 #include <cstring>
 
+int DohWakeupTestsMain();
 int Socks5UdpCodecTestsMain();
 int BoundedLogQueueTestsMain();
 int MonitorLogFormatTestsMain();
@@ -35,6 +36,7 @@ int DetourHooksTestCase(const char* name);
 
 int main(int argc, char** argv)
 {
+    if (DohWakeupTestsMain() != 0) return 1;
     if (SshSessionLifetimeTestsMain() != 0) return 1;
     if (argc == 2 && std::strcmp(argv[1], "--update-release") == 0)
         return UpdateReleaseTestsMain();

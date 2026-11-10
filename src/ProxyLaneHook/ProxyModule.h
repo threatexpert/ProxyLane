@@ -345,6 +345,7 @@ protected:
 #define PROXYERROR_SSH_HOSTKEY_CHANGED 26
 #define PROXYERROR_SSH_KEY_AUTHFAILED 27
 #define PROXYERROR_SSH_KEY_FILE 28
+#define PROXYERROR_DOH_FAILED 29
 
 public:
 	virtual ~IProxyTesterCallback(void){}

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Source Files">
@@ -92,6 +92,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="TcpProxyTask.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="DohResolver.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="token.cpp">
@@ -223,6 +226,13 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="TcpProxyTask.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DohPolicy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DohWakeup.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="DohResolver.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="TimeoutMonitor.h">

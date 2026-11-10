@@ -8,6 +8,7 @@
 #include "PRCTcpPeer.h"
 #include "MitmBridge.h"
 #include "ProxyLog.h"
+#include "DohPolicy.h"
 //#include "PRCUdpPeer.h"
 
 #define TIMER_TCPPERTASK 100
@@ -379,7 +380,7 @@ BOOL CProxyUDPTaskMgr::OnNewTask(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInf
 {
 	if (!lpPRCClient || !lpProxyInfo)
 		return FALSE;
-	if (!CanStartUdpAssociation(lpProxyInfo))
+	if (!DohPolicy::Intercept(*lpPRCClient, *lpProxyInfo) && !CanStartUdpAssociation(lpProxyInfo))
 		return FALSE;
 	CTSList<CUdpProxyTask*>::critical lc = m_tasklist;
 	for(list<CUdpProxyTask*>::iterator it = m_tasklist.begin(); it != m_tasklist.end(); )

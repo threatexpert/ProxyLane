@@ -851,6 +851,7 @@ dependencies = [
  "h3",
  "h3-quinn",
  "http",
+ "httparse",
  "iced-x86",
  "memchr",
  "proxylane_protocol",

@@ -223,6 +223,11 @@ typedef struct _tagProxyInfo
 	DWORD sshAuth = 0; // 0 = password, 1 = managed private-key file
 	string<1024> strSshKeyFile; // UTF-8 absolute path; PRC-local only
     string<65> strSshKeyDigest; // Snapshot identity used to isolate cached sessions
+    // Host-only, just like SSH authentication. Never extend the pipe prefix.
+    DWORD dohEnabled = 0;
+    string<1024> dohUrl;
+    string<512> dohBootstrap;
+    BOOL dohBlockIPv6 = FALSE;
 /////////////////////
 
 #define PROXY_TRANSPORT_PLAIN             0
@@ -279,6 +284,7 @@ typedef struct  _tagProxySettingsInfo
 
 #define PSI_DNSOPT_LOCAL 0
 #define PSI_DNSOPT_REMOTE 1
+#define PSI_DNSOPT_DOH 2 // FakeIP resolution plus host-side DNS-to-DoH interception.
 
 
 typedef struct _tagPRCINFO
@@ -295,6 +301,7 @@ typedef struct _tagPRCINFO
 }PRCINFO, *LPPRCINFO;
 
 #define PRC_CLIENT_FLAG_DNS_REDIRECT 0x00000001
+#define PRC_CLIENT_FLAG_DOH_RESOLVED 0x00000002
 
 typedef struct _tagPRCClient
 {
@@ -323,7 +330,7 @@ typedef struct _tagPRCClient
 	BOOL IsDNValid(){ return szDomainName[0] != '\0';}
 	BOOL HasProxyDestination() const
 	{
-		return (routingFlags & PRC_CLIENT_FLAG_DNS_REDIRECT) != 0;
+		return (routingFlags & (PRC_CLIENT_FLAG_DNS_REDIRECT | PRC_CLIENT_FLAG_DOH_RESOLVED)) != 0;
 	}
 	const _SockAddr& GetProxyDestination() const
 	{

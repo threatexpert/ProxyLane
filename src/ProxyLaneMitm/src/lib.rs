@@ -3,6 +3,7 @@ pub mod protocol;
 mod options;
 mod dns;
 mod doh;
+mod doh_client;
 mod quic_probe;
 mod quic_locator;
 mod quic_live;

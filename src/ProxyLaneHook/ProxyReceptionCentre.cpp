@@ -609,6 +609,7 @@ DWORD WINAPI CProxyReceptionCentre::InternalPRCThreadProc()
 
 	// Destroy socket layers and pooled transports on their owning event thread.
 	ShutdownPRCServer();
+	CDohQuery::ClearCache();
 	SshSessionManager::ShutdownCurrentThread();
 	SetThreadStatus(threadstatus_end);
 	return 0;

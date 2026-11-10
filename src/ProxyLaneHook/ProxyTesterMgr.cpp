@@ -1,6 +1,7 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "ProxyTesterMgr.h"
 #include "ProxyTransportPolicy.h"
+#include "DohPolicy.h"
 
 
 
@@ -23,6 +24,8 @@ CProxyTester::CProxyTester(CProxyTesterMgr *pNotify)
 
 CProxyTester::~CProxyTester(void)
 {
+    if (m_dohWake) m_dohWake->Cancel();
+    m_doh.reset();
 	Close();
 	if (m_pChain)
 	{
@@ -108,12 +111,20 @@ BOOL CProxyTester::Start(IProxyTesterCallback *pCallback, const LPPRCClient lpPR
 
 BOOL CProxyTester::ConnectTcp(const LPPRCClient lpPRCClient)
 {
+    if (DohPolicy::Needed(*lpPRCClient, m_proxyinfo) && !lpPRCClient->HasProxyDestination()) {
+        m_dohNoticeFailed = false;
+        m_dohWake = std::make_shared<CDohWakeup>(GetHwnd(), [this] { m_dohNoticeFailed = true; });
+        m_doh = CDohQuery::Resolve(*lpPRCClient, m_proxyinfo, m_dohRoute.empty() ? NULL : &m_dohRoute, true);
+        m_pNotify->ArmTester(this, 65000);
+        if (!m_doh->NotifyWhenReady(m_dohWake)) { WSASetLastError(WSAENOBUFS); return FailedToStart(); }
+        return TRUE;
+    }
 	BOOL bConnect = FALSE;
 
-	if(lpPRCClient->IsDNValid())
+	if(lpPRCClient->IsDNValid() && !lpPRCClient->HasProxyDestination())
 		bConnect = CAsyncSocketEx::Connect(lpPRCClient->szDomainName, lpPRCClient->dstAddr.GetPort());
 	else
-		bConnect = CAsyncSocketEx::Connect(&lpPRCClient->dstAddr, lpPRCClient->dstAddr.Size());
+		bConnect = CAsyncSocketEx::Connect(&lpPRCClient->GetProxyDestination(), lpPRCClient->GetProxyDestination().Size());
 
 	if(!bConnect)
 	{
@@ -141,6 +152,7 @@ BOOL CProxyTester::StartChain(IProxyTesterCallback *pCallback, const LPPRCClient
 		return FALSE;
 	}
 	m_proxyinfo = lpHops[0];
+    m_dohRoute.assign(lpHops, lpHops + nHops);
 	m_progress.assign(nHops, ProxyTestHopProgress());
 	Progress(0, PTS_CONNECTING, GetTickCount());
 
@@ -255,6 +267,8 @@ void CProxyTester::RemoveAllLayers()
 
 void CProxyTester::Stop()
 {
+    if (m_dohWake) m_dohWake->Cancel();
+    m_doh.reset();
 	if (!m_completed)
 	{
 		FinishProgress(0, true);
@@ -299,6 +313,8 @@ void CProxyTester::Complete(int nCode, WPARAM wParam, LPARAM lParam)
 	}
 	FinishProgress(wParam == WSAETIMEDOUT ? WSAETIMEDOUT : nCode);
 	m_completed = TRUE;
+    if (m_dohWake) m_dohWake->Cancel();
+    m_doh.reset();
 	m_pNotify->DisarmTester(this);
 	m_pCallback->OnProxyTesterCallback(this,
 		MAKEWPARAM(nCode, LAYERCALLBACK_LAYERSPECIFIC), wParam, lParam);
@@ -414,8 +430,27 @@ int CProxyTester::OnLayerCallback(const CAsyncSocketExLayer *pLayer, int nType, 
 
 void CProxyTester::OnTimeout()
 {
+    if (m_dohNoticeFailed) {
+        Complete(PROXYERROR_DOH_FAILED, 0, (LPARAM)"DoH completion notification failed"); return;
+    }
 	Complete(m_client.sType == SOCK_DGRAM
 		? PROXYERROR_UDP_RELAY_FAILED : WSAETIMEDOUT);
+}
+
+void CProxyTester::OnMessage(UINT message, WPARAM low, LPARAM high, BOOL& handled) {
+    if (!m_dohWake || !m_dohWake->Accept(message, low, high)) return;
+    handled = TRUE;
+    if (m_completed || !m_doh || !m_doh->Done()) return;
+    if (!m_doh->Succeeded()) {
+        CStringA error = m_doh->Error(); m_doh.reset();
+        Complete(PROXYERROR_DOH_FAILED, 0, (LPARAM)(LPCSTR)error); return;
+    }
+    m_client.proxyDstAddr = m_doh->Addresses().front();
+    m_client.proxyDstAddr.SetPort(m_client.dstAddr.GetPort());
+    m_client.routingFlags |= PRC_CLIENT_FLAG_DOH_RESOLVED;
+    m_doh.reset();
+    m_pNotify->ArmTester(this, 60000);
+    if (!ConnectTcp(&m_client)) Complete(PROXYERROR_NOCONN);
 }
 
 //////////////////////////////////////////////////////////////////////////

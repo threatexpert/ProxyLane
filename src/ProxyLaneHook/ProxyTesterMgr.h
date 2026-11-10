@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "ProxyModule.h"
 #include "TSSTL.h"
@@ -7,12 +7,14 @@
 #include "asynsocket\AsyncSecureSocketLayer.h"
 #include "ProxyChainLayers.h"
 #include "TimerQueue.h"
+#include "DohResolver.h"
 
 class CProxyTesterMgr;
 
 class CProxyTester
 	: public IProxyTester
 	, public CAsyncSocketEx
+    , public CWndTimer
 {
 
 #define WM_DELTESTER WM_USER+1
@@ -39,6 +41,7 @@ public:
 
 	int OnLayerCallback(const CAsyncSocketExLayer *pLayer, int nType, int nCode, WPARAM wParam, LPARAM lParam);
 	void OnTimeout();
+    void OnMessage(UINT, WPARAM, LPARAM, BOOL&) override;
 
 private:
 	void Complete(int nCode, WPARAM wParam = 0, LPARAM lParam = 0);
@@ -61,6 +64,10 @@ private:
 	IProxyTesterCallback *m_pCallback;
 	BOOL m_completed;
 	WORD m_dnsTransactionId;
+    std::shared_ptr<CDohWakeup> m_dohWake;
+    bool m_dohNoticeFailed = false;
+    std::shared_ptr<CDohQuery> m_doh;
+    ProxyChain m_dohRoute;
 };
 
 class CProxyTesterMgr

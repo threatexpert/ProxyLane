@@ -8,6 +8,7 @@
 #include "ProfileShareCodec.h"
 #include "../ProxyLaneHook/DnsRedirectPolicy.h"
 #include "../ProxyLaneHook/PlatformSupport.h"
+#include "../ProxyLaneHook/DohPolicy.h"
 
 namespace
 {
@@ -45,8 +46,24 @@ CString Wide(const std::string& text)
     return result;
 }
 
+CString ShareErrorMessage(const ProfileShare::Error& error)
+{
+    const CString key = Wide(error.what());
+    return error.detail.empty() ? Localization::Get(key)
+        : Localization::Format(key, (LPCTSTR)Wide(error.detail));
+}
+
 void ValidateResolver(const Json& value)
 {
+    if (value.at("dns_mode") == PSI_DNSOPT_DOH) {
+        std::vector<_SockAddr> endpoints;
+        if (!ProxySupportsOptionalModules()) throw ProfileShare::Error("profile.doh_unavailable");
+        if (value.at("type") == "NOPROXY") throw ProfileShare::Error("profile.doh_requires_proxy");
+        if (!DohPolicy::Parse(value.at("doh_url").get<std::string>().c_str(),
+            value.at("doh_bootstrap").get<std::string>().c_str(), value.at("block_ipv6").get<bool>(), endpoints))
+            throw ProfileShare::Error("profile.invalid_doh");
+        return;
+    }
     if (value.at("dns_mode") != PSI_DNSOPT_REMOTE || value.at("redirect_private_dns") != true) return;
     CString resolver = Wide(value.at("redirect_dns").get<std::string>());
     resolver.Trim();
@@ -275,7 +292,10 @@ void CPage1::OnCopyProfile()
             }
             value[field.key] = lines;
         }
-        value["dns_mode"] = m_btnDNSLocal.GetCheck() == BST_CHECKED ? 0 : 1;
+        value["dns_mode"] = m_btnDNSDoh.GetCheck() == BST_CHECKED ? 2 : m_btnDNSLocal.GetCheck() == BST_CHECKED ? 0 : 1;
+        CString url, ips; m_editDohUrl.GetWindowText(url); m_editDohBootstrap.GetWindowText(ips);
+        url.Trim(); ips.Trim();
+        ProfileShare::StoreDohPreferences(value, Utf8(url), Utf8(ips));
         value["child_mode"] = m_radioChildFilterInclude.GetCheck() == BST_CHECKED ? 1 : 0;
         value["target_mode"] = m_radioTargetFilterProxy.GetCheck() == BST_CHECKED ? 1 : 0;
         value["transport"] = m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK ? "GONC_TLS_PSK" : "PLAIN";
@@ -298,7 +318,7 @@ void CPage1::OnCopyProfile()
     }
     catch (const ProfileShare::Error& error)
     {
-        MessageBox(Localization::Get(Wide(error.what())), Localization::Get(_T("share.copy_failed")), MB_ICONERROR);
+        MessageBox(ShareErrorMessage(error), Localization::Get(_T("share.copy_failed")), MB_ICONERROR);
     }
     catch (const std::exception&)
     {
@@ -374,7 +394,10 @@ void CPage1::OnPasteProfile()
         const bool remote = value.at("dns_mode") == 1;
         const bool include = value.at("child_mode") == 1;
         const bool proxy = value.at("target_mode") == 1;
-        m_btnDNSLocal.SetCheck(!remote); m_btnDNSRemote.SetCheck(remote);
+        m_btnDNSLocal.SetCheck(value.at("dns_mode") == 0); m_btnDNSRemote.SetCheck(remote);
+        m_btnDNSDoh.SetCheck(value.at("dns_mode") == 2);
+        m_editDohUrl.SetWindowText(Wide(value.value("doh_url", std::string(ProfileShare::LegacyDohUrl))));
+        m_editDohBootstrap.SetWindowText(Wide(value.value("doh_bootstrap", std::string(ProfileShare::LegacyDohBootstrap))));
         m_radioChildFilterExclude.SetCheck(!include); m_radioChildFilterInclude.SetCheck(include);
         m_radioTargetFilterBypass.SetCheck(!proxy); m_radioTargetFilterProxy.SetCheck(proxy);
         // A shared profile is always a single server.
@@ -396,7 +419,7 @@ void CPage1::OnPasteProfile()
     }
     catch (const ProfileShare::Error& error)
     {
-        MessageBox(Localization::Get(Wide(error.what())), Localization::Get(_T("share.paste_failed")), MB_ICONERROR);
+        MessageBox(ShareErrorMessage(error), Localization::Get(_T("share.paste_failed")), MB_ICONERROR);
     }
     catch (const std::exception&)
     {

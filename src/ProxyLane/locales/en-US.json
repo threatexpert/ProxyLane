@@ -61,8 +61,11 @@
   "share.invalid_rules": "Invalid or oversized rules. Each group allows up to 32767 UTF-8 bytes and 4096 lines.",
   "share.invalid_udp": "This proxy type does not support UDP. Disable Proxy UDP and try again.",
   "share.too_large": "The profile code exceeds the 256 KiB limit.",
-  "share.invalid_code": "The clipboard does not contain a valid ProxyLane profile code, or the code is damaged. Copy the complete proxylane://profile/v1/… line and try again.",
+  "share.invalid_code": "The clipboard does not contain a valid ProxyLane profile code, or the code is damaged. Copy the complete proxylane://profile/… line and try again.",
   "share.unsupported_version": "This profile code uses an unsupported format version. Update ProxyLane and try again.",
+  "share.unsupported_features": "This profile requires capabilities not supported by this version: %s. Update ProxyLane. Nothing was imported; these settings will not be ignored.",
+  "share.unknown_fields": "This profile contains unrecognized fields: %s. Use a version that supports them. Nothing was imported; these settings will not be discarded.",
+  "share.feature_mismatch": "The declared capabilities do not match the profile settings. Import was rejected. Copy the complete profile code again from the sending application.",
   "share.clipboard_busy": "The clipboard is in use by another application. Please try again.",
   "share.no_text": "There is no readable text in the clipboard. Copy a full profile code first.",
   "share.clipboard_failed": "Could not write to the clipboard. Please try again.",
@@ -712,5 +715,12 @@
   "test.ssh_key_auth_failed": "SSH private-key authentication failed. Check the key, passphrase and authorized public key on the server.",
   "share.includes_private_key": "Includes private key and passphrase; share only with trusted people",
   "ssh.key_write_failed": "Cannot save the private key in the local keys folder. Check access permissions or damaged files.",
-  "test.ssh_key_file_failed": "Private key file is missing, unreadable or invalid. Import it again."
+  "test.ssh_key_file_failed": "Private key file is missing, unreadable or invalid. Import it again.",
+  "page1.dns_doh": "Encrypted DNS via Proxy",
+  "page1.doh_url": "DoH service URL (HTTPS)",
+  "page1.doh_bootstrap": "Connection IPs (required, comma-separated)",
+  "profile.invalid_doh": "Enter a valid HTTPS DoH URL and 1–8 connection IPs without ports. Use IPv4 when IPv6 is blocked.",
+  "profile.doh_unavailable": "Encrypted DNS (DoH) requires a supported 64-bit ProxyLane host. It also supports 32-bit target applications.",
+  "profile.doh_requires_proxy": "DoH via proxy requires SOCKS5, HTTP, SSH or a proxy chain. It cannot be used with NOPROXY.",
+  "test.doh_failed": "Encrypted DNS (DoH) failed. Check the service URL, connection IPs and proxy chain. No local or plain DNS fallback is used."
 }

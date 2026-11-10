@@ -6,6 +6,7 @@
 #include "TSSTL.h"
 #include "PRCPipeClient.h"
 #include "DnsRedirectPolicy.h"
+#include "DohPolicy.h"
 #include "HookDispatch.h"
 #include "DetourHooks.h"
 #include "UdpBlockLogLimiter.h"
@@ -448,6 +449,10 @@ class CHookWinsock
 				return HOOK_FAILED;
 			if (proxyInfo)
 				*proxyInfo = pi;
+            if (m_pHW->IsDohDnsDestination(pCI->dstAddr)) {
+                if (pi.GetProxyType() != PROXYTYPE_NOPROXY) return HOOK_REDIRECTED;
+                return HOOK_BYPASS;
+            }
 
 			// Remote-DNS mode intentionally overrides the general LAN bypass for
 			// private :53 endpoints.  PRC keeps the original address for identity
@@ -814,6 +819,13 @@ private:
 	void LogBlockedIPv6(SOCKET socketHandle, const _SockAddr& destination);
 	void LogBlockedUDP(SOCKET socketHandle, const SOCKADDR* destination, int length);
 	BOOL IsUdpAllowedLoopback(const _SockAddr& address);
+    BOOL IsDohDnsDestination(const _SockAddr& address) {
+        if (m_psi.nDNSOption != PSI_DNSOPT_DOH || address.GetPort() != 53) return FALSE;
+        return DohPolicy::DnsDestination(address) ||
+            (address.IsIPv4() && m_DummyDNS.IsDummyIP(address.GetdwIP())) ||
+            (address.IsIPv6() && m_DummyDNS.IsDummyIPv6(address.GetAddr6()));
+    }
+    BOOL IsDohDnsRequest(const SOCKADDR* destination, int length);
 	BOOL IsUdpLoopbackDestination(SOCKET socketHandle, const SOCKADDR* destination, int length);
 	CUdpBlockLogLimiter m_udpBlockLogLimiter;
 
