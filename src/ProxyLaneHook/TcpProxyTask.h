@@ -38,6 +38,7 @@ private:
 	BOOL m_bDeletePending;
     std::shared_ptr<CDohWakeup> m_dohWake;
     std::shared_ptr<CDohQuery> m_doh;
+    DohQueryLogInfo m_dohLog;
     std::unique_ptr<CDnsDohTcp> m_dnsTcp;
     ProxyChain m_dohChain;
     std::vector<_SockAddr> m_dohAddresses;

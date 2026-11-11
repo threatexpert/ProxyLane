@@ -4,6 +4,7 @@ Only test-owned processes are hooked/unhooked. No settings, trust or services
 are modified. The fixtures assert that no upstream connection uses port 53.
 """
 import argparse
+import re
 import subprocess
 from doh_transport import Proxy, isolate_controller
 
@@ -22,6 +23,37 @@ def run(host, mode, failure=False, url="https://dns.google/dns-query", bootstrap
         fixtures = [p for p in [socks, http] if p]
         assert result.returncode == 0, (result.stdout, result.stderr, [p.requests for p in fixtures])
         assert 'DNS_RELAY_PASS' in result.stdout
+        assert ' -> query started' in result.stderr, result.stderr
+        assert 'intercepted; waiting for DNS datagram' not in result.stderr, result.stderr
+        assert 'query received; resolving via proxy' not in result.stderr, result.stderr
+        assert 'DNS response received' not in result.stderr, result.stderr
+        assert '. A ->' not in result.stderr and '. AAAA ->' not in result.stderr and '. PTR ->' not in result.stderr, result.stderr
+        assert 'REFUSED; reason=private IPv4 reverse lookup; elapsed=' in result.stderr, result.stderr
+        assert 'ttl_min=' not in result.stderr and 'cname=' not in result.stderr and 'answers=' not in result.stderr, result.stderr
+        assert '; source=local' in result.stderr, result.stderr
+        # Every completed, valid transaction has one start and one result.
+        pending = {}
+        for line in result.stderr.splitlines():
+            if not line.startswith('[DoH]') or ' -> ' not in line:
+                continue
+            key, detail = line.split(' -> ', 1)
+            if detail == 'query started':
+                pending[key] = pending.get(key, 0) + 1
+            elif key in pending:
+                assert pending[key] > 0 and '; elapsed=' in detail, line
+                lifetime = re.search(r'; cache_ttl=(\d+)s;', detail)
+                if detail.startswith('NOERROR') and '; cache=hit' not in detail:
+                    assert lifetime and 0 <= int(lifetime[1]) <= 3600, ('Missing effective cache lifetime', line)
+                else:
+                    assert 'cache_ttl=' not in detail, ('Cache hits and failures keep their original format', line)
+                pending[key] -= 1
+        assert pending and not any(pending.values()), pending
+        if failure:
+            assert 'SERVFAIL; reason=' in result.stderr, result.stderr
+            assert '; cache=hit' not in result.stderr, result.stderr
+        elif query_name == 'example.org':
+            assert '; addresses=' in result.stderr, result.stderr
+            assert '; cache=hit' in result.stderr and '; shared=yes' in result.stderr, result.stderr
         for p in fixtures:
             assert not p.errors, p.errors
             assert all(len(r) == 3 and r[1] != 53 for r in p.requests), p.requests

@@ -73,6 +73,7 @@ private:
         bool quicRetired = false;
         CPRCUdpPeer::_CSAddrInfo quicTarget;
         std::shared_ptr<CDohQuery> doh;
+        DohQueryLogInfo dohLog;
         std::list<std::vector<char>> dohPending;
         size_t dohPendingBytes = 0;
         std::list<CDnsDohRequest> dnsRequests;

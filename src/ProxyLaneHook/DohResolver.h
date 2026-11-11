@@ -8,12 +8,19 @@
 class CProtocolTap;
 class CProxyReceptionCentre;
 
+// Per application request, never stored on a shared query.
+struct DohQueryLogInfo {
+    DWORD started = 0;
+    bool cacheHit = false, shared = false;
+};
+
 // Owner-thread-bound shared queries. Completion posts generation-checked
 // messages to live waiters. Dropping the last owner cancels I/O.
 class CDohQuery : public CAsyncSocketEx, public CWndTimer {
 public:
-    static std::shared_ptr<CDohQuery> Resolve(const PRCClient&, const ProxyInfo&, const ProxyChain* = NULL, bool test = false);
-    static std::shared_ptr<CDohQuery> Exchange(const PRCClient&, const ProxyInfo&, const ProxyChain*, const std::vector<unsigned char>&);
+    static std::shared_ptr<CDohQuery> Resolve(const PRCClient&, const ProxyInfo&, const ProxyChain* = NULL, bool test = false, DohQueryLogInfo* = NULL);
+    void LogAddressResult(const PRCClient&, const DohQueryLogInfo&) const;
+    static std::shared_ptr<CDohQuery> Exchange(const PRCClient&, const ProxyInfo&, const ProxyChain*, const std::vector<unsigned char>&, bool* cacheHit = NULL, bool* shared = NULL);
     static void ClearCache();
     ~CDohQuery();
     bool Done() const { return m_done; }
@@ -22,6 +29,7 @@ public:
     const std::vector<_SockAddr>& Addresses() const { return m_addresses; }
     const std::vector<unsigned char>& WireAnswer() const { return m_wireAnswer; }
     DWORD AnswerAge() const { return (GetTickCount() - m_answerStored) / 1000; }
+    DWORD CacheLifetime() const { return m_ttl; }
     bool NotifyWhenReady(const std::shared_ptr<CDohWakeup>&);
     void OnConnect(int error) override;
     void OnReceive(int error) override;
@@ -33,7 +41,7 @@ public:
     void RemoveAllLayers() override;
 private:
     CDohQuery();
-    static std::shared_ptr<CDohQuery> Start(const PRCClient&, const ProxyInfo&, const ProxyChain*, bool, const std::vector<unsigned char>&);
+    static std::shared_ptr<CDohQuery> Start(const PRCClient&, const ProxyInfo&, const ProxyChain*, bool, const std::vector<unsigned char>&, bool* cacheHit = NULL, bool* shared = NULL);
     bool Begin();
     void Pump();
     void Fail(const char* text);
@@ -53,6 +61,7 @@ private:
     bool m_test = false;
     DWORD m_started = 0, m_attemptStarted = 0, m_ttl = 0;
     std::string m_key;
+    std::string m_summaryText;
     std::vector<unsigned char> m_wireQuery, m_wireAnswer;
     DWORD m_answerStored = 0;
     void* m_tls = NULL;
@@ -73,11 +82,14 @@ public:
     bool NotifyWhenReady(const std::shared_ptr<CDohWakeup>&);
     bool TryBuildReply(bool udp, std::vector<unsigned char>& response);
 private:
+    void LogResult(CStringA summary, bool local = false);
     std::vector<unsigned char> m_query;
     std::vector<unsigned char> m_rejected;
     std::shared_ptr<CDohQuery> m_exchange;
     CStringA m_name, m_type;
     DWORD m_pid = 0;
+    DWORD m_started = 0;
+    bool m_cacheHit = false, m_shared = false, m_resultLogged = false;
 };
 
 // Application-facing DNS/TCP session, owned by the existing TCP task.

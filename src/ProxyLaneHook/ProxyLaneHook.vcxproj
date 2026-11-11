@@ -412,6 +412,7 @@
 	<ClInclude Include="DnsRedirectPolicy.h" />
     <ClInclude Include="DohPolicy.h" />
     <ClInclude Include="DohResolver.h" />
+    <ClInclude Include="DohCache.h" />
     <ClInclude Include="DohWakeup.h" />
 	<ClInclude Include="UdpPayloadPolicy.h" />
 	<ClInclude Include="InetCompat.h" />

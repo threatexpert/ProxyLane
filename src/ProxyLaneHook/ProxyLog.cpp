@@ -205,6 +205,30 @@ static CString FormatLogEndpoint(const _SockAddr& address, bool includePort = tr
 	return endpoint;
 }
 
+void LogDohTargetSelection(CProxyReceptionCentre* receptionCentre,
+    const PRCClient* client, size_t attempt, size_t total)
+{
+    if (!g_pProxyLog || !client || !(client->routingFlags & PRC_CLIENT_FLAG_DOH_RESOLVED)) return;
+    const int savedError = WSAGetLastError();
+    WCHAR path[MAX_PATH] = {};
+    LPCWSTR process = GetLogProcessName(receptionCentre, client->dwPid, path, _countof(path));
+    CStringA domain(client->szDomainName);
+    domain.Replace('\r', ' '); domain.Replace('\n', ' '); domain.Replace('\t', ' ');
+    if (domain.GetLength() > 1 && domain.Right(1) == ".")
+        domain.Truncate(domain.GetLength() - 1);
+    CString endpoint = FormatLogEndpoint(client->proxyDstAddr);
+    CString detail;
+    if (client->sType == SOCK_STREAM)
+        detail.Format(_T("connecting; attempt=%Iu/%Iu"), attempt, total);
+    else
+        detail = _T("target selected");
+    PrintText(_T("[Proxy] %s (%lu) : %s %hs:%d -> %s; %s\r\n"),
+        process && *process ? process : L"Unknown", client->dwPid,
+        client->sType == SOCK_STREAM ? L"TCP" : L"UDP", (LPCSTR)domain,
+        client->dstAddr.GetPort(), (LPCTSTR)endpoint, (LPCTSTR)detail);
+    WSASetLastError(savedError);
+}
+
 void LogDnsRedirect(const LPPRCClient lpC, LPCWSTR processName, CProxyReceptionCentre* receptionCentre)
 {
 	if (!lpC || !lpC->HasProxyDestination())
@@ -213,14 +237,8 @@ void LogDnsRedirect(const LPPRCClient lpC, LPCWSTR processName, CProxyReceptionC
 	CString effective = FormatLogEndpoint(lpC->proxyDstAddr);
 	CString name(processName && processName[0] ? processName : L"Unknown");
     if (lpC->routingFlags & PRC_CLIENT_FLAG_DOH_RESOLVED) {
-        if (!processName || !processName[0]) {
-            WCHAR path[MAX_PATH] = {};
-            LPCWSTR resolved = GetLogProcessName(receptionCentre, lpC->dwPid, path, _countof(path));
-            if (resolved && resolved[0]) name = resolved;
-        }
-        CString address = FormatLogEndpoint(lpC->proxyDstAddr, false);
-        PrintText(_T("[DoH] %s (%lu) : %hs -> %s\r\n"), (LPCTSTR)name, lpC->dwPid,
-            lpC->szDomainName, (LPCTSTR)address);
+        // The owning request logs completion once, with cache/shared metadata.
+        // Starting (or retrying) a business connection is not another DNS result.
         return;
     }
 	PrintText(_T("[DNS] %s (%lu) \x00b7 %s \x2192 %s\r\n"),
@@ -231,7 +249,10 @@ void LogDnsRelay(DWORD pid, LPCSTR name, LPCSTR type, LPCSTR result)
 {
     WCHAR path[MAX_PATH] = {};
     LPCWSTR process = GetLogProcessName(NULL, pid, path, _countof(path));
-    PrintText(_T("[DoH] %s (%lu) : %hs %hs -> %hs\r\n"), process && *process ? process : L"Unknown", pid, name, type, result);
+    CStringA displayName(name ? name : "");
+    if (displayName.GetLength() > 1 && displayName.Right(1) == ".")
+        displayName.Truncate(displayName.GetLength() - 1);
+    PrintText(_T("[DoH] %s (%lu) : %hs %hs -> %hs\r\n"), process && *process ? process : L"Unknown", pid, (LPCSTR)displayName, type, result);
 }
 
 void LogDnsRelayRoute(const PRCClient* client, LPCSTR result)

@@ -135,8 +135,6 @@ INT CPRCUdpServer::OnLocalThreadRegister(LPPRCClient lpPRCClient)
 	}
 
 	LogNewProxyTask(lpPRCClient);
-    if (DohPolicy::Intercept(*lpPRCClient, pisetting))
-        LogDnsRelayRoute(lpPRCClient, "intercepted; waiting for DNS datagram");
 	return TRUE;
 }
 

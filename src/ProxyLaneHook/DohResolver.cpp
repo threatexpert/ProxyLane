@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "DohResolver.h"
+#include "DohCache.h"
 #include "DohPolicy.h"
 #include "ProxyLog.h"
 #include "MitmBridge.h"
@@ -14,10 +15,9 @@ extern HMODULE ProxyMitmModule();
 namespace {
 using Json = nlohmann::json;
 const DWORD DOH_CONNECT_TIMEOUT = 12000;
-struct Cached { std::vector<_SockAddr> addresses; std::vector<unsigned char> wire; DWORD stored, lifetime; };
 struct Queries {
     std::map<std::string, std::weak_ptr<CDohQuery>> active;
-    std::map<std::string, Cached> cache;
+    std::unique_ptr<CDohCache> cache;
 };
 thread_local Queries queries;
 void KeyPart(std::string& key, const char* part) {
@@ -44,24 +44,64 @@ bool DnsMessage(const Json& request, Json& response) {
     if (fn(request.dump().c_str(), output.data(), output.size()) < 0) return false;
     try { response = Json::parse(output.data()); return response.is_object(); } catch (...) { return false; }
 }
+void LogDohResult(DWORD pid, const CStringA& name, const CStringA& type,
+    CStringA summary, DWORD started, bool cacheHit, bool shared, bool local,
+    const CDohQuery* query) {
+    // DNS text and transport errors are untrusted; keep one bounded log line.
+    summary.Replace('\r', ' '); summary.Replace('\n', ' '); summary.Replace('\t', ' ');
+    if (summary.GetLength() > 1024) summary = summary.Left(1021) + "...";
+    CStringA tail;
+    // Reuse the status prefix from Rust's formatter, not another DNS parser.
+    // Valid negative responses and locally generated errors are not successes.
+    if (!cacheHit && !local && query && query->Succeeded() &&
+        (summary == "NOERROR" || summary.Left(8) == "NOERROR;")) {
+        tail.Format("; cache_ttl=%lus", query->CacheLifetime());
+        summary += tail;
+    }
+    tail.Format("; elapsed=%lums", GetTickCount() - started);
+    summary += tail;
+    if (local) summary += "; source=local";
+    else if (cacheHit) summary += "; cache=hit";
+    else if (shared) summary += "; shared=yes";
+    LogDnsRelay(pid, name.Left(512), type, summary);
+}
 }
 CDohQuery::CDohQuery() : m_wakeup(std::make_shared<CDohWakeup>(GetHwnd())) {}
 CDohQuery::~CDohQuery() { m_wakeup->Cancel(); KillTimer(1); ResetTransport(); }
-void CDohQuery::ClearCache() { queries.cache.clear(); queries.active.clear(); }
+void CDohQuery::ClearCache() { queries.cache.reset(); queries.active.clear(); }
 void CDohQuery::RemoveAllLayers() { CAsyncSocketEx::RemoveAllLayers(); m_layers.Free(); }
 void CDohQuery::ResetTransport() {
     Close();
     if (m_tls && m_free) m_free(m_tls);
     m_tls = NULL; m_connected = false; m_outputSize = m_outputSent = 0;
     m_addresses.clear(); m_wireAnswer.clear(); m_ttl = 0;
+    m_summaryText.clear();
 }
-std::shared_ptr<CDohQuery> CDohQuery::Resolve(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, bool test) {
-    return Start(client, proxy, chain, test, {});
+std::shared_ptr<CDohQuery> CDohQuery::Resolve(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, bool test, DohQueryLogInfo* log) {
+    if (log) {
+        log->started = GetTickCount();
+        LogDnsRelay(client.dwPid, client.szDomainName, client.dstAddr.IsIPv6() ? "AAAA" : "A", "query started");
+    }
+    return Start(client, proxy, chain, test, {}, log ? &log->cacheHit : NULL, log ? &log->shared : NULL);
 }
-std::shared_ptr<CDohQuery> CDohQuery::Exchange(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, const std::vector<unsigned char>& wire) {
-    return Start(client, proxy, chain, false, wire);
+void CDohQuery::LogAddressResult(const PRCClient& client, const DohQueryLogInfo& log) const {
+    CStringA summary;
+    if (!Succeeded()) {
+        summary = "ERROR; reason="; summary += m_error;
+    } else {
+        // Rust uses the same concise formatter for both resolution paths.
+        // The cache lifetime is already known in C++; no extra DNS parsing.
+        summary = m_summaryText.empty() ? "NOERROR; summary unavailable" : m_summaryText.c_str();
+    }
+    LogDohResult(client.dwPid, client.szDomainName, client.dstAddr.IsIPv6() ? "AAAA" : "A",
+        summary, log.started, log.cacheHit, log.shared, false, this);
 }
-std::shared_ptr<CDohQuery> CDohQuery::Start(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, bool test, const std::vector<unsigned char>& wire) {
+std::shared_ptr<CDohQuery> CDohQuery::Exchange(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, const std::vector<unsigned char>& wire, bool* cacheHit, bool* shared) {
+    return Start(client, proxy, chain, false, wire, cacheHit, shared);
+}
+std::shared_ptr<CDohQuery> CDohQuery::Start(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, bool test, const std::vector<unsigned char>& wire, bool* cacheHit, bool* shared) {
+    if (cacheHit) *cacheHit = false;
+    if (shared) *shared = false;
     auto result = std::shared_ptr<CDohQuery>(new CDohQuery);
     result->m_proxy = proxy;
     result->m_test = test;
@@ -84,19 +124,21 @@ std::shared_ptr<CDohQuery> CDohQuery::Start(const PRCClient& client, const Proxy
         KeyPart(key, std::to_string(hop.sshAuth).c_str()); KeyPart(key, hop.strSshKeyFile.szbuf); KeyPart(key, hop.strSshKeyDigest.szbuf);
     }
     const DWORD now = GetTickCount();
-    for (auto it = queries.cache.begin(); it != queries.cache.end();) {
-        if (now - it->second.stored >= it->second.lifetime) it = queries.cache.erase(it); else ++it;
-    }
-    auto cached = queries.cache.find(key);
-    if (cached != queries.cache.end()) {
-        result->m_addresses = cached->second.addresses; result->m_wireAnswer = cached->second.wire;
-        result->m_answerStored = cached->second.stored; result->m_done = true; return result;
+    const auto* cached = queries.cache ? queries.cache->Find(key) : NULL;
+    if (cached) {
+        if (cacheHit) *cacheHit = true;
+        result->m_addresses = cached->addresses; result->m_wireAnswer = cached->wire;
+        result->m_summaryText = cached->summaryText;
+        result->m_answerStored = cached->stored; result->m_done = true; return result;
     }
     for (auto it = queries.active.begin(); it != queries.active.end();) {
         if (it->second.expired()) it = queries.active.erase(it); else ++it;
     }
     auto existing = queries.active.find(key);
-    if (existing != queries.active.end()) if (auto shared = existing->second.lock()) return shared;
+    if (existing != queries.active.end()) if (auto active = existing->second.lock()) {
+        if (shared) *shared = true;
+        return active;
+    }
     if (queries.active.size() >= 64) { result->m_error = "DoH query capacity reached"; result->m_done = true; return result; }
     if (!ProxySupportsOptionalModules() || (result->m_ipv6 && proxy.dohBlockIPv6)) {
         result->m_error = "DoH requires a supported 64-bit host and an allowed address family";
@@ -148,10 +190,14 @@ void CDohQuery::Fail(const char* text) {
 void CDohQuery::Complete() {
     m_error.Empty(); m_done = true; KillTimer(1); queries.active.erase(m_key);
     m_answerStored = GetTickCount();
+    // This is the effective cache lifetime after Rust's DNS/HTTP limits and
+    // the host cap. Keep zero when the answer could not actually be cached.
+    m_ttl = min(m_ttl, (DWORD)3600);
     if (m_ttl) {
-        if (queries.cache.size() >= 512) queries.cache.erase(queries.cache.begin());
+        if (!queries.cache) queries.cache.reset(new CDohCache);
         // Capping only shortens the DNS TTL; zero-TTL answers never enter cache.
-        queries.cache[m_key] = Cached{m_addresses, m_wireAnswer, m_answerStored, min(m_ttl, (DWORD)3600) * 1000};
+        if (!queries.cache->Store(m_key, CDohCache::Entry{m_addresses, m_wireAnswer, m_answerStored, m_ttl * 1000, m_summaryText}))
+            m_ttl = 0;
     }
     NotifyWaiters();
 }
@@ -205,6 +251,8 @@ void CDohQuery::Pump() {
                     m_addresses.push_back(ip);
                 }
                 if (m_addresses.empty()) throw std::runtime_error("DoH answer has no usable addresses");
+                if (value.contains("summary") && value["summary"].is_string())
+                    m_summaryText = value["summary"].get<std::string>();
                 m_ttl = value.at("ttl").get<DWORD>(); Complete();
             } catch (const std::exception& error) { Fail(error.what()); }
             break;
@@ -263,6 +311,7 @@ int CDohQuery::OnLayerCallback(const CAsyncSocketExLayer*, int type, int code, W
 }
 
 bool CDnsDohRequest::Begin(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, const char* data, int length) {
+    m_started = GetTickCount();
     if (!data || length < 12 || length > 65535) {
         LogDnsRelayRoute(&client, "rejected DNS message: invalid length");
         return false;
@@ -277,23 +326,32 @@ bool CDnsDohRequest::Begin(const PRCClient& client, const ProxyInfo& proxy, cons
         m_rejected[2] = 0x80 | (m_query[2] & 0x79);
         const bool unavailable = info.is_object() && info.value("unavailable", false);
         m_rejected[3] = unavailable ? 0x82 : 0x81;
-        LogDnsRelay(m_pid, "", "", unavailable ? "DoH DNS adapter unavailable; no DNS fallback" : "rejected invalid or unsupported DNS query");
+        LogResult(unavailable ? "SERVFAIL; reason=DoH DNS adapter unavailable; no DNS fallback" : "FORMERR; reason=invalid or unsupported DNS query", true);
         return true;
     }
     m_name = info.value("name", "").c_str(); m_type = info.value("type", "").c_str();
+    // This also covers cached/shared queries and local refusals; do not imply
+    // that every application request starts another upstream exchange.
+    LogDnsRelay(m_pid, m_name, m_type, "query started");
     if (info.contains("local_reply")) {
         try { m_rejected = Unhex(info.at("local_reply").get<std::string>()); }
-        catch (...) { LogDnsRelay(m_pid, m_name, m_type, "invalid local DNS reply"); return false; }
-        LogDnsRelay(m_pid, m_name, m_type, "REFUSED locally: private IPv4 reverse lookup");
+        catch (...) { LogResult("ERROR; reason=invalid local DNS reply", true); return false; }
+        CStringA summary(info.value("summary", "REFUSED").c_str());
+        summary += "; reason=private IPv4 reverse lookup";
+        LogResult(summary, true);
         return true;
     }
-    LogDnsRelay(m_pid, m_name, m_type, "query received; resolving via proxy");
     auto canonical = m_query; canonical[0] = canonical[1] = 0;
-    m_exchange = CDohQuery::Exchange(client, proxy, chain, canonical);
+    m_exchange = CDohQuery::Exchange(client, proxy, chain, canonical, &m_cacheHit, &m_shared);
     return true;
 }
 bool CDnsDohRequest::NotifyWhenReady(const std::shared_ptr<CDohWakeup>& waiter) {
     return !m_rejected.empty() ? waiter->Notify() : m_exchange && m_exchange->NotifyWhenReady(waiter);
+}
+void CDnsDohRequest::LogResult(CStringA summary, bool local) {
+    if (m_resultLogged) return;
+    m_resultLogged = true;
+    LogDohResult(m_pid, m_name, m_type, summary, m_started, m_cacheHit, m_shared, local, m_exchange.get());
 }
 bool CDnsDohRequest::TryBuildReply(bool udp, std::vector<unsigned char>& response) {
     if (!m_rejected.empty()) { response = m_rejected; return true; }
@@ -303,14 +361,23 @@ bool CDnsDohRequest::TryBuildReply(bool udp, std::vector<unsigned char>& respons
         input["answer"] = Hex(m_exchange->WireAnswer()); input["age"] = m_exchange->AnswerAge();
     }
     Json output;
+    CStringA summary("DNS response; summary unavailable");
     if (DnsMessage(input, output)) {
         try { response = Unhex(output.at("wire").get<std::string>()); } catch (...) { response.clear(); }
+        if (output.contains("summary") && output["summary"].is_string())
+            summary = output["summary"].get<std::string>().c_str();
     }
     if (response.empty()) {
         response.assign(12, 0); response[0] = m_query[0]; response[1] = m_query[1];
         response[2] = 0x80 | (m_query[2] & 1); response[3] = 0x82;
+        summary = "SERVFAIL; reason=DNS reply construction failed";
     }
-    LogDnsRelay(m_pid, m_name, m_type, m_exchange->Succeeded() ? "DNS response received" : (LPCSTR)m_exchange->Error());
+    if (!m_exchange->Succeeded()) {
+        // The application receives SERVFAIL; retain the actual transport cause.
+        summary = "SERVFAIL; reason=";
+        summary += m_exchange->Error();
+    }
+    LogResult(summary);
     return true;
 }
 

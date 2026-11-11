@@ -33,6 +33,8 @@ private:
 void PrintText(const TCHAR *fmt, ...);
 void LogDnsRelay(DWORD pid, LPCSTR name, LPCSTR type, LPCSTR result);
 void LogDnsRelayRoute(const PRCClient* client, LPCSTR result);
+void LogDohTargetSelection(CProxyReceptionCentre* receptionCentre,
+    const PRCClient* client, size_t attempt = 0, size_t total = 0);
 void LogNewProxyTask(const LPPRCClient lpC);
 void LogConnectionFailure(const LPPRCClient client, LPCWSTR processName,
 	IProxyLog::ConnectionStage stage, DWORD error);

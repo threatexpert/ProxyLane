@@ -21,10 +21,7 @@ public:
 };
 class RelayLog : public Log {
 public:
-    LONG udpRegistrations = 0, dnsQueries = 0;
     void LogText(LPCWSTR text) override {
-        if (wcsstr(text, L"intercepted; waiting for DNS datagram")) InterlockedIncrement(&udpRegistrations);
-        if (wcsstr(text, L"query received; resolving via proxy")) InterlockedIncrement(&dnsQueries);
         fwprintf(stderr, L"%s", text);
     }
 };
@@ -226,8 +223,6 @@ int main(int argc, char** argv) {
     unsigned char errorReply[14]; Check(RecvAll(tcp, errorReply, sizeof(errorReply)), "malformed DNS response");
     Check(errorReply[0] == 0 && errorReply[1] == 12 && errorReply[2] == 0x12 && errorReply[3] == 0x34 && (errorReply[5] & 15) == 1, "malformed DNS FORMERR without upstream query");
     closesocket(tcp);
-    Check(log.udpRegistrations >= 5, "UDP DNS interception is logged before a reply is available");
-    Check(log.dnsQueries >= 6, "DNS query receipt is logged before completion");
     Check(gp_UnhookWinsock() != FALSE, "unhook test");
     Check(proxy->DisableProxy() != FALSE, "stop test host");
     settings.Detach(); log.Detach(); ReleaseGlobalProxyInstance(); WSACleanup();

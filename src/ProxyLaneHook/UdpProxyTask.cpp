@@ -462,8 +462,8 @@ void CUdpProxyTask::OnMessage(UINT message, WPARAM low, LPARAM high, BOOL& handl
     }
     for (auto& route : m_routes) {
         if (!route.doh || !route.doh->Done()) continue;
+        route.doh->LogAddressResult(route.client, route.dohLog);
         if (!route.doh->Succeeded()) {
-            PrintText(_T("DoH resolution failed for UDP %hs: %hs (no DNS fallback).\r\n"), route.client.szDomainName, (LPCSTR)route.doh->Error());
             route.doh.reset(); CloseTask("DoH resolution failed"); return;
         }
         route.client.proxyDstAddr = route.doh->Addresses().front();
@@ -474,6 +474,7 @@ void CUdpProxyTask::OnMessage(UINT message, WPARAM low, LPARAM high, BOOL& handl
         target.srcAddr = route.client.srcAddr;
         target.dstAddr = route.client.proxyDstAddr;
         route.peer->SetAddrInfo(&target);
+        LogDohTargetSelection(m_pTaskmgr->m_pPRC, &route.client);
         auto pending = std::move(route.dohPending); route.dohPendingBytes = 0;
         for (auto& bytes : pending) {
             if (m_upstreamState == UdpAssociationPolicy::UPSTREAM_CLOSING) return;
@@ -658,7 +659,7 @@ BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer *routePeer,
             if (DohPolicy::Needed(it->client, m_ProxyInfo)) {
                 if (!(it->client.routingFlags & PRC_CLIENT_FLAG_DOH_RESOLVED)) {
                     if (!it->doh) {
-                        it->doh = CDohQuery::Resolve(it->client, m_ProxyInfo);
+                        it->doh = CDohQuery::Resolve(it->client, m_ProxyInfo, NULL, false, &it->dohLog);
                         if (!it->doh->NotifyWhenReady(m_dohWake)) {
                             CloseTask("DoH completion notification failed"); return FALSE;
                         }

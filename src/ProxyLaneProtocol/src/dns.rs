@@ -95,6 +95,35 @@ pub fn relay_reply(query: &[u8], answer: Option<&[u8]>, age: u32, udp: bool) -> 
     Ok(wire)
 }
 
+// Shared, bounded runtime-log format. Detailed record decoding belongs to the
+// protocol viewer; logging must not accumulate CNAME history or track TTLs.
+pub fn relay_summary(bytes: &[u8]) -> Result<String, String> {
+    use hickory_proto::{op::ResponseCode, rr::RecordType};
+    let msg = Message::from_vec(bytes).map_err(|e| e.to_string())?;
+    if msg.message_type() != MessageType::Response { return Err("Not a DNS response".into()); }
+    let mut text = match msg.response_code() {
+        ResponseCode::NoError => "NOERROR".to_string(),
+        ResponseCode::FormErr => "FORMERR".to_string(),
+        ResponseCode::ServFail => "SERVFAIL".to_string(),
+        ResponseCode::NXDomain => "NXDOMAIN".to_string(),
+        ResponseCode::NotImp => "NOTIMP".to_string(),
+        ResponseCode::Refused => "REFUSED".to_string(),
+        code => format!("RCODE={}", u16::from(code)),
+    };
+    if msg.truncated() { text.push_str("; truncated=yes"); }
+    if msg.response_code() != ResponseCode::NoError { return Ok(text); }
+    let kind = msg.queries().first().map(|q| q.query_type());
+    if matches!(kind, Some(RecordType::A | RecordType::AAAA)) {
+        let matching: Vec<_> = msg.answers().iter().filter(|r| Some(r.record_type()) == kind).collect();
+        let addresses: Vec<_> = matching.iter().take(4).filter_map(|r| r.data().map(ToString::to_string)).collect();
+        if !addresses.is_empty() {
+            text.push_str(&format!("; addresses={}", addresses.join(",")));
+            if matching.len() > 4 { text.push_str(&format!(",...(+{})", matching.len()-4)); }
+        } else if !msg.truncated() { text.push_str("; no addresses"); }
+    }
+    Ok(text)
+}
+
 #[cfg(test)]
 mod relay_tests {
     use super::*;
@@ -158,6 +187,40 @@ mod relay_tests {
         assert!(relay_reply(&q, Some(&wrong), 0, false).is_err());
         let mut wrong = a.clone(); wrong.queries_mut()[0].set_query_type(hickory_proto::rr::RecordType::AAAA);
         assert!(relay_reply(&q, Some(&wrong.to_vec().unwrap()), 0, false).is_err());
+    }
+    #[test]
+    fn brief_summary_addresses_and_errors() {
+        use hickory_proto::rr::{Name, rdata::{A, AAAA, CNAME}};
+        let q = question("example.org", false).unwrap();
+        let mut a = relay_query(&q).unwrap(); a.set_message_type(MessageType::Response);
+        let alias: Name = "alias.example.org.".parse().unwrap();
+        a.add_answer(Record::from_rdata(a.queries()[0].name().clone(), 40, RData::CNAME(CNAME(alias.clone()))));
+        for n in 1..=6 { a.add_answer(Record::from_rdata(alias.clone(), 60, RData::A(A::new(192, 0, 2, n)))); }
+        let wire = relay_reply(&q, Some(&a.to_vec().unwrap()), 7, false).unwrap();
+        assert_eq!(relay_summary(&wire).unwrap(), "NOERROR; addresses=192.0.2.1,192.0.2.2,192.0.2.3,192.0.2.4,...(+2)");
+        a.take_answers(); a.queries_mut()[0].set_query_type(hickory_proto::rr::RecordType::AAAA);
+        a.add_answer(Record::from_rdata(alias, 0, RData::AAAA(AAAA("2001:db8::1".parse().unwrap()))));
+        assert_eq!(relay_summary(&a.to_vec().unwrap()).unwrap(), "NOERROR; addresses=2001:db8::1");
+        a.take_answers();
+        assert_eq!(relay_summary(&a.to_vec().unwrap()).unwrap(), "NOERROR; no addresses");
+        a.set_response_code(ResponseCode::NXDomain);
+        assert_eq!(relay_summary(&a.to_vec().unwrap()).unwrap(), "NXDOMAIN");
+        assert_eq!(relay_summary(&relay_reply(&q, None, 0, false).unwrap()).unwrap(), "SERVFAIL");
+    }
+    #[test]
+    fn brief_summary_omits_other_record_details() {
+        use hickory_proto::rr::{Name, RecordType, rdata::{HTTPS, SVCB}};
+        let (q, mut a) = fixture();
+        a.take_answers(); a.queries_mut()[0].set_query_type(RecordType::HTTPS);
+        a.add_answer(Record::from_rdata(a.queries()[0].name().clone(), 120, RData::HTTPS(HTTPS(SVCB::new(1, Name::root(), vec![])))));
+        assert_eq!(relay_summary(&a.to_vec().unwrap()).unwrap(), "NOERROR");
+        let (_, mut a) = fixture();
+        a.answers_mut()[0].set_data(Some(RData::TXT(TXT::new(vec!["x\r\ny\tz".repeat(30); 4]))));
+        assert_eq!(relay_summary(&a.to_vec().unwrap()).unwrap(), "NOERROR");
+        let udp = relay_reply(&q, Some(&a.to_vec().unwrap()), 0, true).unwrap();
+        assert_eq!(relay_summary(&udp).unwrap(), "NOERROR; truncated=yes");
+        assert!(relay_summary(&q).is_err());
+        assert!(relay_summary(&[0; 3]).is_err());
     }
     #[test]
     fn udp_truncation_tcp_full_answer_and_edns() {

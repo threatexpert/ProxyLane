@@ -108,7 +108,11 @@ impl Client {
                 self.request.clear();
             } else {
                 let ttl = self.expires.unwrap().saturating_duration_since(now).as_secs();
-                self.result = Some(json!({"addresses":answer.addresses,"ttl":ttl}).to_string());
+                let mut result = json!({"addresses":answer.addresses,"ttl":ttl});
+                if let Ok(summary) = proxylane_protocol::dns::relay_summary(&body) {
+                    result["summary"] = json!(summary);
+                }
+                self.result = Some(result.to_string());
             }
         }
         Ok(())
@@ -145,13 +149,20 @@ pub unsafe extern "C" fn plm_dns_message(input: *const c_char, output: *mut c_ch
             let mut info = json!({"name":q.queries()[0].name().to_ascii(),"type":q.queries()[0].query_type().to_string()});
             if let Some(reply) = proxylane_protocol::dns::private_ipv4_ptr_reply(&q)? {
                 info["local_reply"] = json!(hex(&reply));
+                if let Ok(summary) = proxylane_protocol::dns::relay_summary(&reply) {
+                    info["summary"] = json!(summary);
+                }
             }
             return Ok(info.to_string());
         }
         let answer = v.get("answer").map(|a| unhex(a.as_str().ok_or("Invalid DNS answer")?)).transpose()?;
         let wire = proxylane_protocol::dns::relay_reply(&query, answer.as_deref(),
             v["age"].as_u64().unwrap_or(0).min(u32::MAX as u64) as u32, v["udp"].as_bool().unwrap_or(false))?;
-        Ok(json!({"wire":hex(&wire)}).to_string())
+        let mut result = json!({"wire":hex(&wire)});
+        if let Ok(summary) = proxylane_protocol::dns::relay_summary(&wire) {
+            result["summary"] = json!(summary);
+        }
+        Ok(result.to_string())
     });
     match result {
         Ok(Ok(text)) if capacity > text.len() => { super::write_error(output, capacity, &text); text.len() as i32 }
@@ -430,7 +441,10 @@ mod tests {
                 if raw {
                     let bytes = unhex(result["wire"].as_str().unwrap()).unwrap();
                     assert_eq!(proxylane_protocol::dns::answer(&bytes, "example.org", false).unwrap().ttl, 50);
-                } else { assert_eq!(result["addresses"], json!(["192.0.2.20"])); }
+                } else {
+                    assert_eq!(result["addresses"], json!(["192.0.2.20"]));
+                    assert_eq!(result["summary"], "NOERROR; addresses=192.0.2.20");
+                }
                 assert_eq!(result["ttl"], 50);
             } else { assert!(rejected); assert!(request.is_empty()); }
         }

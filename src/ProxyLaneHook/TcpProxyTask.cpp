@@ -77,7 +77,7 @@ BOOL CTcpProxyTask::SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxy
         if (DohPolicy::Needed(m_PRCClient, m_ProxyInfo)) {
             if (!m_pClient->Attach(sClient, FD_CLOSE)) break;
             if (lpChain) m_dohChain = *lpChain;
-            m_doh = CDohQuery::Resolve(m_PRCClient, m_ProxyInfo, lpChain);
+            m_doh = CDohQuery::Resolve(m_PRCClient, m_ProxyInfo, lpChain, false, &m_dohLog);
             if (!m_doh->NotifyWhenReady(m_dohWake)) { WSASetLastError(WSAENOBUFS); break; }
             return TRUE;
         }
@@ -169,13 +169,13 @@ BOOL CTcpProxyTask::ConnectResolved() {
     m_PRCClient.proxyDstAddr = m_dohAddresses[m_dohAddress];
     m_PRCClient.proxyDstAddr.SetPort(m_PRCClient.dstAddr.GetPort());
     m_PRCClient.routingFlags |= PRC_CLIENT_FLAG_DOH_RESOLVED;
-    LogDnsRedirect(&m_PRCClient, NULL, m_pTaskmgr->m_pPRC);
     // Capture metadata is created only after an effective address is known.
     if (CMitmBridge::Enabled()) {
         m_pMitm = new CMitmBridge(this);
         if (!m_pMitm->Initialize()) return FALSE;
     } else if (CProtocolTap::Enabled()) m_pProtocol = new CProtocolTap(this);
     IProxyLog::ConnectionStage stage = IProxyLog::STAGE_CONNECT;
+    LogDohTargetSelection(m_pTaskmgr->m_pPRC, &m_PRCClient, m_dohAddress + 1, m_dohAddresses.size());
     return m_pServer->ConnectProxy(&m_PRCClient, &m_ProxyInfo, stage, m_dohChain.empty() ? NULL : &m_dohChain);
 }
 bool CTcpProxyTask::RetryDohAddress(CPRCTcpPeer* peer, int error) {
@@ -189,8 +189,8 @@ void CTcpProxyTask::OnMessage(UINT message, WPARAM low, LPARAM high, BOOL& handl
     if (m_bDeletePending) { m_doh.reset(); return; }
     if (m_doh && !m_doh->Done()) return;
     if (m_doh) {
+        m_doh->LogAddressResult(m_PRCClient, m_dohLog);
         if (!m_doh->Succeeded()) {
-            PrintText(_T("DoH resolution failed for %hs: %hs (no DNS fallback).\r\n"), m_PRCClient.szDomainName, (LPCSTR)m_doh->Error());
             EndTask(); m_bDeletePending = TRUE; return;
         }
         m_dohAddresses = m_doh->Addresses(); m_doh.reset();

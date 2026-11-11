@@ -156,16 +156,56 @@ def run(binary, chain=False, failure=False, udp=True, url="https://dns.google/dn
         assert result.returncode == 0, (result.stdout + result.stderr, socks.requests, socks.errors, http.requests if http else [])
         if not failure:
             lines = [line.strip() for line in (result.stdout + result.stderr).splitlines() if line.startswith('[DoH]')]
-            assert len(lines) >= 10, ('Missing DoH result logs', lines)
+            completed = []
+            started = 0
             for line in lines:
-                match = re.fullmatch(r'\[DoH\] host\.exe \(\d+\) : example\.org -> (\S+)', line)
+                match = re.fullmatch(r'\[DoH\] host\.exe \(\d+\) : example\.org A -> (.+)', line)
                 assert match, ('DoH log must identify the process', line)
-                assert ipaddress.ip_address(match[1]).version == 4, ('DoH log must contain only the answer IP, without a business port', line)
+                if match[1] == 'query started':
+                    started += 1
+                    continue
+                detail = re.fullmatch(r'NOERROR; addresses=([^;]+)(?:; cache_ttl=(\d+)s)?; elapsed=\d+ms(?:; (?:cache=hit|shared=yes))?', match[1])
+                assert detail, ('Missing address result metadata', line)
+                if '; cache=hit' in line:
+                    assert detail[2] is None, ('Cache hits must keep the original format', line)
+                else:
+                    assert detail[2] is not None and 0 <= int(detail[2]) <= 3600, ('Missing effective cache lifetime', line)
+                for address in detail[1].split(','):
+                    if not address.startswith('...'):
+                        assert ipaddress.ip_address(address).version == 4, ('No business port in DNS addresses', line)
+                completed.append(line)
+            assert len(completed) == 10 + int(udp and not chain), ('One result per completed business query', lines)
+            assert started >= len(completed), ('Missing query start', lines)
+            assert any('; cache=hit' in line for line in completed), ('Missing cached address result', lines)
+            assert any('; shared=yes' in line for line in completed), ('Missing shared address result', lines)
+        else:
+            assert ' A -> ERROR; reason=' in result.stderr and '; elapsed=' in result.stderr, result.stderr
+            assert 'cache_ttl=' not in result.stderr, ('Failed queries must not log a cache lifetime', result.stderr)
         last = http or socks
         queries = [r for r in last.requests if len(r) == 3 and r[1] == 443]
         targets = [r for r in last.requests if len(r) == 3 and r[1] == 18888]
         assert len(queries) == (4 if retry else 2), ("concurrent queries/cache were not shared", last.requests)
         assert (len(targets) == 0 if failure else len(targets) == 12), last.requests
+        selected = [line.strip() for line in (result.stdout + result.stderr).splitlines() if line.startswith('[Proxy]')]
+        if failure:
+            assert not selected, ('Failed DNS must not log a selected target', selected)
+        else:
+            tcp_selected = []
+            udp_selected = []
+            for line in selected:
+                match = re.fullmatch(r'\[Proxy\] host\.exe \(\d+\) : (TCP|UDP) example\.org:18888 -> ([^;]+); (.+)', line)
+                assert match, ('Unexpected target selection log', line)
+                address, port = match[2].rsplit(':', 1)
+                assert port == '18888' and any(r[0] == address for r in targets), ('Selected target must match actual proxy request', line, targets)
+                if match[1] == 'TCP':
+                    attempt = re.fullmatch(r'connecting; attempt=1/([1-9]\d*)', match[3])
+                    assert attempt, ('Missing TCP attempt information', line)
+                    tcp_selected.append(line)
+                else:
+                    assert match[3] == 'target selected', ('UDP selection is not connection success', line)
+                    udp_selected.append(line)
+            assert len(tcp_selected) == 10, ('One selection per business TCP connection', selected)
+            assert len(udp_selected) == int(udp and not chain), ('One selection per UDP route', selected)
         assert not socks.errors and (not http or not http.errors), (socks.errors, http.errors if http else [])
         if udp and not chain and not failure:
             assert any(r[0] == "udp" for r in socks.requests), socks.requests
