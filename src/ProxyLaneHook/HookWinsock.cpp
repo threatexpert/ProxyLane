@@ -1614,51 +1614,12 @@ MyDetourProc(has_Return, int, WSAAPI, WSASendTo, (
 
 int WSAAPI CHookWinsock::inhook_sendto(SOCKET s, const char* buf, int len, int flags, const struct sockaddr* to, int tolen)
 {
-	_SockAddr blockedIPv6Destination;
-	if (m_psi.bBlockIPv6 &&
-		IsBlockedIPv6Destination(s, to, tolen, &blockedIPv6Destination))
-	{
-		LogBlockedIPv6(s, blockedIPv6Destination);
-		WSASetLastError(WSAEAFNOSUPPORT);
+	WSABUF buffer = { len >= 0 ? static_cast<ULONG>(len) : 0, const_cast<char*>(buf) };
+	UdpSendTarget target;
+	if (!PrepareUdpSend(s, to, tolen, &buffer, 1, target, len >= 0))
 		return SOCKET_ERROR;
-	}
-	if (m_psi.bBlockUDP &&
-		!IsUdpLoopbackDestination(s, to, tolen))
-	{
-		LogBlockedUDP(s, to, tolen);
-		WSASetLastError(WSAEACCES);
-		return SOCKET_ERROR;
-	}
-	if (m_psi.bDisableMDNS && IsMdnsDestination(to, tolen))
-	{
-		WSASetLastError(WSAEHOSTUNREACH);
-		return SOCKET_ERROR;
-	}
-	if (!m_psi.bHookUDP && !IsDohDnsRequest(to, tolen))
-	{
-		return CallTrampoline(sendto)(s, buf, len, flags, to, tolen);
-	}
-	if (len < 0)
-		return CallTrampoline(sendto)(s, buf, len, flags, to, tolen);
-
-	WSABUF bufs;
-
-	bufs.buf = (char FAR *)buf;
-	bufs.len = len;
-
-	DWORD dwNumberOfBytesSent = 0;
-	int nRetVal = inhook_WSASendTo(s, &bufs, 1, &dwNumberOfBytesSent, flags, to, tolen, NULL, NULL);
-
-	if (nRetVal == 0)
-	{
-		return (int)dwNumberOfBytesSent;
-	}
-	else
-	{
-		//SOCKET_ERROR
-		return nRetVal;
-	}
-
+	// Preserve sendto's own flags, errors and byte-count return convention.
+	return CallTrampoline(sendto)(s, buf, len, flags, target.destination, target.length);
 }
 
 int WSAAPI CHookWinsock::inhook_WSASendTo(
@@ -1673,91 +1634,90 @@ int WSAAPI CHookWinsock::inhook_WSASendTo(
 	LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
 	)
 {
+	UdpSendTarget target;
+	if (!PrepareUdpSend(s, lpTo, iToLen, lpBuffers, dwBufferCount, target))
+		return SOCKET_ERROR;
+	// Buffers and completion state remain owned by Winsock.
+	return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount,
+		lpNumberOfBytesSent, dwFlags, target.destination, target.length,
+		lpOverlapped, lpCompletionRoutine);
+}
+
+BOOL CHookWinsock::PrepareUdpSend(SOCKET s, const SOCKADDR* destination, int length,
+	LPWSABUF buffers, DWORD count, UdpSendTarget& target, BOOL validPayloadLength)
+{
+	target.destination = destination;
+	target.length = length;
 	_SockAddr blockedIPv6Destination;
 	if (m_psi.bBlockIPv6 &&
-		IsBlockedIPv6Destination(s, lpTo, iToLen, &blockedIPv6Destination))
+		IsBlockedIPv6Destination(s, destination, length, &blockedIPv6Destination))
 	{
 		LogBlockedIPv6(s, blockedIPv6Destination);
 		WSASetLastError(WSAEAFNOSUPPORT);
-		return SOCKET_ERROR;
+		return FALSE;
 	}
-	if (m_psi.bBlockUDP &&
-		!IsUdpLoopbackDestination(s, lpTo, iToLen))
+	if (m_psi.bBlockUDP && !IsUdpLoopbackDestination(s, destination, length))
 	{
-		LogBlockedUDP(s, lpTo, iToLen);
+		LogBlockedUDP(s, destination, length);
 		WSASetLastError(WSAEACCES);
-		return SOCKET_ERROR;
+		return FALSE;
 	}
-	if (m_psi.bDisableMDNS && IsMdnsDestination(lpTo, iToLen))
+	if (m_psi.bDisableMDNS && IsMdnsDestination(destination, length))
 	{
 		WSASetLastError(WSAEHOSTUNREACH);
-		return SOCKET_ERROR;
+		return FALSE;
 	}
-	if (!m_psi.bHookUDP && !IsDohDnsRequest(lpTo, iToLen))
-	{
-		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped, lpCompletionRoutine);
-	}
+	if (!m_psi.bHookUDP && !IsDohDnsRequest(destination, length))
+		return TRUE;
+	// sendto's signed negative length must reach its original API unchanged,
+	// after the existing blocking-policy checks and before any route setup.
+	if (!validPayloadLength)
+		return TRUE;
 
-	_SockAddr addrname;
-	if (!lpTo)
+	if (!destination)
 	{
 		size_t connectedMaxPayload = 0;
-		if (m_HackedSocket.GetConnectedUDPMaxPayload(s,
-			&connectedMaxPayload) &&
-			!IsWSABufferPayloadAllowed(lpBuffers, dwBufferCount,
-				connectedMaxPayload))
+		if (m_HackedSocket.GetConnectedUDPMaxPayload(s, &connectedMaxPayload) &&
+			!IsWSABufferPayloadAllowed(buffers, count, connectedMaxPayload))
 		{
 			WSASetLastError(WSAEMSGSIZE);
-			return SOCKET_ERROR;
+			return FALSE;
 		}
 		if (connectedMaxPayload) NotifyQuicUdp();
-		// Buffers and completion state remain owned by Winsock.
-		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount,
-			lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped,
-			lpCompletionRoutine);
+		return TRUE;
 	}
-	if (!NormalizeSocketAddress(lpTo, iToLen, &addrname))
-		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount,
-			lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped,
-			lpCompletionRoutine);
-	if (!EnsureSocketBound(s, lpTo))
-		return SOCKET_ERROR;
+	if (!NormalizeSocketAddress(destination, length, &target.address))
+		return TRUE;
+	if (!EnsureSocketBound(s, destination))
+		return FALSE;
 
-	PRCClient prcc;
-
+	PRCClient client;
 	size_t maxPayload = UdpPayloadPolicy::MAX_IPV4_UDP_PAYLOAD;
-	HookDecision decision = HackSendTo(s, addrname, &prcc, &maxPayload);
+	HookDecision decision = HackSendTo(s, target.address, &client, &maxPayload);
 	if (decision == HOOK_FAILED)
 	{
 		if (WSAGetLastError() == 0)
 			WSASetLastError(WSAENETDOWN);
-		return SOCKET_ERROR;
+		return FALSE;
 	}
 	if (decision == HOOK_BYPASS)
-	{
-		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped, lpCompletionRoutine);
-	}
-	if (!IsWSABufferPayloadAllowed(lpBuffers, dwBufferCount, maxPayload))
+		return TRUE;
+	if (!IsWSABufferPayloadAllowed(buffers, count, maxPayload))
 	{
 		WSASetLastError(WSAEMSGSIZE);
-		return SOCKET_ERROR;
+		return FALSE;
 	}
 
-
-	// Only the destination is replaced. Application buffers and completion
-	// state remain owned by Winsock, so Overlapped/IOCP works naturally.
-	SOCKADDR_STORAGE redirectedStorage;
-	int redirectedLength = 0;
-	const SOCKADDR *redirected = MakeSocketAddress(lpTo, addrname,
-		&redirectedStorage, &redirectedLength);
-	if (!redirected)
+	// Keep both normalized and mapped address storage in the caller's frame
+	// until its original send API returns. Never point at a helper local.
+	target.destination = MakeSocketAddress(destination, target.address,
+		&target.storage, &target.length);
+	if (!target.destination)
 	{
 		WSASetLastError(WSAEAFNOSUPPORT);
-		return SOCKET_ERROR;
+		return FALSE;
 	}
-	return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount,
-		lpNumberOfBytesSent, dwFlags, redirected, redirectedLength,
-		lpOverlapped, lpCompletionRoutine);
+	return TRUE;
 }
 
 HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname,

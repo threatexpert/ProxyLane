@@ -59,6 +59,9 @@ class CGlobalProxy;
 
 class CAsyncSocketExLayer;
 
+// GetHostent is inline below and must bypass our DNS hook as well.
+hostent* WSAAPI Bypass_gethostbyname(const char* name);
+
 class CHookWinsock
 {
 
@@ -215,7 +218,7 @@ class CHookWinsock
 
 		hostent *GetHostent(DWORD nIP)
 		{
-			hostent *p = gethostbyname("127.0.0.1");
+			hostent *p = Bypass_gethostbyname("127.0.0.1");
 			//????
 			if (p)
 			{
@@ -827,13 +830,21 @@ private:
     }
     BOOL IsDohDnsRequest(const SOCKADDR* destination, int length);
 	BOOL IsUdpLoopbackDestination(SOCKET socketHandle, const SOCKADDR* destination, int length);
+	struct UdpSendTarget {
+		_SockAddr address;
+		SOCKADDR_STORAGE storage;
+		const SOCKADDR* destination;
+		int length;
+	};
+	BOOL PrepareUdpSend(SOCKET socketHandle, const SOCKADDR* destination, int length,
+		LPWSABUF buffers, DWORD count, UdpSendTarget& target,
+		BOOL validPayloadLength = TRUE);
 	CUdpBlockLogLimiter m_udpBlockLogLimiter;
 
 };
 
 // Stable bypass entry points; callers must not cache Detours trampoline addresses.
 int WSAAPI Bypass_connect(SOCKET s, const sockaddr* name, int length);
-hostent* WSAAPI Bypass_gethostbyname(const char* name);
 HANDLE WSAAPI Bypass_WSAAsyncGetHostByName(HWND window, unsigned int message,
 	const char* name, char* buffer, int length);
 int WSAAPI Bypass_sendto(SOCKET s, const char* buffer, int length, int flags,
