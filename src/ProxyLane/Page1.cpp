@@ -137,6 +137,7 @@ void CPage1::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_RADIO_DNSLOCAL, m_btnDNSLocal);
 	DDX_Control(pDX, IDC_RADIO_DNSREMOTE, m_btnDNSRemote);
     DDX_Control(pDX, IDC_RADIO_DNSDOH, m_btnDNSDoh);
+    DDX_Control(pDX, IDC_STATIC_DOH_URL, m_btnDohPreset);
     DDX_Control(pDX, IDC_EDIT_DOH_URL, m_editDohUrl);
     DDX_Control(pDX, IDC_EDIT_DOH_BOOTSTRAP, m_editDohBootstrap);
 	DDX_Control(pDX, IDC_CHECK_REDIRECT_PRIVATE_DNS, m_btnRedirectPrivateDNS);
@@ -206,6 +207,7 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_BN_CLICKED(IDC_RADIO_DNSLOCAL, &CPage1::OnDnsSettingsChanged)
 	ON_BN_CLICKED(IDC_RADIO_DNSREMOTE, &CPage1::OnDnsSettingsChanged)
     ON_BN_CLICKED(IDC_RADIO_DNSDOH, &CPage1::OnDnsSettingsChanged)
+    ON_BN_CLICKED(IDC_STATIC_DOH_URL, &CPage1::OnDohPreset)
     ON_EN_CHANGE(IDC_EDIT_DOH_URL, &CPage1::OnProfileFieldChanged)
     ON_EN_CHANGE(IDC_EDIT_DOH_BOOTSTRAP, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_CHECK_REDIRECT_PRIVATE_DNS, &CPage1::OnDnsSettingsChanged)
@@ -228,6 +230,12 @@ END_MESSAGE_MAP()
 BOOL CPage1::OnInitDialog()
 {
 	CModernDialog::OnInitDialog();
+
+    m_btnDohPreset.SetVisualStyle(CModernButton::STYLE_GHOST);
+    m_btnDohPreset.SetBackdropColor(RGB(255, 255, 255));
+    m_editDohUrl.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)L"https://dns.google/dns-query");
+    m_editDohBootstrap.SendMessage(EM_SETCUEBANNER, TRUE,
+        (LPARAM)(LPCWSTR)Localization::Get(L"page1.doh_bootstrap"));
 
  m_btnAdvanced.Create(L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, CRect(), this, 0x2402);
  m_btnAdvanced.SetFont(&m_uiFont);
@@ -693,30 +701,18 @@ void CPage1::LayoutSettingsPage()
                 innerW - redirectW - S(12), fieldH);
         }
         const bool doh = m_btnDNSDoh.GetCheck() == BST_CHECKED;
-        for (UINT id : {IDC_STATIC_DOH_URL, IDC_EDIT_DOH_URL, IDC_STATIC_DOH_BOOTSTRAP, IDC_EDIT_DOH_BOOTSTRAP})
+        for (UINT id : {IDC_STATIC_DOH_URL, IDC_EDIT_DOH_URL, IDC_EDIT_DOH_BOOTSTRAP})
             GetDlgItem(id)->ShowWindow(m_activeTab == 0 && doh ? SW_SHOW : SW_HIDE);
         GetDlgItem(IDC_CHECK_REDIRECT_PRIVATE_DNS)->ShowWindow(m_activeTab == 0 && !doh ? SW_SHOW : SW_HIDE);
         GetDlgItem(IDC_EDIT_REDIRECT_DNS)->ShowWindow(m_activeTab == 0 && !doh ? SW_SHOW : SW_HIDE);
         if (doh) {
-            const int columnW = (innerW - gapX) / 2;
-            int labelsH = labelH;
-            for (UINT id : {IDC_STATIC_DOH_URL, IDC_STATIC_DOH_BOOTSTRAP}) {
-                CWnd* label = GetDlgItem(id);
-                CString text; label->GetWindowText(text);
-                CClientDC dc(label);
-                CFont* font = label->GetFont();
-                CFont* oldFont = font ? dc.SelectObject(font) : NULL;
-                CRect bounds(0, 0, max(1, columnW), 0);
-                dc.DrawText(text, bounds, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
-                if (oldFont) dc.SelectObject(oldFont);
-                labelsH = max(labelsH, bounds.Height());
-            }
-            place(IDC_STATIC_DOH_URL, innerX, row, columnW, labelsH);
-            place(IDC_STATIC_DOH_BOOTSTRAP, innerX + columnW + gapX, row, columnW, labelsH);
-            row += labelsH + S(3);
-            place(IDC_EDIT_DOH_URL, innerX, row, columnW, fieldH);
-            place(IDC_EDIT_DOH_BOOTSTRAP, innerX + columnW + gapX, row, columnW, fieldH);
-            row += fieldH;
+            const int labelW = textWidth(IDC_STATIC_DOH_URL) + S(16);
+            const int fieldsX = innerX + labelW;
+            const int fieldsW = max(0, innerW - labelW - gapX);
+            const int urlW = fieldsW / 2;
+            place(IDC_STATIC_DOH_URL, innerX, row, labelW - S(4), fieldH);
+            place(IDC_EDIT_DOH_URL, fieldsX, row, urlW, fieldH);
+            place(IDC_EDIT_DOH_BOOTSTRAP, fieldsX + urlW + gapX, row, fieldsW - urlW, fieldH);
         }
         const int height = m_activeTab == 0 ? row + max(fieldH, checkH) + S(16) - top
             : max(S(220), client.Height() - margin - top);
@@ -1296,6 +1292,34 @@ void CPage1::UpdateTransportEnable()
 	}
 	UpdateProfileTag();
 	if (previousHint != hint) LayoutSettingsPage();
+}
+
+void CPage1::OnDohPreset()
+{
+    // Presets only fill the existing fields; saving and applying remain explicit.
+    static const struct { LPCWSTR labelKey; LPCWSTR url; LPCWSTR ips; } presets[] = {
+        { L"page1.doh_preset_google", L"https://dns.google/dns-query", L"8.8.8.8, 8.8.4.4" },
+        { L"page1.doh_preset_cloudflare", L"https://cloudflare-dns.com/dns-query", L"1.1.1.1, 1.0.0.1" },
+        { L"page1.doh_preset_quad9", L"https://dns.quad9.net/dns-query", L"9.9.9.9, 149.112.112.112" },
+        { L"page1.doh_preset_ali", L"https://dns.alidns.com/dns-query", L"223.5.5.5, 223.6.6.6" }
+    };
+    CModernPopupMenu menu;
+    if (!menu.CreatePopupMenu()) return;
+    for (UINT i = 0; i < _countof(presets); ++i)
+        menu.AppendMenu(MF_STRING, i + 1, Localization::Get(presets[i].labelKey));
+    CRect anchor;
+    m_btnDohPreset.GetWindowRect(&anchor);
+    const UINT selected = menu.TrackPopupMenu(TPM_RETURNCMD | TPM_LEFTALIGN | TPM_RIGHTBUTTON,
+        anchor.left, anchor.bottom, this);
+    if (!selected || selected > _countof(presets)) return;
+
+    // Avoid handling a partial URL/IP pair through the EN_CHANGE callbacks.
+    const BOOL wasLoading = m_loadingProfile;
+    m_loadingProfile = TRUE;
+    m_editDohUrl.SetWindowText(presets[selected - 1].url);
+    m_editDohBootstrap.SetWindowText(presets[selected - 1].ips);
+    m_loadingProfile = wasLoading;
+    OnProfileFieldChanged();
 }
 
 void CPage1::OnDnsSettingsChanged()
@@ -2530,7 +2554,7 @@ void CPage1::ShowTab(int nTab)
 		IDC_CHECK_HOOKTCP, IDC_CHECK_HOOK_UDP, IDC_CHECK_HOOKCHILDPROCESS, IDC_CHECK_BLOCKUDP,
 		IDC_CHECK_BLOCK_IPV6,
 		IDC_RADIO_DNSLOCAL, IDC_RADIO_DNSREMOTE, IDC_RADIO_DNSDOH, IDC_STATIC_GROUP_OTHER, IDC_STATIC_DNS_LABEL,
-        IDC_STATIC_DOH_URL, IDC_EDIT_DOH_URL, IDC_STATIC_DOH_BOOTSTRAP, IDC_EDIT_DOH_BOOTSTRAP,
+        IDC_STATIC_DOH_URL, IDC_EDIT_DOH_URL, IDC_EDIT_DOH_BOOTSTRAP,
 		IDC_CHECK_REDIRECT_PRIVATE_DNS, IDC_EDIT_REDIRECT_DNS };
 	static const int idsChild[] = {
 		IDC_EDIT_CHILDFILTER, IDC_RADIO_CHILDFILTER_EXCLUDE, IDC_RADIO_CHILDFILTER_INCLUDE,

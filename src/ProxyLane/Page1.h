@@ -228,6 +228,7 @@ public:
 	CToggleButton m_btnDNSLocal;
 	CToggleButton m_btnDNSRemote;
     CToggleButton m_btnDNSDoh;
+    CModernButton m_btnDohPreset;
     CSoftEdit m_editDohUrl, m_editDohBootstrap;
     BOOL ApplyDohSettings(ProxyInfo& proxy);
 	CToggleButton m_btnRedirectPrivateDNS;
@@ -247,6 +248,7 @@ public:
 	afx_msg void OnProfileFieldChanged();
     afx_msg void OnProtocolChanged();
 	afx_msg void OnDnsSettingsChanged();
+    afx_msg void OnDohPreset();
 	afx_msg void OnCbnEditchangeComboCfgs();
 	afx_msg void OnCfgoptLoad();
 	afx_msg void OnCfgoptSave();
