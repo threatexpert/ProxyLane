@@ -73,6 +73,31 @@ void TestProgressPresentation() {
     links[1]=true;cards=Project(raw,negotiated,links,900);
     Check(cards[1].connectedOnly&&cards[1].stage==PTS_WAITING&&cards[2].stage==PTS_FAILED,
         "HTTP link failure leaves unconfirmed source neutral and destination red");
+    // A real preceding hop has OPENING history: transferring its connection
+    // time must not restart a terminal HTTP card projected as neutral.
+    raw.assign(2,ProxyTestHopProgress());negotiated={true,false};links={false,false};
+    raw[0].Apply(PTS_CONNECTING,100);raw[0].Apply(PTS_AUTH,120);
+    raw[0].Apply(PTS_OPENING,150);raw[0].Apply(PTS_PASSED,200);
+    cards=Project(raw,negotiated,links,200);
+    Check(cards[1].stage==PTS_CONNECTING&&cards[1].elapsed==50,
+        "completed inbound connection still reveals an untouched waiting destination");
+    raw[1].Apply(PTS_CONNECTING,200);raw[1].Apply(PTS_OPENING,230);
+    const auto pending=raw;
+    cards=Project(raw,negotiated,links,300);
+    Check(cards[1].stage==PTS_AUTH&&cards[1].elapsed==80,
+        "second HTTP node remains active while awaiting CONNECT response");
+    for(int terminal : {PTS_FAILED,PTS_TIMED_OUT,PTS_CANCELLED}) {
+        raw=pending;raw[1].Apply(terminal,400);links[1]=terminal!=PTS_CANCELLED;
+        cards=Project(raw,negotiated,links,500);
+        const auto later=Project(raw,negotiated,links,1500);
+        Check(cards[0].stage==PTS_PASSED&&cards[1].connectedOnly&&cards[1].stage==PTS_WAITING&&
+            later[1].stage==cards[1].stage&&cards[1].elapsed==80&&later[1].elapsed==cards[1].elapsed,
+            "second HTTP node never resumes spinning after failure, timeout or cancellation");
+    }
+    links[1]=false;raw=pending;raw[1].Apply(PTS_FAILED,400);
+    cards=Project(raw,negotiated,links,500);
+    Check(cards[1].stage==PTS_FAILED&&cards[1].lastStage==PTS_AUTH&&cards[1].elapsed==250,
+        "second HTTP node authentication rejection remains failed after inbound timing transfer");
 }
 }
 void TestChainRouteView() {

@@ -47,7 +47,9 @@ inline std::vector<Card> Project(const std::vector<ProxyTestHopProgress>& raw,
             destination.stage = p.stage == PTS_OPENING ? PTS_CONNECTING : p.stage;
             destination.lastStage = PTS_CONNECTING; destination.linkSource = (int)i;
             destination.errorSource = Failed(p.stage) ? (int)i : -1;
-        } else if (destination.stage == PTS_WAITING) destination.stage = PTS_CONNECTING;
+        // Only an untouched transport hop is still connecting. A terminal HTTP
+        // hop can also be projected as WAITING (connected, not confirmed).
+        } else if (raw[i + 1].stage == PTS_WAITING) destination.stage = PTS_CONNECTING;
     }
     return cards;
 }
