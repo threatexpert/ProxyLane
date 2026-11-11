@@ -219,6 +219,7 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_BN_CLICKED(IDC_RADIO_TAB_CHILD, &CPage1::OnBnClickedTabChild)
 	ON_BN_CLICKED(IDC_RADIO_TAB_TARGET, &CPage1::OnBnClickedTabTarget)
 	ON_MESSAGE(WM_RECENT_APPLICATIONS_CHANGED, &CPage1::OnRecentApplicationsChanged)
+	ON_MESSAGE(ProxyTestCompletedMessage, &CPage1::OnProxyTestCompleted)
 	ON_WM_TIMER()
 END_MESSAGE_MAP()
 
@@ -1691,6 +1692,9 @@ CString CPage1::QuicUdpWarning()
 
 void CPage1::OnDestroy()
 {
+	++m_testGeneration;
+	m_testCompletionPending = false;
+	if (m_pProxyTester) { m_pProxyTester->Release(); m_pProxyTester = NULL; }
 	CModernDialog::OnDestroy();
 
 	// TODO: 在此处添加消息处理程序代码
@@ -1712,6 +1716,9 @@ CString CPage1::GetProxyTestStatus(CStatusLabel::Tone& tone) const
 
 void CPage1::OnBnClickedTestproxy()
 {
+	++m_testGeneration; // Cancel/retry invalidates completion messages already queued.
+	m_testCompletionPending = false;
+	m_testCompletionDetail.Empty();
 	// TODO: 在此添加控件通知处理程序代码
 	if (m_pTestProxy == NULL)
 	{
@@ -1823,6 +1830,9 @@ void CPage1::OnBnClickedTestproxy()
 BOOL CPage1::StartProxyTestPhase(const PRCClient& client, int phase,
 	LPCTSTR statusKey)
 {
+	++m_testGeneration;
+	m_testCompletionPending = false;
+	m_testCompletionDetail.Empty();
     m_singleTestStage = PTS_WAITING;
 	if (!m_pTestProxy || m_pProxyTester)
 	{
@@ -1987,6 +1997,51 @@ INT_PTR CPage1::ShowProxyTestResult(const CString& error, LPCTSTR actionKey)
 }
 
 void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM wParam, LPARAM lParam)
+{
+	if (pTester != m_pProxyTester || m_testCompletionPending || !GetSafeHwnd()) return;
+	if (HIWORD(nErrorCode) != LAYERCALLBACK_LAYERSPECIFIC)
+	{
+		HandleProxyTesterCallback(pTester, nErrorCode, wParam, lParam);
+		return;
+	}
+	m_testCompletionCode = nErrorCode;
+	m_testCompletionParam = wParam;
+	m_testCompletionDetail.Empty();
+	const int code = LOWORD(nErrorCode);
+	// These callback strings belong to the transport; retain them before returning.
+	if (lParam && ((m_proxyTestPhase == PROXY_TEST_TCP && m_testProxyInfo.dohEnabled && code) ||
+		code == PROXYERROR_SSH_HOSTKEY_UNKNOWN || code == PROXYERROR_SSH_HOSTKEY_CHANGED))
+		m_testCompletionDetail = reinterpret_cast<LPCSTR>(lParam);
+	m_testCompletionPending = true;
+	pTester->Stop();
+	if (!PostMessage(ProxyTestCompletedMessage, m_testGeneration))
+	{
+		// Fail closed without a modal loop or timer polling if posting fails.
+		m_testCompletionPending = false;
+		m_pProxyTester = NULL;
+		pTester->Release();
+		m_bIsTesting = FALSE;
+		m_proxyTestPhase = PROXY_TEST_NONE;
+		m_chainProgressRunning = false; KillTimer(0x312);
+		m_chainConclusion = Localization::Get(L"test.start_failed");
+		UpdateChainProgress();
+		m_staticTestProxy.SetStatus(m_chainConclusion, CStatusLabel::TONE_DANGER);
+		m_btnTest.SetWindowText(Localization::Get(L"action.test_current"));
+		UpdateChainButtons();
+	}
+}
+
+LRESULT CPage1::OnProxyTestCompleted(WPARAM generation, LPARAM)
+{
+	if (generation != m_testGeneration || !m_testCompletionPending || !m_pProxyTester) return 0;
+	m_testCompletionPending = false;
+	const CStringA detail = m_testCompletionDetail;
+	HandleProxyTesterCallback(m_pProxyTester, m_testCompletionCode, m_testCompletionParam,
+		detail.IsEmpty() ? 0 : reinterpret_cast<LPARAM>((LPCSTR)detail));
+	return 0;
+}
+
+void CPage1::HandleProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM wParam, LPARAM lParam)
 {
 	ATLASSERT(pTester == m_pProxyTester);
 

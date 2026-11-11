@@ -118,6 +118,16 @@ private:
 
 	IGlobalProxy* m_pTestProxy;
 	IProxyTester* m_pProxyTester;
+	// Same deferred completion pattern as the node editor: never enter a
+	// modal result loop while a transport callback still owns the stack.
+	enum { ProxyTestCompletedMessage = WM_APP + 51 };
+	UINT_PTR m_testGeneration = 0;
+	bool m_testCompletionPending = false;
+	int m_testCompletionCode = 0;
+	WPARAM m_testCompletionParam = 0;
+	CStringA m_testCompletionDetail;
+	afx_msg LRESULT OnProxyTestCompleted(WPARAM generation, LPARAM);
+	void HandleProxyTesterCallback(IProxyTester*, int, WPARAM, LPARAM);
 	BOOL m_bIsTesting;
 	int m_proxyTestPhase;
 	int m_testIpv6Result;

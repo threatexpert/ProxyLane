@@ -19,7 +19,32 @@ struct Queries {
     std::map<std::string, std::weak_ptr<CDohQuery>> active;
     std::unique_ptr<CDohCache> cache;
 };
-thread_local Queries queries;
+// Like the SSH pool, keep this state in dynamic TLS. Compiler-generated TLS
+// constructors run while the injected DLL loads and are unsafe on Windows XP.
+volatile LONG queriesSlotState = 0;
+DWORD queriesSlot = TLS_OUT_OF_INDEXES;
+DWORD QueriesSlot() {
+    if (InterlockedCompareExchange(&queriesSlotState, 1, 0) == 0) {
+        queriesSlot = TlsAlloc(); InterlockedExchange(&queriesSlotState, 2);
+    } else while (InterlockedCompareExchange(&queriesSlotState, 2, 2) != 2) Sleep(0);
+    return queriesSlot;
+}
+Queries* ExistingQueries() {
+    if (InterlockedCompareExchange(&queriesSlotState, 2, 2) != 2 || queriesSlot == TLS_OUT_OF_INDEXES)
+        return NULL;
+    return static_cast<Queries*>(TlsGetValue(queriesSlot));
+}
+Queries& CurrentQueries() {
+    const DWORD slot = QueriesSlot();
+    if (slot == TLS_OUT_OF_INDEXES) throw std::bad_alloc();
+    Queries* result = ExistingQueries();
+    if (!result) {
+        std::unique_ptr<Queries> created(new Queries);
+        if (!TlsSetValue(slot, created.get())) throw std::bad_alloc();
+        result = created.release();
+    }
+    return *result;
+}
 void KeyPart(std::string& key, const char* part) {
     size_t n = strlen(part); key += std::to_string(n); key += ':'; key.append(part, n);
 }
@@ -68,7 +93,14 @@ void LogDohResult(DWORD pid, const CStringA& name, const CStringA& type,
 }
 CDohQuery::CDohQuery() : m_wakeup(std::make_shared<CDohWakeup>(GetHwnd())) {}
 CDohQuery::~CDohQuery() { m_wakeup->Cancel(); KillTimer(1); ResetTransport(); }
-void CDohQuery::ClearCache() { queries.cache.reset(); queries.active.clear(); }
+void CDohQuery::ClearCache() {
+    // Both callers are owner-thread shutdown paths, before WSACleanup. Do not
+    // allocate state in processes/threads that never used DoH.
+    Queries* queries = ExistingQueries();
+    if (!queries) return;
+    queries->cache.reset(); queries->active.clear();
+    if (TlsSetValue(queriesSlot, NULL)) delete queries;
+}
 void CDohQuery::RemoveAllLayers() { CAsyncSocketEx::RemoveAllLayers(); m_layers.Free(); }
 void CDohQuery::ResetTransport() {
     Close();
@@ -124,6 +156,7 @@ std::shared_ptr<CDohQuery> CDohQuery::Start(const PRCClient& client, const Proxy
         KeyPart(key, std::to_string(hop.reserved).c_str()); KeyPart(key, hop.strTransportPsk.szbuf);
         KeyPart(key, std::to_string(hop.sshAuth).c_str()); KeyPart(key, hop.strSshKeyFile.szbuf); KeyPart(key, hop.strSshKeyDigest.szbuf);
     }
+    Queries& queries = CurrentQueries();
     const DWORD now = GetTickCount();
     const auto* cached = !test && queries.cache ? queries.cache->Find(key) : NULL;
     if (cached) {
@@ -198,9 +231,12 @@ void CDohQuery::Fail(const char* text) {
         m_retry = false; m_error = "Cannot dispatch DoH retry";
     }
     if (m_test && !m_connected && m_failedHop < 0) m_failedHop = m_layers.StalledHop();
-    m_done = true; KillTimer(1); queries.active.erase(m_key); NotifyWaiters();
+    m_done = true; KillTimer(1);
+    if (Queries* queries = ExistingQueries()) queries->active.erase(m_key);
+    NotifyWaiters();
 }
 void CDohQuery::Complete() {
+    Queries& queries = CurrentQueries();
     m_error.Empty(); m_done = true; KillTimer(1); queries.active.erase(m_key);
     m_answerStored = GetTickCount();
     // This is the effective cache lifetime after Rust's DNS/HTTP limits and

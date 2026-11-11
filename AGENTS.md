@@ -1,5 +1,13 @@
 # 项目实现约束
 
+## 注入 DLL 的 Windows XP 兼容约束
+
+- `ProxyLaneHook32.dll` 需要在 Windows XP 上通过 `LoadLibrary` 动态加载到目标进程。注入 DLL 及其链接对象、静态库不得引入编译器静态 TLS，包括 `thread_local`、`__declspec(thread)`，以及依赖这些机制的隐式初始化。保持现有 `/Zc:threadSafeInit-` 构建约束。
+- 每线程状态沿用项目现有的 `TlsAlloc`、`TlsGetValue`、`TlsSetValue` 按需初始化方式；处理分配失败，并在所属线程的既有关闭路径释放对象。不得为此在 DLL 加载/卸载回调中执行窗口、网络或复杂对象的创建和销毁。
+- 此约束针对可注入的 Hook DLL，不扩展为对独立宿主、可选 64 位模块或所有 TLS API 的禁用；修复兼容性问题无需更换现有注入和 Hook 架构。
+- 发布前运行 `python tests/HookStaticTlsTests.py`，检查最终 Hook DLL 的 PE TLS 目录，防止链接依赖重新引入静态 TLS。主程序启动、静态导入 DLL 或新版 Windows 上注入成功，都不能代替 XP 动态加载兼容验证；尚未在 XP 实测时须明确说明。
+- 回归背景：1.3.10 的 DoH 查询状态曾使用 `thread_local Queries queries`，导致 XP 注入时在 `__dyn_tls_init` / `DohResolver.cpp` 初始化阶段崩溃，即使没有启用 DoH 也会触发。微软限制说明：https://learn.microsoft.com/en-us/windows/win32/dlls/dynamic-link-library-data
+
 ## UDP 来源地址恢复：不采用
 
 决定：UDP 回包来源地址恢复技术当前不认为可靠和稳定，本工程不采用。此约束适用于后续维护和新增功能。
