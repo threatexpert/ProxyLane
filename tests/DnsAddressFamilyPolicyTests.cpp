@@ -6,7 +6,7 @@ int main()
 {
 	using namespace DnsAddressFamilyPolicy;
 
-	assert(Decide(AF_UNSPEC, false) == KEEP_REQUESTED_FAMILY);
+	assert(Decide(AF_UNSPEC, false) == FORCE_IPV4);
 	assert(Decide(AF_INET, false) == KEEP_REQUESTED_FAMILY);
 	assert(Decide(AF_INET6, false) == KEEP_REQUESTED_FAMILY);
 

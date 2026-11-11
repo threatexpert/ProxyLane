@@ -20,3 +20,8 @@ struct ApplicationCatalogLoad
 // UI-thread only. The caller must Release the returned reference.
 ApplicationCatalogLoad* AcquireApplicationCatalog(BOOL forceRefresh);
 void RememberApplicationCatalog(ApplicationCatalogLoad* load);
+
+// Last successful snapshot, possibly older than the in-flight refresh.
+ApplicationCatalogLoad* AcquireReadyApplicationCatalog();
+void PreloadApplicationCatalog();
+#define WM_PRELOAD_APPLICATIONS (WM_APP + 312)

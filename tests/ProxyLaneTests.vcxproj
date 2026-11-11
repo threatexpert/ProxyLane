@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32"><Configuration>Debug</Configuration><Platform>Win32</Platform></ProjectConfiguration>
@@ -38,10 +38,22 @@
   <ItemGroup>
     <ClCompile Include="ProxyLaneTestsMain.cpp" />
     <ClCompile Include="ProcessArchitectureTests.cpp" />
+    <ClCompile Include="DohWakeupTests.cpp" />
+    <ClCompile Include="DirectIpv6RouteTests.cpp" />
+    <ClCompile Include="MonitorLogFormatTests.cpp" />
+    <ClCompile Include="ProfileShareCodecTests.cpp"><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions></ClCompile>
+    <ClCompile Include="UpdateReleaseTests.cpp" />
     <ClCompile Include="DetourHooksTests.cpp" />
     <ClCompile Include="..\src\ProxyLaneHook\DetourHooks.cpp" />
     <ClCompile Include="TrafficStatisticsTests.cpp" />
+    <ClCompile Include="SshSessionLifetimeTests.cpp" />
     <ClCompile Include="ProcessActionsTests.cpp" />
+    <ClCompile Include="AsyncSnapshotTests.cpp" />
+    <ClCompile Include="ProcessRegistryTests.cpp" />
+    <ClCompile Include="BrowserLaunchWatchTests.cpp" />
+    <ClCompile Include="UdpBlockLogLimiterTests.cpp" />
+    <ClCompile Include="UdpBlockLogProbe.cpp" />
+    <ClCompile Include="ExitProcessCleanupTests.cpp" />
     <ClCompile Include="ScopedProcessSuspensionTests.cpp" />
     <ClCompile Include="AppContainerPipeAccessTests.cpp"><PreprocessorDefinitions>main=AppContainerPipeAccessTestsMain;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
     <ClCompile Include="..\src\ProxyLaneHook\AppContainerPipeAccess.cpp"><PreprocessorDefinitions>PROXYLANE_PIPE_ACCESS_STANDALONE;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>

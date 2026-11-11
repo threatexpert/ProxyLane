@@ -28,10 +28,10 @@ public:
 	{
 		m_traffic.GetTotals(upload, download);
 	}
-	void RecordTraffic(ProxyInfo& proxy, bool download, int bytes)
+	void RecordTraffic(bool download, int bytes)
 	{
-		if (proxy.GetProxyType() != PROXYTYPE_NOPROXY)
-			m_traffic.RecordTransfer(download, bytes);
+		// Count all successfully forwarded traffic, including direct routes.
+		m_traffic.RecordTransfer(download, bytes);
 	}
 	//
 	BOOL CreatePRC();
@@ -112,11 +112,11 @@ private:
 	CProxyDataHandle *m_pProxyDataHandle;
 
 	CTSList<PRCClient> m_RegisteredClient;
-	std::map<DWORD, HookProcessIdentityInfo> m_ProcessIdentities;
+	IProxyProcessRegistry* m_processRegistry; // Borrowed for the GUI/module lifetime.
 	std::map<DWORD, ULONGLONG> m_ReleasedChildren;
 	std::map<DWORD, SuspendedChildObservation> m_SuspendedChildObservations;
 	std::map<DWORD, ULONGLONG> m_ProcessedSuspendedChildren;
-	CRITICAL_SECTION m_ProcessIdentityLock;
+	CRITICAL_SECTION m_ReleasedChildrenLock;
 
 public:
 

@@ -119,6 +119,7 @@ Version history
 
 #include "stdafx.h"
 #include "..\Socks5UdpCodec.h"
+#include "..\PlatformSupport.h"
 #include "types.h"
 #include "AsyncProxySocketLayer.h"
 #include "AsyncSecureSocketLayer.h"
@@ -408,6 +409,7 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 					 (m_nProxyOpID == PROXYOP_BIND  && m_nProxyOpState == 2) )
 				{
 					int nOpIDEvent = m_nProxyOpID == PROXYOP_CONNECT ? FD_CONNECT : FD_ACCEPT;
+					ReportTestProgress(PTS_PASSED);
 					ClearBuffer();
 					Reset();
 					TriggerEvent(nOpIDEvent, 0, TRUE);
@@ -520,6 +522,7 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 						return;
 					}
 
+					ReportTestProgress(PTS_AUTH);
 					// Send authentication
 					//
 					// RFC 1929 - Username/Password Authentication for SOCKS V5
@@ -636,6 +639,7 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 					}
 				}
 				m_nProxyOpState = 3;
+				ReportTestProgress(PTS_OPENING);
 				ClearBuffer();
 			}
 		}
@@ -733,6 +737,7 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 					 (m_nProxyOpID == PROXYOP_BIND  && m_nProxyOpState == 4) )
 				{
 					int nOpIDEvent = m_nProxyOpID == PROXYOP_CONNECT ? FD_CONNECT : FD_ACCEPT;
+					ReportTestProgress(PTS_PASSED);
 					Reset();
 					ClearBuffer();
 					TriggerEvent(nOpIDEvent, 0, TRUE);
@@ -902,6 +907,7 @@ void CAsyncProxySocketLayer::OnReceive(int nErrorCode)
 		}
 
 		TRACE("%hs\n", CStringA(m_pStrBuffer, m_iStrBuffSize).TrimRight("\r\n"));
+		ReportTestProgress(PTS_PASSED);
 		const int surplusLength = m_iStrBuffSize - iHeaderEnd;
 		if (surplusLength > 0)
 		{
@@ -1064,6 +1070,7 @@ void CAsyncProxySocketLayer::OnConnect(int nErrorCode)
 		if (m_nProxyOpState)
 			return; // Somehow OnConnect has been called more than once
 
+		ReportTestProgress(m_ProxyData.nProxyType == PROXYTYPE_SOCKS5 ? PTS_NEGOTIATING : PTS_OPENING);
 		ASSERT( m_ProxyData.nProxyType != PROXYTYPE_NOPROXY );
 		ClearBuffer();
 
@@ -1471,6 +1478,11 @@ BOOL CAsyncProxySocketLayer::GetPeerName(SOCKADDR* lpSockAddr, int* lpSockAddrLe
 
 BOOL CAsyncProxySocketLayer::SetSecureTransport(const CStringA& psk)
 {
+	if (!ProxySupportsOptionalModules())
+	{
+		WSASetLastError(WSAEOPNOTSUPP);
+		return FALSE;
+	}
 	if (psk.IsEmpty() || m_ProxyData.nProxyType != PROXYTYPE_SOCKS5)
 	{
 		WSASetLastError(WSAEINVAL);

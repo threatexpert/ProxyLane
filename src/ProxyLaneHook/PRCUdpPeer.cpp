@@ -430,47 +430,7 @@ void CPRCUdpPeer::OnSend(int nErrorCode)
 		return;
 	}
 
-	//当前套接字可写， 则将Partner的m_recvbuf中的有效数据转发出去
-	int nRetVal;
-	int validlen = m_pPartner->GetValidDataLen();
-	if(validlen > 0)
-	{
-		//将Partner的数据转发至本套接字
-		nRetVal = m_pPartner->TransferSend();
-		if(nRetVal < 0)
-		{
-			ClearBuffer();
-			m_pPartner->ClearBuffer();
-
-			return;
-		}else if(nRetVal < validlen)
-		{
-			ATLTRACE("CPRCUdpPeer.OnSend(), nRetVal < validlen\r\n");
-		}else
-		{
-			//数据全部转发出去了， 判断Partner那边的套接字的FD_READ状态，小于0为连接异常，0为正常但无数据可读，1为有数据可读
-			nRetVal = m_pPartner->TestSocketStatus(FD_READ);
-			if(nRetVal < 0)
-			{
-				ClearBuffer();
-				m_pPartner->ClearBuffer();
-
-			}else if(nRetVal > 0)
-			{
-				m_pPartner->TriggerEvent(FD_READ);
-				ATLTRACE("CPRCUdpPeer.OnSend(), m_pPartner->TriggerEvent(FD_READ)\r\n");
-			}else
-			{
-				ATLTRACE("CPRCUdpPeer.OnSend(), no data arrived\r\n");
-			}
-		}
-
-		ATLTRACE("CPRCUdpPeer.OnSend(). validlen = %d, nSent = %d\r\n", validlen, nRetVal);
-	}else
-	{
-
-	}
-
+	// All pending datagrams are owned by the task queues.
 }
 
 void CPRCUdpPeer::OnConnect(int nErrorCode)

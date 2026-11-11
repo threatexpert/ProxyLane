@@ -4,6 +4,7 @@
 
 namespace Localization
 {
+	CString SettingsPath();
 	BOOL Initialize();
 	CString Get(LPCTSTR key);
 	CString Format(LPCTSTR key, ...);

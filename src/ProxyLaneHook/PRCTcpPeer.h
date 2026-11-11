@@ -5,6 +5,7 @@
 #include "asynsocket\AsyncProxySocketLayer.h"
 #include "asynsocket\AsyncSecureSocketLayer.h"
 #include "ProxyModule.h"
+#include "ProxyChainLayers.h"
 #include "TimeoutMonitor.h"
 
 class CTcpProxyTask;
@@ -13,6 +14,7 @@ class CProxyDataHandle;
 class CPRCTcpPeer
 	: public CAsyncSocketEx
 {
+	friend class CMitmBridge;
 
 #define MAXTCPBUFSIZE 1024*4
 
@@ -21,7 +23,7 @@ public:
 	~CPRCTcpPeer(void);
 
 	BOOL ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
-	IProxyLog::ConnectionStage& stage);
+	IProxyLog::ConnectionStage& stage, const ProxyChain *lpChain = NULL);
 
 	void OnReceive(int nErrorCode);
 	void OnSend(int nErrorCode);
@@ -35,8 +37,9 @@ public:
 
 	int  TestSocketStatus(long lEvent);
 
-	BOOL AddProxyLayer(LPProxyInfo lpProxyInfo);
+	BOOL AddProxyLayer(LPProxyInfo lpProxyInfo, const ProxyChain *lpChain = NULL);
 	void RemoveAllLayers();
+	BOOL HasPendingSecureRead() const;
 
 	void SetPartner(CPRCTcpPeer *pPartner);
 	//void SendSocketEvent(long lEvent, int nErrorCode);
@@ -75,6 +78,10 @@ private:
 
 	CAsyncProxySocketLayer *m_pProxyLayer;
 	CAsyncSecureSocketLayer *m_pSecureLayer;
+	// Allocated only for a chained connection; it owns every layer of the
+	// chain, and m_pProxyLayer then points at its last hop.
+	CProxyChainLayers *m_pChain;
+	BOOL m_chainFailureLogged;
 	CTcpProxyTask *m_pNotify;
 	CProxyDataHandle *m_pProxyDataHandle;
 

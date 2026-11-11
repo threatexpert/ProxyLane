@@ -1,0 +1,14 @@
+ProxyLane upstream TLS certificate verification
+
+rustls-platform-verifier 0.7.1
+https://github.com/rustls/rustls-platform-verifier
+Used under the MIT license (LICENSE-rustls-platform-verifier.txt).
+
+webpki-root-certs 1.0.10
+https://github.com/rustls/webpki-roots
+Mozilla public CA certificates, generated from CCADB.
+CDLA-Permissive-2.0 (LICENSE-webpki-root-certs.txt).
+
+The versions are pinned in src/ProxyLaneMitm/Cargo.toml and Cargo.lock.
+Review public-root additions/removals and update the bundle with software
+releases. The bundled roots are not installed in the Windows certificate store.

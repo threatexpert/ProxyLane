@@ -1,0 +1,5 @@
+-r requirements.txt
+pefile==2023.2.7
+psutil==5.9.5
+# Optional read-only instruction audit (inspect_browser.py).
+capstone==5.0.0rc2

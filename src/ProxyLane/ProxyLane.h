@@ -10,6 +10,8 @@
 #include "resource.h"		// 主符号
 #include "AutomationOptions.h"
 #include "ProfileCommandBroker.h"
+#include "ConfigImport.h"
+#include <memory>
 
 
 // CProxyLaneApp:
@@ -29,6 +31,8 @@ public:
 	BOOL IsProfileCommandServerActive(LPCTSTR profileName = NULL) const;
 	BOOL RequiresProfileCommandOwnership() const { return m_requiresProfileCommandOwnership; }
 	void ReleaseAutomationLaunchGate();
+	void ScheduleConfigImport(std::unique_ptr<ConfigImport::Pending> pending) { m_configImport = std::move(pending); }
+	bool HasPendingConfigImport() const { return m_configImport != nullptr; }
 
 // 重写
 	public:
@@ -44,6 +48,7 @@ private:
 	int m_automationExitCode;
 	BOOL m_requiresProfileCommandOwnership;
 	CProfileCommandBroker m_profileCommandBroker;
+	std::unique_ptr<ConfigImport::Pending> m_configImport;
 };
 
 extern CProxyLaneApp theApp;

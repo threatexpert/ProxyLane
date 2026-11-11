@@ -5,6 +5,7 @@
 #include "ProxyLog.h"
 #include "ProxySettings.h"
 #include "DnsRedirectPolicy.h"
+#include "DohPolicy.h"
 
 CPRCUdpServer::CPRCUdpServer(CProxyReceptionCentre *pPRC)
 	: CPRCXServer(pPRC)
@@ -122,6 +123,7 @@ INT CPRCUdpServer::OnLocalThreadRegister(LPPRCClient lpPRCClient)
 	}
 
 	DnsRedirectPolicy::Apply(*lpPRCClient, settings, pisetting);
+    if (settings.bBlockUDP && DohPolicy::Intercept(*lpPRCClient, pisetting)) return -WSAEACCES;
 
 	if(!m_ProxyTaskMgr.OnNewTask(lpPRCClient, &pisetting))
 	{

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Source Files">
@@ -47,6 +47,12 @@
     <ClCompile Include="PRCTcpPeer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="MitmBridge.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ProxyMonitor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="PRCTcpServer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -68,6 +74,9 @@
     <ClCompile Include="ProxyModule.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="DirectIpv6Route.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="ProxyReceptionCentre.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -84,6 +93,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="TcpProxyTask.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="DohResolver.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="token.cpp">
@@ -121,6 +133,15 @@
     <ClInclude Include="GlobalProxy.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ProcessIdentity.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ProcessRegistry.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UdpBlockLogLimiter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="AppContainerPipeAccess.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -137,6 +158,18 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="PRCTcpPeer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="PlatformSupport.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MitmBridge.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MitmControl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ProxyMonitor.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="PRCTcpServer.h">
@@ -163,12 +196,21 @@
     <ClInclude Include="ProxyModule.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="DirectIpv6Route.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="ProxyReceptionCentre.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ProxySettings.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ProxyChainLayers.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ProxyTestProgress.h">
+        <Filter>Header Files</Filter>
+      </ClInclude>
     <ClInclude Include="ProxyTaskMgr.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -185,6 +227,13 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="TcpProxyTask.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DohPolicy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DohWakeup.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="DohResolver.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="TimeoutMonitor.h">
@@ -238,6 +287,7 @@
     <ClInclude Include="HookDispatch.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="DetourHooks.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="ProcessArchitecture.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="HookFailureDiagnostics.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="InjectDll.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -251,5 +301,18 @@
     <ResourceCompile Include="ProxyLaneHook.rc">
       <Filter>Resource Files</Filter>
     </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="QuicBridge.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="BrowserQuicPolicy.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="QuicBridge.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="BrowserQuicPolicy.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="SshSessionManager.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="asynsocket\AsyncSshSocketLayer.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="SshSessionManager.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="SshSessionLifetime.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="asynsocket\AsyncSshSocketLayer.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
 </Project>

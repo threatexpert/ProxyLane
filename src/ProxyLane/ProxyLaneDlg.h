@@ -1,4 +1,4 @@
-﻿// ProxyLaneDlg.h : 头文件
+// ProxyLaneDlg.h : 头文件
 //
 
 #pragma once
@@ -7,6 +7,7 @@
 #include "ModernUI.h"
 #include "InstalledApplications.h"
 #include <vector>
+#include <deque>
 
 class CProxyLaneFileDropTarget;
 class CAdminDropOverlay;
@@ -18,6 +19,9 @@ class CProxyLaneDlg : public CModernDialog
 // 构造
 public:
 	CProxyLaneDlg(CWnd* pParent = NULL);	// 标准构造函数
+	BOOL ShowBrowserNotification(const CString& name);
+	void HideBrowserNotification();
+	void NotifyShortcutLaunch(const AutomationOptions& options);
 
 // 对话框数据
 	enum { IDD = IDD_PROXYLANE_DIALOG };
@@ -38,6 +42,13 @@ protected:
 	CAdminDropOverlay* m_adminDropOverlay;
 	CNormalDropBanner* m_normalDropBanner;
 	UINT m_fileDragGeneration;
+	BOOL m_confirmingExit = FALSE;
+	BOOL m_stayInTray = FALSE;
+	enum TrayNoticeKind { TRAY_NOTICE_NONE, TRAY_NOTICE_LAUNCH, TRAY_NOTICE_BROWSER };
+	TrayNoticeKind m_trayNoticeKind = TRAY_NOTICE_NONE;
+	CString m_pendingBrowserNotice;
+	std::deque<CString> m_pendingLaunchNotices;
+	void ShowNextTrayNotification();
 
 
 	BOOL AddTaskbarIcons();
@@ -70,6 +81,8 @@ protected:
 	DECLARE_MESSAGE_MAP()
 public:
 	afx_msg void OnDestroy();
+	afx_msg LRESULT OnPreloadApplications(WPARAM, LPARAM);
+	afx_msg LRESULT OnConfigImportRestart(WPARAM, LPARAM);
 	afx_msg LRESULT OnShellIconNotify( WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnTaskbarRestartNotify( WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnAutomationStart(WPARAM wParam, LPARAM lParam);
@@ -77,6 +90,7 @@ public:
 	afx_msg LRESULT OnProfileCommandRequest(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnDeferredFileDragLeave(WPARAM wParam, LPARAM lParam);
 	afx_msg void OnSize(UINT nType, int cx, int cy);
+	afx_msg void OnWindowPosChanging(WINDOWPOS* position);
 	afx_msg void OnGetMinMaxInfo(MINMAXINFO* minMaxInfo);
 	afx_msg void OnDropFiles(HDROP dropInfo);
 };
@@ -106,13 +120,3 @@ ShellNotifyIcon_Modify(
 	HICON hIcon,
 	PCTSTR szTip,
 	UINT nFlags);
-
-BOOL
-ShellNotifyIcon_AddInfo(
-	HWND hWnd,
-	UINT nID,
-	UINT nCallbackMessage,
-	HICON hIcon,
-	PCTSTR szInfo,
-	UINT nFlags = NIF_MESSAGE|NIF_INFO|NIF_ICON);
-	

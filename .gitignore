@@ -5,6 +5,8 @@ tests/tools/MitigationAttributeProbe/obj/
 tests/tools/ApplicationCatalogProbe/obj/
 tests/tools/RecentApplicationsTests/obj/
 src/ProxyLaneSecureTransport/target/
+src/ProxyLaneMitm/target/
+src/ProxyLaneProtocol/target/
 dist/
 .vs/
 src/.vs/

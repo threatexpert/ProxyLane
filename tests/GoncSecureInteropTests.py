@@ -9,6 +9,7 @@ import ctypes
 import socket
 import struct
 import subprocess
+import sys
 import threading
 import time
 
@@ -48,10 +49,10 @@ class Transport:
     def array(data):
         return (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
 
-    def create(self, psk=b"123"):
+    def create(self, psk=b"123", server_name=b"localhost"):
         session = ctypes.c_void_p()
         key = self.array(psk)
-        result = self.dll.plst_session_create(key, len(psk), b"127.0.0.1", ctypes.byref(session))
+        result = self.dll.plst_session_create(key, len(psk), server_name, ctypes.byref(session))
         if result != self.OK:
             raise RuntimeError(f"session create failed: {result}")
         return Session(self, session)
@@ -206,7 +207,7 @@ def udp_echo_server(sock, stop):
 
 
 def connect_secure(transport, port):
-    sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+    sock = socket.create_connection(("localhost", port), timeout=5)
     session = transport.create()
     session.handshake(sock)
     session.send(sock, b"\x05\x01\x00")
@@ -219,13 +220,28 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dll", required=True)
     parser.add_argument("--gonc", required=True)
+    parser.add_argument("--tls-version", choices=("tls", "tls12", "tls13"), default="tls")
     args = parser.parse_args()
+
+    # This tests the transport DLL directly. An inherited ProxyLane hook must
+    # not redirect the controller's loopback echo traffic or its gonc child.
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+    kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+    for name in ("ProxyLaneHook64.dll", "ProxyLaneHook.dll"):
+        module = kernel32.GetModuleHandleW(name)
+        if module:
+            hook = ctypes.WinDLL(name, handle=module)
+            hook.gp_UnhookWinsock.argtypes = []
+            hook.gp_UnhookWinsock.restype = ctypes.c_int
+            if not hook.gp_UnhookWinsock():
+                raise RuntimeError("Could not isolate the transport test controller")
 
     transport = Transport(args.dll)
     gonc_port = free_port()
     process = subprocess.Popen(
         [args.gonc, "-e", ":s5s -u", "-l", "-k", "-psk", "123",
-         "-tls", "127.0.0.1", str(gonc_port)],
+         "-" + args.tls_version, "127.0.0.1", str(gonc_port)],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     time.sleep(0.5)
@@ -280,7 +296,10 @@ def main():
         reply = session.read(control, 10)
         if reply[1] != 0 or reply[3] != 1:
             raise RuntimeError("SOCKS5 UDP ASSOCIATE failed")
-        relay = ("127.0.0.1", struct.unpack("!H", reply[8:10])[0])
+        relay_host = socket.inet_ntoa(reply[4:8])
+        if relay_host == "0.0.0.0":
+            relay_host = control.getpeername()[0]
+        relay = (relay_host, struct.unpack("!H", reply[8:10])[0])
         key = session.export_key()
         payload = b"ProxyLane secure UDP interoperability"
         socks_packet = (b"\x00\x00\x00\x01\x7f\x00\x00\x01" +
@@ -302,7 +321,7 @@ def main():
         udp_client.close()
         udp_server.close()
         tcp_listener.close()
-        print("PASS: gonc TLS-PSK SOCKS5 8 MiB TCP and UDP interoperability")
+        print(f"PASS: gonc {args.tls_version} PSK SOCKS5 8 MiB TCP and UDP interoperability (domain host)")
     finally:
         process.terminate()
         try:
@@ -310,6 +329,9 @@ def main():
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=3)
+        if sys.exc_info()[0] is not None and process.stdout:
+            print("gonc output:\n" + process.stdout.read().decode("utf-8", errors="replace"),
+                  file=sys.stderr)
 
 
 if __name__ == "__main__":

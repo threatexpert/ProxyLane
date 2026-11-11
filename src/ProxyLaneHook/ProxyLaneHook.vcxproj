@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -445,6 +445,7 @@
   <ItemGroup>
 	<ClCompile Include="ElevatedLauncher.cpp" />
     <ClCompile Include="GlobalProxy.cpp" />
+    <ClCompile Include="DohResolver.cpp" />
     <ClCompile Include="DetourHooks.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="AppContainerPipeAccess.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -461,6 +462,12 @@
     <ClCompile Include="PRCPipeClient.cpp" />
     <ClCompile Include="PRCPipeServer.cpp" />
     <ClCompile Include="PRCTcpPeer.cpp" />
+    <ClCompile Include="SshSessionManager.cpp" />
+    <ClCompile Include="asynsocket\AsyncSshSocketLayer.cpp" />
+    <ClCompile Include="MitmBridge.cpp" />
+    <ClCompile Include="QuicBridge.cpp" />
+    <ClCompile Include="BrowserQuicPolicy.cpp" />
+    <ClCompile Include="ProxyMonitor.cpp" />
     <ClCompile Include="PRCTcpServer.cpp" />
     <ClCompile Include="PRCUdpPeer.cpp" />
     <ClCompile Include="Socks5UdpCodec.cpp">
@@ -470,6 +477,7 @@
     <ClCompile Include="PRCXServer.cpp" />
     <ClCompile Include="ProxyLog.cpp" />
     <ClCompile Include="ProxyModule.cpp" />
+    <ClCompile Include="DirectIpv6Route.cpp" />
     <ClCompile Include="ProxyReceptionCentre.cpp" />
     <ClCompile Include="ProxySettings.cpp" />
     <ClCompile Include="ProxyTaskMgr.cpp" />
@@ -495,18 +503,30 @@
   <ItemGroup>
 	<ClInclude Include="ElevatedLauncher.h" />
 	<ClInclude Include="ElevatedLaunchProtocol.h" />
+	<ClInclude Include="AppLauncherProtocol.h" />
+    <ClInclude Include="ProxyTestProgress.h" />
     <ClInclude Include="asynsocket\types.h" />
     <ClInclude Include="GlobalProxy.h" />
+    <ClInclude Include="ProcessIdentity.h" />
+    <ClInclude Include="ProcessRegistry.h" />
+    <ClInclude Include="UdpBlockLogLimiter.h" />
     <ClInclude Include="AppContainerPipeAccess.h" />
     <ClInclude Include="HookWinsock.h" />
     <ClInclude Include="InjectDll.h" />
     <ClInclude Include="HookDispatch.h" />
     <ClInclude Include="DetourHooks.h" />
     <ClInclude Include="ProcessArchitecture.h" />
+    <ClInclude Include="HookFailureDiagnostics.h" />
     <ClInclude Include="MySocket.h" />
     <ClInclude Include="PRCPipeClient.h" />
     <ClInclude Include="PRCPipeServer.h" />
     <ClInclude Include="PRCTcpPeer.h" />
+    <ClInclude Include="MitmBridge.h" />
+    <ClInclude Include="QuicBridge.h" />
+    <ClInclude Include="BrowserQuicPolicy.h" />
+    <ClInclude Include="MitmControl.h" />
+    <ClInclude Include="PlatformSupport.h" />
+    <ClInclude Include="ProxyMonitor.h" />
     <ClInclude Include="PRCTcpServer.h" />
     <ClInclude Include="PRCUdpPeer.h" />
     <ClInclude Include="Socks5UdpCodec.h" />
@@ -515,8 +535,14 @@
     <ClInclude Include="ProxyDataHandle.h" />
     <ClInclude Include="ProxyLog.h" />
     <ClInclude Include="ProxyModule.h" />
+    <ClInclude Include="DirectIpv6Route.h" />
     <ClInclude Include="ProxyReceptionCentre.h" />
     <ClInclude Include="ProxySettings.h" />
+    <ClInclude Include="ProxyChainLayers.h" />
+    <ClInclude Include="SshSessionManager.h" />
+    <ClInclude Include="SshKeyFile.h" />
+    <ClInclude Include="SshSessionLifetime.h" />
+    <ClInclude Include="asynsocket\AsyncSshSocketLayer.h" />
     <ClInclude Include="ProxyTaskMgr.h" />
     <ClInclude Include="ProxyTesterMgr.h" />
     <ClInclude Include="StdAfx.h" />
@@ -529,6 +555,10 @@
     <ClInclude Include="TSSTL.h" />
 	<ClInclude Include="UdpAssociationPolicy.h" />
 	<ClInclude Include="DnsRedirectPolicy.h" />
+    <ClInclude Include="DohPolicy.h" />
+    <ClInclude Include="DohResolver.h" />
+    <ClInclude Include="DohCache.h" />
+    <ClInclude Include="DohWakeup.h" />
 	<ClInclude Include="UdpPayloadPolicy.h" />
 	<ClInclude Include="InetCompat.h" />
     <ClInclude Include="UdpProxyTask.h" />
@@ -550,4 +580,9 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
+  <Target Name="BuildSshBackend" AfterTargets="Build" Condition="'$(Platform)'=='x64' and '$(Configuration)'=='Release'"
+          Inputs="$(ProjectDir)..\..\scripts\build-ssh.ps1;$(ProjectDir)..\..\scripts\prepare-openssl.ps1;$(ProjectDir)..\..\third_party\openssl\dependency.json;$(ProjectDir)..\ProxyLaneSsh\CMakeLists.txt;$(ProjectDir)..\ProxyLaneSsh\SessionPump.c;$(ProjectDir)..\..\third_party\libssh2\UPSTREAM.txt;$(ProjectDir)..\..\third_party\libssh2\concurrent-channel-open.patch;$(ProjectDir)..\..\third_party\libssh2\include\libssh2.h;$(ProjectDir)..\..\third_party\libssh2\COPYING"
+          Outputs="$(ProjectDir)..\..\bin\ProxyLaneSsh64.dll;$(ProjectDir)..\..\build\deps\ssh-backend.stamp">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)..\..\scripts\build-ssh.ps1&quot; -Platform x64" />
+  </Target>
 </Project>

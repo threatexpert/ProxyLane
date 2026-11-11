@@ -2,8 +2,15 @@
 //
 
 #include "stdafx.h"
+#include "ConfigStorage.h"
+#include "SshProfile.h"
 #include "ProxyLane.h"
 #include "Page1.h"
+#include "../ProxyLaneHook/DohPolicy.h"
+#include "ProxyTestResultDialog.h"
+#include "ProxyTestError.h"
+#include "ChainNodeEditDialog.h"
+#include "ChainProgressPresentation.h"
 #include "MainTab.h"
 #include "Page2.h"
 #include "Page3.h"
@@ -17,6 +24,9 @@
 #include <shlwapi.h>
 #pragma comment(lib, "shlwapi.lib")
 
+static_assert(IDC_RADIO_DNSDOH > CSshAuthControls::ImportId ||
+    IDC_STATIC_DOH_BOOTSTRAP < CSshAuthControls::LabelId,
+    "DoH and dynamically created SSH controls share the settings dialog; IDs must not overlap");
 
 CIniFile g_ini;
 
@@ -76,17 +86,20 @@ CPage1::CPage1(CWnd* pParent /*=NULL*/)
 	, m_profileDirty(FALSE)
 	, m_loadingProfile(TRUE)
 	, m_profileStore(g_ini)
-	, m_filterEditBaseHeight(0)
+	, m_activeTab(0)
+	, m_scrollY(0)
+	, m_inLayout(FALSE)
 {
-	m_recentFileStamp = 0;
-	m_recentLaunching = FALSE;
-	m_recentLaunchTick = 0;
 	m_pTestProxy = 0;
 	m_pProxyTester = 0;
 	m_bIsTesting = FALSE;
 	m_proxyTestPhase = PROXY_TEST_NONE;
 	m_testIpv6Result = IPV6_TEST_NOT_RUN;
 	m_testUdpRequested = FALSE;
+	m_testTcpPassed = FALSE;
+    m_testDohQuerying = false;
+	m_testUdpPassed = FALSE;
+	m_testUdpError = 0;
 	m_ProxyInfo.reserved = 0;
 	memset(&m_runtimeSettings, 0, sizeof(m_runtimeSettings));
 }
@@ -125,6 +138,10 @@ void CPage1::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_CHECK_BLOCK_IPV6, m_btnBlockIPv6);
 	DDX_Control(pDX, IDC_RADIO_DNSLOCAL, m_btnDNSLocal);
 	DDX_Control(pDX, IDC_RADIO_DNSREMOTE, m_btnDNSRemote);
+    DDX_Control(pDX, IDC_RADIO_DNSDOH, m_btnDNSDoh);
+    DDX_Control(pDX, IDC_STATIC_DOH_URL, m_btnDohPreset);
+    DDX_Control(pDX, IDC_EDIT_DOH_URL, m_editDohUrl);
+    DDX_Control(pDX, IDC_EDIT_DOH_BOOTSTRAP, m_editDohBootstrap);
 	DDX_Control(pDX, IDC_CHECK_REDIRECT_PRIVATE_DNS, m_btnRedirectPrivateDNS);
 	DDX_Control(pDX, IDC_EDIT_REDIRECT_DNS, m_editRedirectDNS);
 	DDX_Control(pDX, IDC_CHECK_HOOKCHILDPROCESS, m_btnHookChildProcess);
@@ -140,26 +157,42 @@ void CPage1::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_STATIC_TestProxy, m_staticTestProxy);
 	DDX_Control(pDX, IDC_COMBO_CFGS, m_cfgls);
 	DDX_Control(pDX, IDC_BUTTON_SAVE_PROFILE, m_btnSaveProfile);
-	DDX_Control(pDX, IDC_BUTTON_DELETE_PROFILE, m_btnDeleteProfile);
+	DDX_Control(pDX, IDC_BUTTON_PROFILE_MENU, m_btnProfileMenu);
+	DDX_Control(pDX, IDC_STATIC_PROXY_GROUP, m_cardProxy);
+	DDX_Control(pDX, IDC_STATIC_GROUP_OTHER, m_cardOptions);
+	DDX_Control(pDX, IDC_STATIC_CHILDFILTER_GROUP, m_cardChildFilter);
+	DDX_Control(pDX, IDC_STATIC_TARGETFILTER_GROUP, m_cardTargetFilter);
 }
 
 
 BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
+ ON_COMMAND(0x2401, &CPage1::OnNewProfile)
+ ON_BN_CLICKED(0x2402, &CPage1::OnToggleAdvanced)
+	ON_COMMAND(0x240B, &CPage1::OnNewChainProfile)
+	ON_BN_CLICKED(0x2406, &CPage1::OnChainAdd)
 
 	ON_WM_SIZE()
+	ON_WM_VSCROLL()
+	ON_WM_MOUSEWHEEL()
 	ON_BN_CLICKED(IDOK, &CPage1::OnBnClickedOk)
 	ON_BN_CLICKED(IDCANCEL, &CPage1::OnBnClickedCancel)
 	ON_WM_DESTROY()
 	ON_BN_CLICKED(IDC_TestProxy, &CPage1::OnBnClickedTestproxy)
 	ON_BN_CLICKED(IDC_BUTTON_SAVE_PROFILE, &CPage1::OnCfgoptSave)
+	ON_BN_CLICKED(IDC_BUTTON_PROFILE_MENU, &CPage1::OnProfileMenu)
+	ON_COMMAND(IDC_BUTTON_IMPORT_CONFIG, &CPage1::OnImportAllConfig)
+	ON_COMMAND(IDC_BUTTON_COPY_PROFILE, &CPage1::OnCopyProfile)
+	ON_COMMAND(IDC_BUTTON_PASTE_PROFILE, &CPage1::OnPasteProfile)
 	ON_EN_CHANGE(IDC_EDIT_ADDR, &CPage1::OnEnChangeEditAddr)
 	ON_EN_CHANGE(IDC_EDIT_PORT, &CPage1::OnProfileFieldChanged)
 	ON_EN_CHANGE(IDC_EDIT_USER, &CPage1::OnProfileFieldChanged)
 	ON_EN_CHANGE(IDC_EDIT_PASS, &CPage1::OnProfileFieldChanged)
 	ON_EN_CHANGE(IDC_EDIT_TRANSPORT_PSK, &CPage1::OnProfileFieldChanged)
+    ON_CBN_SELCHANGE(CSshAuthControls::AuthId, &CPage1::OnSshAuthChanged)
+    ON_BN_CLICKED(CSshAuthControls::ImportId, &CPage1::OnImportSshKey)
 	ON_EN_CHANGE(IDC_EDIT_CHILDFILTER, &CPage1::OnProfileFieldChanged)
 	ON_EN_CHANGE(IDC_EDIT_TARGETFILTER, &CPage1::OnProfileFieldChanged)
-	ON_CBN_SELCHANGE(IDC_CB_PROXYTYPE, &CPage1::OnProfileFieldChanged)
+	ON_CBN_SELCHANGE(IDC_CB_PROXYTYPE, &CPage1::OnProtocolChanged)
 	ON_CBN_SELCHANGE(IDC_COMBO_TRANSPORT, &CPage1::OnProfileFieldChanged)
 	ON_CBN_EDITCHANGE(IDC_COMBO_CFGS, &CPage1::OnCbnEditchangeComboCfgs)
 	ON_BN_CLICKED(IDC_CHECK_HOOKTCP, &CPage1::OnProfileFieldChanged)
@@ -168,22 +201,25 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_BN_CLICKED(IDC_CHECK_BLOCK_IPV6, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_RADIO_DNSLOCAL, &CPage1::OnDnsSettingsChanged)
 	ON_BN_CLICKED(IDC_RADIO_DNSREMOTE, &CPage1::OnDnsSettingsChanged)
+    ON_BN_CLICKED(IDC_RADIO_DNSDOH, &CPage1::OnDnsSettingsChanged)
+    ON_BN_CLICKED(IDC_STATIC_DOH_URL, &CPage1::OnDohPreset)
+    ON_EN_CHANGE(IDC_EDIT_DOH_URL, &CPage1::OnProfileFieldChanged)
+    ON_EN_CHANGE(IDC_EDIT_DOH_BOOTSTRAP, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_CHECK_REDIRECT_PRIVATE_DNS, &CPage1::OnDnsSettingsChanged)
 	ON_EN_CHANGE(IDC_EDIT_REDIRECT_DNS, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_RADIO_CHILDFILTER_EXCLUDE, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_RADIO_CHILDFILTER_INCLUDE, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_RADIO_TARGETFILTER_BYPASS, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_RADIO_TARGETFILTER_PROXY, &CPage1::OnProfileFieldChanged)
-	ON_BN_CLICKED(IDC_BUTTON_DELETE_PROFILE, &CPage1::OnCfgoptDelete)
+	ON_COMMAND(IDC_BUTTON_DELETE_PROFILE, &CPage1::OnCfgoptDelete)
 	ON_CBN_SELCHANGE(IDC_COMBO_CFGS, &CPage1::OnCbnSelchangeComboCfgs)
+	ON_CBN_DROPDOWN(IDC_COMBO_CFGS, &CPage1::OnCbnDropdownComboCfgs)
 	ON_BN_CLICKED(IDC_CHECK_HOOKCHILDPROCESS, &CPage1::OnBnClickedHookChildProcess)
 	ON_BN_CLICKED(IDC_RADIO_TAB_BASIC, &CPage1::OnBnClickedTabBasic)
 	ON_BN_CLICKED(IDC_RADIO_TAB_CHILD, &CPage1::OnBnClickedTabChild)
 	ON_BN_CLICKED(IDC_RADIO_TAB_TARGET, &CPage1::OnBnClickedTabTarget)
-	ON_BN_CLICKED(IDC_BTN_WORKFLOW_NEXT, &CPage1::OnBnClickedWorkflowNext)
 	ON_MESSAGE(WM_RECENT_APPLICATIONS_CHANGED, &CPage1::OnRecentApplicationsChanged)
-	ON_NOTIFY(NM_DBLCLK, IDC_RECENT_LIST, &CPage1::OnRecentApplicationClick)
-	ON_NOTIFY(NM_RETURN, IDC_RECENT_LIST, &CPage1::OnRecentApplicationClick)
+	ON_MESSAGE(ProxyTestCompletedMessage, &CPage1::OnProxyTestCompleted)
 	ON_WM_TIMER()
 END_MESSAGE_MAP()
 
@@ -191,40 +227,64 @@ BOOL CPage1::OnInitDialog()
 {
 	CModernDialog::OnInitDialog();
 
+    m_btnDohPreset.SetVisualStyle(CModernButton::STYLE_GHOST);
+    m_btnDohPreset.SetBackdropColor(RGB(255, 255, 255));
+    m_editDohUrl.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)L"https://dns.google/dns-query");
+    m_editDohBootstrap.SendMessage(EM_SETCUEBANNER, TRUE,
+        (LPARAM)(LPCWSTR)Localization::Get(L"page1.doh_bootstrap"));
+
+ m_btnAdvanced.Create(L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, CRect(), this, 0x2402);
+ m_btnAdvanced.SetFont(&m_uiFont);
+ m_btnAdvanced.SetWindowPos(&m_edit_Port, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+ m_btnAdvanced.SetBackdropColor(UiTheme::PageBackground());
+ m_btnAdvanced.SetVisualStyle(CModernButton::STYLE_GHOST);
+ UpdateAdvancedCaption();
+
+	// The chain editor, created hidden; layout shows it for chain profiles.
+	// Tab order follows the optional-section toggle.
+	{
+		CWnd* after = &m_btnAdvanced;
+		auto order = [&after](CWnd& control) {
+			control.SetWindowPos(after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+			after = &control;
+		};
+        m_chainView.Create(this, 0x2405);
+        m_chainView.SetFont(&m_uiFont);
+        m_chainView.onAction = [this](CChainRouteView::Action action, int from, int to) {
+            if (action == CChainRouteView::Selection) UpdateChainButtons();
+            else if (action == CChainRouteView::Edit) OnChainEdit();
+            else if (action == CChainRouteView::Remove) OnChainRemove();
+            else if (action == CChainRouteView::Move) OnChainMove(from, to);
+        };
+        order(m_chainView);
+        m_btnChainAdd.Create(Localization::Get(L"page1.chain_add"), WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
+            CRect(), this, 0x2406);
+        m_btnChainAdd.SetFont(&m_uiFont);
+        m_btnChainAdd.SetBackdropColor(UiTheme::PageBackground());
+        m_btnChainAdd.SetVisualStyle(CModernButton::STYLE_SECONDARY);
+        order(m_btnChainAdd);
+	}
+
 	m_OK.SetVisualStyle(CModernButton::STYLE_PRIMARY);
 	m_Cancel.SetVisualStyle(CModernButton::STYLE_DANGER);
+	m_staticTestProxy.SetInlineStyle(TRUE);
 	m_btnTest.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	m_btnSaveProfile.SetVisualStyle(CModernButton::STYLE_SECONDARY);
-	m_btnDeleteProfile.SetVisualStyle(CModernButton::STYLE_DANGER);
-	CreateWorkflowCard();
+	m_btnProfileMenu.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	UpdateProxyStateUi();
 
-	CRect filterRect;
-	m_editChildFilter.GetWindowRect(&filterRect);
-	m_filterEditBaseHeight = filterRect.Height();
-
 	m_cbProxyType.AddString(_T("NOPROXY"));
-	m_cbProxyType.AddString(_T("SOCKS4"));
-	m_cbProxyType.AddString(_T("SOCKS4A"));
 	m_cbProxyType.AddString(_T("SOCKS5"));
-	m_cbProxyType.AddString(_T("HTTP10"));
-	m_cbProxyType.AddString(_T("HTTP11"));
+	m_cbProxyType.AddString(L"SSH");
+	m_cbProxyType.AddString(_T("HTTP"));
 	m_cbTransport.AddString(Localization::Get(_T("transport.plain")));
 	m_cbTransport.AddString(Localization::Get(_T("transport.gonc_tls_psk")));
 	m_cbTransport.SetCurSel(PROXY_TRANSPORT_PLAIN);
+    m_sshAuth.Create(this, &m_uiFont);
+    m_sshAuth.OrderAfter(&m_edit_Port);
 	UpdateTransportEnable();
 
 	g_ini.SetIniFileName(_T(""));
-#ifdef _WIN64
-	{
-		CString strIniPath = g_ini.GetIniFileName();
-		if (strIniPath.Right(6).CompareNoCase(_T("64.ini")) == 0)
-		{
-			strIniPath = strIniPath.Left(strIniPath.GetLength() - 6) + _T(".ini");
-			g_ini.SetIniFileName(strIniPath);
-		}
-	}
-#endif
 
 	list<CfgProxyItem> cfgls;
 	CString lastSelectedName;
@@ -236,6 +296,7 @@ BOOL CPage1::OnInitDialog()
 
 		m_cfgls.AddString(item.strName);
 	}
+	RefreshProfileEntries();
 
 	UILoadCfg(NULL);
 
@@ -254,8 +315,27 @@ BOOL CPage1::OnInitDialog()
 	m_bDisableMDNS = g_ini.GetInt(_T("options"), _T("DisableMDNS"), 1);
 
 	ShowTab(0);
+	LayoutSettingsPage();
 	m_loadingProfile = FALSE;
 	SetProfileDirty(FALSE);
+
+	// First run: offer a named draft that still has to be saved once.
+	if (m_cfgls.GetCount() == 0)
+	{
+		m_draftProfileName = _T("proxy");
+		m_cfgls.SetWindowText(m_draftProfileName);
+		SetProfileDirty(TRUE);
+	}
+
+	// A freshly created settings file holds only the Test placeholder
+	// (127.0.0.1:1080) and Direct. Point the user at the server fields until a
+	// profile is saved or enabled; MainTab opens this page while the guide is on.
+	if (ConfigStorage::CreatedDefaults() || m_cfgls.GetCount() == 0)
+	{
+		m_firstRunGuide = TRUE;
+		UpdateTransportEnable();
+		LayoutSettingsPage();
+	}
 
 	return TRUE;
 }
@@ -263,305 +343,436 @@ BOOL CPage1::OnInitDialog()
 void CPage1::OnSize(UINT nType, int cx, int cy)
 {
 	CModernDialog::OnSize(nType, cx, cy);
-	LayoutFilterEditor(IDC_STATIC_CHILDFILTER_GROUP,
-		m_editChildFilter, IDC_STATIC_CHILDFILTER_HINT);
-	LayoutFilterEditor(IDC_STATIC_TARGETFILTER_GROUP,
-		m_editTargetFilter, IDC_STATIC_TARGETFILTER_HINT);
-	LayoutWorkflowCard();
-}
-
-void CPage1::CreateWorkflowCard()
-{
-	const CRect emptyRect(0, 0, 0, 0);
-	m_workflowGroup.Create(Localization::Get(_T("workflow.group")), WS_CHILD | BS_GROUPBOX,
-		emptyRect, this, IDC_STATIC_WORKFLOW_GROUP);
-	m_workflowStatus.Create(Localization::Get(_T("workflow.ready")), WS_CHILD | SS_OWNERDRAW,
-		emptyRect, this, IDC_STATIC_WORKFLOW_STATUS);
-	m_workflowText.Create(_T(""), WS_CHILD | SS_LEFT,
-		emptyRect, this, IDC_STATIC_WORKFLOW_TEXT);
-	m_workflowNext.Create(Localization::Get(_T("workflow.next")),
-		WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
-		emptyRect, this, IDC_BTN_WORKFLOW_NEXT);
-
-	m_workflowGroup.SetFont(&m_uiFont, FALSE);
-	m_workflowStatus.SetFont(&m_uiFont, FALSE);
-	m_workflowText.SetFont(&m_uiFont, FALSE);
-	m_workflowNext.SetFont(&m_uiFont, FALSE);
-	m_workflowNext.SetVisualStyle(CModernButton::STYLE_PRIMARY);
-	m_recentTitle.Create(Localization::Get(L"recent.title"), WS_CHILD | SS_LEFT, emptyRect, this, IDC_RECENT_TITLE);
-	m_recentEmpty.Create(Localization::Get(L"recent.empty"), WS_CHILD | SS_LEFT, emptyRect, this, IDC_RECENT_EMPTY);
-	m_recentList.Create(WS_CHILD | WS_TABSTOP | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL,
-		emptyRect, this, IDC_RECENT_LIST);
-	m_recentTitle.SetFont(&m_uiFont, FALSE);
-	m_recentEmpty.SetFont(&m_uiFont, FALSE);
-	m_recentList.SetFont(&m_uiFont, FALSE);
-	m_recentList.SetExtendedStyle(LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-	m_recentList.SetBkColor(UiTheme::PageBackground());
-	m_recentList.SetTextBkColor(UiTheme::PageBackground());
-	m_recentList.InsertColumn(0, L"", LVCFMT_LEFT, 120);
-	const int iconSize = UiTheme::ScaleForWindow(m_hWnd, 20);
-	m_recentIcons.Create(iconSize, iconSize, ILC_COLOR32 | ILC_MASK, 7, 1);
-	m_recentList.SetImageList(&m_recentIcons, LVSIL_SMALL);
-	if (m_recentTooltip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX))
-	{
-		m_recentTooltip.AddTool(&m_recentList, LPSTR_TEXTCALLBACK);
-		m_recentTooltip.SetMaxTipWidth(UiTheme::ScaleForWindow(m_hWnd, 540));
-		m_recentTooltip.SetDelayTime(TTDT_AUTOPOP, 30000);
-	}
-	ReloadRecentApplications(TRUE);
-	SetTimer(0x310, 2000, NULL);
-	LayoutWorkflowCard();
-}
-
-void CPage1::ReloadRecentApplications(BOOL force)
-{
-	if (!m_recentList.GetSafeHwnd()) return;
-	const CString profile = g_MainTab && g_MainTab->IsProxyRunning() ? g_MainTab->GetRunningProfileName() : CString();
-	const CString identity = g_MainTab ? g_MainTab->GetRunningRecentProfileId() : CString();
-	WIN32_FILE_ATTRIBUTE_DATA data = {0};
-	ULONGLONG stamp = 0;
-	if (GetFileAttributesEx(RecentApplications::DefaultPath(), GetFileExInfoStandard, &data))
-		stamp = (static_cast<ULONGLONG>(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime;
-	if (!force && stamp == m_recentFileStamp && identity == m_recentProfileId) return;
-	std::vector<RecentApplications::Entry> entries;
-	const BOOL loaded = identity.IsEmpty() || RecentApplications::Store(profile, RecentApplications::DefaultPath(), identity).Read(entries);
-	if (loaded) m_recentFileStamp = stamp;
-	m_recentProfileId = identity;
-	m_recentEntries.swap(entries);
-	if (m_recentEntries.size() > 7) m_recentEntries.resize(7);
-	m_recentHoverText.Empty();
-	if (m_recentTooltip.GetSafeHwnd()) m_recentTooltip.Pop();
-	m_recentList.SetRedraw(FALSE);
-	m_recentList.DeleteAllItems();
-	m_recentIcons.SetImageCount(0);
-	for (size_t i = 0; i < m_recentEntries.size(); ++i)
-	{
-		HICON icon = RecentApplications::LoadIcon(m_recentEntries[i]);
-		const int image = icon ? m_recentIcons.Add(icon) : -1;
-		if (icon) DestroyIcon(icon);
-		m_recentList.InsertItem(static_cast<int>(i), m_recentEntries[i].app.name, image);
-	}
-	m_recentEmpty.SetWindowText(Localization::Get(loaded ? L"recent.empty" : L"recent.read_failed"));
-	m_recentList.SetRedraw(TRUE);
-	m_recentList.Invalidate(FALSE);
-	LayoutWorkflowCard();
+	LayoutSettingsPage();
 }
 
 LRESULT CPage1::OnRecentApplicationsChanged(WPARAM, LPARAM)
 {
-	ReloadRecentApplications(TRUE);
+	// The applications page owns the recent-app view; this page only keeps the
+	// shared cache warm for the profile that is about to run.
+	PreloadRecentApplications();
 	return 0;
+}
+
+void CPage1::PreloadRecentApplications()
+{
+	const BOOL running = g_MainTab && g_MainTab->IsProxyRunning();
+	RecentApplications::Preload(running ? g_MainTab->GetRunningProfileName() : GetCurrentProfileName(),
+		RecentApplications::DefaultPath(), running ? g_MainTab->GetRunningRecentProfileId() : CString());
 }
 
 void CPage1::OnTimer(UINT_PTR timer)
 {
-	if (timer == 0x310 && IsWindowVisible() && !m_recentLaunching) ReloadRecentApplications(FALSE);
+	if (timer == 0x311) { KillTimer(0x311); PreloadRecentApplications(); }
+	if (timer == 0x312) { UpdateChainProgress(); return; }
 	CModernDialog::OnTimer(timer);
-}
-
-void CPage1::OnRecentApplicationClick(NMHDR* header, LRESULT* result)
-{
-	*result = 0;
-	if (!m_proxyController.IsRunning() || m_recentLaunching || !g_MainTab) return;
-	const int row = header->code == NM_DBLCLK ? reinterpret_cast<NMITEMACTIVATE*>(header)->iItem :
-		m_recentList.GetNextItem(-1, LVNI_SELECTED);
-	if (row < 0 || static_cast<size_t>(row) >= m_recentEntries.size()) return;
-	if (m_recentLaunchTick && GetTickCount() - m_recentLaunchTick < GetDoubleClickTime()) return;
-	const RecentApplications::Entry entry = m_recentEntries[row];
-	m_recentLaunching = TRUE;
-	struct Reset { BOOL& flag; ~Reset() { flag = FALSE; } } reset = { m_recentLaunching };
-	g_MainTab->GetPage3()->LaunchRecentApplication(entry);
-	m_recentLaunchTick = GetTickCount();
-}
-
-BOOL CPage1::PreTranslateMessage(MSG* message)
-{
-	if (m_recentTooltip.GetSafeHwnd())
-	{
-		if (message->message == WM_MOUSEMOVE && message->hwnd == m_recentList.GetSafeHwnd())
-		{
-			LVHITTESTINFO hit = {0};
-			hit.pt = CPoint(static_cast<short>(LOWORD(message->lParam)), static_cast<short>(HIWORD(message->lParam)));
-			const int row = m_recentList.SubItemHitTest(&hit);
-			CString text;
-			if (row >= 0 && static_cast<size_t>(row) < m_recentEntries.size())
-				text = RecentApplications::Description(m_recentEntries[row],
-					g_MainTab && g_MainTab->IsProxyRunning() ? g_MainTab->GetRunningProfileName() : CString());
-			if (text != m_recentHoverText) { m_recentTooltip.Pop(); m_recentHoverText = text; }
-			m_recentTooltip.Activate(!text.IsEmpty());
-		}
-		m_recentTooltip.RelayEvent(message);
-	}
-	return CModernDialog::PreTranslateMessage(message);
-}
-
-BOOL CPage1::OnNotify(WPARAM wParam, LPARAM lParam, LRESULT* result)
-{
-	NMHDR* header = reinterpret_cast<NMHDR*>(lParam);
-	if (header && m_recentTooltip.GetSafeHwnd() && header->hwndFrom == m_recentTooltip.GetSafeHwnd() && header->code == TTN_NEEDTEXT)
-	{
-		reinterpret_cast<NMTTDISPINFO*>(header)->lpszText = const_cast<LPTSTR>(static_cast<LPCTSTR>(m_recentHoverText));
-		*result = 0; return TRUE;
-	}
-	return CModernDialog::OnNotify(wParam, lParam, result);
-}
-
-void CPage1::LayoutWorkflowCard()
-{
-	if (!m_workflowGroup.GetSafeHwnd() || !m_recentList.GetSafeHwnd())
-		return;
-
-	CWnd* optionsGroup = GetDlgItem(IDC_STATIC_GROUP_OTHER);
-	if (!optionsGroup || !m_cfgls.GetSafeHwnd())
-		return;
-
-	CRect clientRect;
-	CRect optionsRect;
-	CRect configRect;
-	GetClientRect(&clientRect);
-	optionsGroup->GetWindowRect(&optionsRect);
-	m_cfgls.GetWindowRect(&configRect);
-	ScreenToClient(&optionsRect);
-	ScreenToClient(&configRect);
-
-	const int gap = UiTheme::ScaleForWindow(m_hWnd, 16);
-	const int outerMargin = UiTheme::ScaleForWindow(m_hWnd, 8);
-	const int cardLeft = optionsRect.right + gap;
-	const int cardRight = clientRect.right - outerMargin;
-	const int cardTop = max(outerMargin,
-		configRect.top - UiTheme::ScaleForWindow(m_hWnd, 12));
-	const int cardBottom = min(clientRect.bottom - outerMargin, optionsRect.bottom);
-	// cardRight/cardLeft are already expressed in the page's client coordinates.
-	// Do not DPI-scale this threshold again, otherwise 125%/150% displays hide
-	// a card that physically has enough room.
-	const BOOL showCard = cardRight - cardLeft >= 150
-		&& cardBottom - cardTop >= UiTheme::ScaleForWindow(m_hWnd, 180);
-
-	m_workflowGroup.ShowWindow(showCard ? SW_SHOW : SW_HIDE);
-	m_workflowStatus.ShowWindow(showCard ? SW_SHOW : SW_HIDE);
-	m_workflowText.ShowWindow(showCard ? SW_SHOW : SW_HIDE);
-	if (!showCard)
-	{
-		m_workflowNext.ShowWindow(SW_HIDE);
-		m_recentTitle.ShowWindow(SW_HIDE);
-		m_recentList.ShowWindow(SW_HIDE);
-		m_recentEmpty.ShowWindow(SW_HIDE);
-		return;
-	}
-
-	m_workflowGroup.MoveWindow(cardLeft, cardTop,
-		cardRight - cardLeft, cardBottom - cardTop);
-
-	const int inner = UiTheme::ScaleForWindow(m_hWnd, 8);
-	const int statusTop = cardTop + UiTheme::ScaleForWindow(m_hWnd, 24);
-	const int statusHeight = UiTheme::ScaleForWindow(m_hWnd, 28);
-	const int statusWidth = min(cardRight - cardLeft - inner * 2,
-		UiTheme::ScaleForWindow(m_hWnd, 170));
-	m_workflowStatus.MoveWindow(cardLeft + inner, statusTop,
-		statusWidth, statusHeight);
-
-	const int buttonWidth = min(cardRight - cardLeft - inner * 2,
-		UiTheme::ScaleForWindow(m_hWnd, 180));
-	const int buttonHeight = UiTheme::ScaleForWindow(m_hWnd, 34);
-	const int buttonTop = cardBottom - inner - buttonHeight;
-	m_workflowNext.MoveWindow(cardLeft + inner, buttonTop,
-		buttonWidth, buttonHeight);
-
-	const int textTop = statusTop + statusHeight + UiTheme::ScaleForWindow(m_hWnd, 14);
-	const int textBottom = buttonTop - UiTheme::ScaleForWindow(m_hWnd, 12);
-	const int contentWidth = max(1, cardRight - cardLeft - inner * 2);
-	CString guidance;
-	m_workflowText.GetWindowText(guidance);
-	CClientDC dc(this);
-	CFont* oldFont = dc.SelectObject(&m_uiFont);
-	CRect measured(0, 0, contentWidth, 0);
-	dc.DrawText(guidance, measured, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-	if (oldFont) dc.SelectObject(oldFont);
-	const int textHeight = min(max(0, textBottom - textTop), measured.Height());
-	m_workflowText.MoveWindow(cardLeft + inner, textTop,
-		contentWidth, textHeight);
-	const int recentTop = textTop + textHeight + UiTheme::ScaleForWindow(m_hWnd, 12);
-	const int titleHeight = UiTheme::ScaleForWindow(m_hWnd, 22);
-	const int listTop = recentTop + titleHeight;
-	const BOOL showRecent = textBottom - listTop >= UiTheme::ScaleForWindow(m_hWnd, 30);
-	m_recentTitle.MoveWindow(cardLeft + inner, recentTop, contentWidth, titleHeight);
-	m_recentList.MoveWindow(cardLeft + inner, listTop, contentWidth, max(0, textBottom - listTop));
-	m_recentList.SetColumnWidth(0, max(1, contentWidth - UiTheme::ScaleForWindow(m_hWnd, 20)));
-	m_recentEmpty.MoveWindow(cardLeft + inner, listTop, contentWidth, max(0, textBottom - listTop));
-	m_recentTitle.ShowWindow(showRecent ? SW_SHOW : SW_HIDE);
-	m_recentList.ShowWindow(showRecent && !m_recentEntries.empty() ? SW_SHOW : SW_HIDE);
-	m_recentEmpty.ShowWindow(showRecent && m_recentEntries.empty() ? SW_SHOW : SW_HIDE);
-	m_recentList.SetTextColor(m_proxyController.IsRunning() ? UiTheme::Accent() : UiTheme::TextSecondary());
-
-	m_workflowNext.ShowWindow(SW_SHOW);
 }
 
 void CPage1::UpdateWorkflowCard()
 {
-	const BOOL running = m_proxyController.IsRunning();
-	if (running)
+	// Only the "apps need attention" marker of the navigation remains.
+	if (g_MainTab)
+		g_MainTab->SetPageAttention(CMainTab::PAGE_APPLICATIONS, m_proxyController.IsRunning());
+}
+
+void CPage1::LayoutSettingsPage()
+{
+	if (!GetSafeHwnd() || !m_cfgls.GetSafeHwnd() || !m_OK.GetSafeHwnd() || !m_btnAdvanced.GetSafeHwnd() || m_inLayout)
+		return;
+	CRect client;
+	GetClientRect(&client);
+	if (client.Width() <= 0 || client.Height() <= 0)
+		return;
+	m_inLayout = TRUE;
+    m_sshAuth.Show(false);
+	// WM_SETREDRAW TRUE also sets WS_VISIBLE, so only use it on a page that is shown.
+	const BOOL freezeRedraw = IsWindowVisible();
+	if (freezeRedraw) SetRedraw(FALSE);
+	const int scroll = m_scrollY;
+
+	auto S = [this](int value) { return UiTheme::ScaleForWindow(m_hWnd, value); };
+	auto place = [this](UINT id, int x, int y, int width, int height)
 	{
-		if (m_runtimeDirty)
+		CWnd* control = GetDlgItem(id);
+		// Positions are in content coordinates; the page may be scrolled.
+		if (control && control->GetSafeHwnd())
+			control->SetWindowPos(NULL, x, y - m_scrollY, max(0, width), max(0, height), SWP_NOZORDER | SWP_NOACTIVATE);
+	};
+	auto textWidth = [this](UINT id) -> int
+	{
+		CWnd* control = GetDlgItem(id);
+		if (!control || !control->GetSafeHwnd()) return 0;
+		CString text;
+		control->GetWindowText(text);
+		CClientDC dc(control);
+		CFont* font = control->GetFont();
+		CFont* oldFont = font ? dc.SelectObject(font) : NULL;
+		const int width = dc.GetTextExtent(text).cx;
+		if (oldFont) dc.SelectObject(oldFont);
+		return width;
+	};
+
+	const int margin = S(8);
+	const int gap = S(8);
+	const int gapX = S(12);
+	const int pad = S(16);
+	const int fieldH = S(26);
+	const int labelH = S(18);
+	const int rowStep = labelH + S(2) + fieldH + S(8);
+	const int contentW = min(client.Width() - margin * 2, S(780));
+	const int x0 = margin;
+	const int innerX = x0 + pad;
+	const int innerW = contentW - pad * 2;
+	int y = S(64);
+
+	// Selected combo fields should line up with the edit controls.
+	m_cfgls.SetItemHeight(-1, fieldH - S(6));
+	m_cfgls.SetItemHeight(0, S(40));
+	m_cbProxyType.SetItemHeight(-1, fieldH - S(6));
+	m_cbTransport.SetItemHeight(-1, fieldH - S(6));
+
+	// Profile row. With enough width it shares the title row to save height.
+	{
+		const int saveW = max(S(84), textWidth(IDC_BUTTON_SAVE_PROFILE) + S(24));
+		const int menuW = max(S(92), textWidth(IDC_BUTTON_PROFILE_MENU) + S(30));
+		const int labelW = textWidth(IDC_STATIC_CONFIG_LABEL) + S(6);
+		const int menuX = x0 + contentW - menuW;
+		const int saveX = menuX - gap - saveW;
+		const int inlineLeft = x0 + S(228);
+		// Decide on the width without the scroll bar, otherwise showing the bar
+		// can push this row down, which in turn keeps the bar visible.
+		const int barWidth = (GetStyle() & WS_VSCROLL) ? ::GetSystemMetrics(SM_CXVSCROLL) : 0;
+		const BOOL inlineProfile = saveX + barWidth - gap - (inlineLeft + labelW + S(8)) >= S(120);
+		const int rowY = inlineProfile ? S(10) : y;
+		if (CWnd* title = GetDlgItem(IDC_STATIC_PAGE_TITLE))
 		{
-			m_workflowStatus.SetStatus(Localization::Get(_T("workflow.unapplied")), CStatusLabel::TONE_WARNING);
-			m_workflowText.SetWindowText(Localization::Get(_T("workflow.unapplied_text")));
+			CRect titleRect;
+			title->GetWindowRect(&titleRect);
+			ScreenToClient(&titleRect);
+			const int titleRight = inlineProfile ? inlineLeft - S(12) : x0 + contentW;
+			place(IDC_STATIC_PAGE_TITLE, titleRect.left, S(4), max(0, titleRight - titleRect.left), S(36));
+			if (CWnd* subtitle = GetDlgItem(IDC_STATIC_PAGE_SUBTITLE))
+			{
+				CRect subtitleRect;
+				subtitle->GetWindowRect(&subtitleRect);
+				ScreenToClient(&subtitleRect);
+				place(IDC_STATIC_PAGE_SUBTITLE, subtitleRect.left, S(38), subtitleRect.Width(), S(18));
+			}
+		}
+		const int left = inlineProfile ? inlineLeft : x0 + S(2);
+		place(IDC_STATIC_CONFIG_LABEL, left, rowY + (fieldH - labelH) / 2, labelW, labelH);
+		const int comboX = left + labelW + S(8);
+		place(IDC_COMBO_CFGS, comboX, rowY, saveX - gap - comboX, S(260));
+		// Rows carry a detail line; give the list room for addresses.
+		m_cfgls.SetDroppedWidth(max(saveX - gap - comboX, S(360)));
+		place(IDC_BUTTON_SAVE_PROFILE, saveX, rowY, saveW, fieldH);
+		place(IDC_BUTTON_PROFILE_MENU, menuX, rowY, menuW, fieldH);
+		y = inlineProfile ? S(62) : y + fieldH + S(12);
+	}
+
+	// Proxy server card.
+	const int serverTop = y;
+	{
+		int row = serverTop + S(34);
+		if (CWnd* hint = GetDlgItem(IDC_STATIC_UPSTREAM_HINT))
+		{
+			CString text;
+			hint->GetWindowText(text);
+			hint->ShowWindow(text.IsEmpty() ? SW_HIDE : SW_SHOWNA);
+			if (!text.IsEmpty())
+			{
+				CClientDC dc(hint);
+				CFont* font = hint->GetFont();
+				CFont* oldFont = font ? dc.SelectObject(font) : NULL;
+				CRect bounds(0, 0, max(1, innerW), 0);
+				dc.DrawText(text, bounds, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
+				if (oldFont) dc.SelectObject(oldFont);
+				const int hintHeight = max(labelH, bounds.Height());
+				place(IDC_STATIC_UPSTREAM_HINT, innerX, row, innerW, hintHeight);
+				row += hintHeight + S(12);
+			}
+		}
+		const UINT serverIds[] = { IDC_STATIC_TYPE_LABEL, IDC_CB_PROXYTYPE, IDC_STATIC_HOST_LABEL,
+			IDC_EDIT_ADDR, IDC_STATIC_PORT_LABEL, IDC_EDIT_PORT, 0x2402 };
+		const UINT chainIds[] = { 0x2405, 0x2406 };
+		for (int i = 0; i < _countof(serverIds); ++i)
+			if (CWnd* control = GetDlgItem(serverIds[i]))
+				control->ShowWindow(m_chainMode ? SW_HIDE : SW_SHOW);
+		for (int i = 0; i < _countof(chainIds); ++i)
+			if (CWnd* control = GetDlgItem(chainIds[i]))
+				control->ShowWindow(m_chainMode ? SW_SHOW : SW_HIDE);
+		if (m_chainMode)
+		{
+			const UINT optionalIds[] = { IDC_STATIC_USER_LABEL, IDC_EDIT_USER, IDC_STATIC_PASSWORD_LABEL, IDC_EDIT_PASS,
+				IDC_STATIC_TRANSPORT_LABEL, IDC_COMBO_TRANSPORT, IDC_STATIC_PSK_LABEL, IDC_EDIT_TRANSPORT_PSK };
+			for (int i = 0; i < _countof(optionalIds); ++i)
+				if (CWnd* control = GetDlgItem(optionalIds[i]))
+					control->ShowWindow(SW_HIDE);
+            // Size cards to their font/content, with Add centred on the frame's
+            // title (9..29 DIP), and retain the compact footer gap.
+            const int listH = m_chainView.PreferredHeight();
+            const int addW = textWidth(0x2406) + S(30);
+            place(0x2406, innerX + innerW - addW, serverTop + S(19) - fieldH / 2, addW, fieldH);
+            place(0x2405, innerX, row, innerW, listH);
+            row += listH + S(4);
+		}
+		const int typeW = S(92), portW = S(64), endpointGap = S(8);
+		const int advancedW = textWidth(0x2402) + S(16);
+		const int minHostW = max(S(112), textWidth(IDC_STATIC_HOST_LABEL) + S(8));
+		const bool inlineAdvanced = innerW >= typeW + minHostW + portW + advancedW + endpointGap * 3;
+		// Reserve room for the optional toggle before growing the address field.
+		// Cap its width in both layouts so wrapping never creates an oversized edit.
+		const int hostW = min(S(220), inlineAdvanced
+			? innerW - typeW - portW - advancedW - endpointGap * 3
+			: innerW - typeW - endpointGap);
+		if (!m_chainMode)
+		{
+		place(IDC_STATIC_TYPE_LABEL, innerX, row, typeW, labelH);
+		place(IDC_CB_PROXYTYPE, innerX, row + labelH + S(2), typeW, S(260));
+		place(IDC_STATIC_HOST_LABEL, innerX + typeW + endpointGap, row, hostW, labelH);
+		place(IDC_EDIT_ADDR, innerX + typeW + endpointGap, row + labelH + S(2), hostW, fieldH);
+		// Keep the optional-section toggle beside the port, including at narrow
+		// widths where the pair moves together to the next row.
+		if (!inlineAdvanced) row += rowStep;
+		const int portX = inlineAdvanced ? innerX + typeW + hostW + endpointGap * 2 : innerX;
+		place(IDC_STATIC_PORT_LABEL, portX, row, portW, labelH);
+		place(IDC_EDIT_PORT, portX, row + labelH + S(2), portW, fieldH);
+		place(0x2402, portX + portW + endpointGap, row + labelH + S(2), advancedW, fieldH);
+
+		// Combined optional section follows lijing6006/ProxyLane PR #3.
+		row += rowStep;
+		const UINT advancedIds[] = { IDC_STATIC_USER_LABEL, IDC_EDIT_USER, IDC_STATIC_PASSWORD_LABEL, IDC_EDIT_PASS,
+			IDC_STATIC_TRANSPORT_LABEL, IDC_COMBO_TRANSPORT, IDC_STATIC_PSK_LABEL, IDC_EDIT_TRANSPORT_PSK };
+		for (int i = 0; i < _countof(advancedIds); ++i)
+			if (CWnd* control = GetDlgItem(advancedIds[i]))
+				control->ShowWindow(m_advancedOpen && !m_chainMode ? SW_SHOW : SW_HIDE);
+		if (m_advancedOpen && !m_chainMode)
+		{
+			CString authProtocol; m_cbProxyType.GetWindowText(authProtocol);
+            if (authProtocol == L"SSH") {
+                m_sshAuth.Show(true);
+                m_sshAuth.Layout(innerX, row - m_scrollY, innerW, gapX, labelH, fieldH);
+                row += rowStep;
+            }
+            const int half = (innerW - gapX) / 2;
+			place(IDC_STATIC_USER_LABEL, innerX, row, half, labelH);
+			place(IDC_EDIT_USER, innerX, row + labelH + S(2), half, fieldH);
+			place(IDC_STATIC_PASSWORD_LABEL, innerX + half + gapX, row, half, labelH);
+			place(IDC_EDIT_PASS, innerX + half + gapX, row + labelH + S(2), half, fieldH);
+
+			row += rowStep;
+			CString protocol; m_cbProxyType.GetWindowText(protocol);
+            const bool ssh = protocol == L"SSH";
+            GetDlgItem(IDC_STATIC_TRANSPORT_LABEL)->ShowWindow(ssh ? SW_HIDE : SW_SHOW);
+            m_cbTransport.ShowWindow(ssh ? SW_HIDE : SW_SHOW);
+            const int transportW = S(200);
+            const int pskOffset = ssh ? 0 : transportW + gapX;
+            const int pskW = innerW - pskOffset;
+            if (!ssh) {
+                place(IDC_STATIC_TRANSPORT_LABEL, innerX, row, transportW, labelH);
+                place(IDC_COMBO_TRANSPORT, innerX, row + labelH + S(2), transportW, S(260));
+            }
+            place(IDC_STATIC_PSK_LABEL, innerX + pskOffset, row, pskW, labelH);
+            place(IDC_EDIT_TRANSPORT_PSK, innerX + pskOffset, row + labelH + S(2), pskW, fieldH);
+			row += rowStep;
+		}
+		}
+
+		row += S(2);
+		const int buttonH = S(30);
+		const int testW = max(S(110), textWidth(IDC_TestProxy) + S(24));
+		// Enable and Disable share one slot (only the one matching the state is
+		// shown), sized for the wider caption so the row does not shift on toggle.
+		const int stateW = max(S(88), max(textWidth(IDOK), textWidth(IDCANCEL)) + S(24));
+		const int stateX = innerX + innerW - stateW;
+		const int testX = stateX - gap - testW;
+		// On a narrow page the test status gets its own line above the buttons.
+		const BOOL statusOwnRow = testX - gap - innerX < S(120);
+		if (statusOwnRow)
+		{
+			place(IDC_STATIC_TestProxy, innerX, row, innerW, S(28));
+			row += S(34);
 		}
 		else
 		{
-			m_workflowStatus.SetStatus(Localization::Get(_T("workflow.running")), CStatusLabel::TONE_SUCCESS);
-			m_workflowText.SetWindowText(Localization::Get(_T("workflow.running_text")));
+			place(IDC_STATIC_TestProxy, innerX, row, testX - gap - innerX, buttonH);
 		}
-	}
-	else
-	{
-		m_workflowStatus.SetStatus(Localization::Get(_T("workflow.ready")), CStatusLabel::TONE_INFO);
-		m_workflowText.SetWindowText(Localization::Get(_T("workflow.steps")));
+		place(IDC_TestProxy, max(innerX, testX), row, testW, buttonH);
+		place(IDOK, max(innerX, stateX), row, stateW, buttonH);
+		place(IDCANCEL, max(innerX, stateX), row, stateW, buttonH);
+		y = row + buttonH + S(14);
+		place(IDC_STATIC_PROXY_GROUP, x0, serverTop, contentW, y - serverTop);
+		y += S(12);
 	}
 
-	if (g_MainTab)
-		g_MainTab->SetPageAttention(CMainTab::PAGE_APPLICATIONS, running);
-	LayoutWorkflowCard();
+	// Section switcher.
+	{
+		const UINT ids[] = { IDC_RADIO_TAB_BASIC, IDC_RADIO_TAB_CHILD, IDC_RADIO_TAB_TARGET };
+		int x = x0 + S(4);
+		for (int i = 0; i < _countof(ids); ++i)
+		{
+			const int width = textWidth(ids[i]) + S(30);
+			place(ids[i], x, y, width, S(24));
+			x += width + S(14);
+		}
+		y += S(24) + S(6);
+	}
+
+	// Section card: the three option groups share one frame rectangle.
+	{
+		const int top = y;
+		// 24px switches on a 38px pitch leave visible air between option rows.
+		const int rowH = S(38);
+		const int checkH = S(24);
+		int row = top + S(34);
+        // Size switches by their label plus the track; wrap whole controls on
+        // narrow windows rather than losing the end of a setting's name.
+        auto flow = [&](std::initializer_list<UINT> ids, int extra, int start) {
+            int left = start;
+            for (UINT id : ids) {
+                const int w = min(innerW, textWidth(id) + S(extra));
+                if (left > innerX && left + w > innerX + innerW) { row += rowH; left = innerX; }
+                place(id, left, row, w, checkH); left += w + S(12);
+            }
+            row += rowH;
+        };
+        flow({IDC_CHECK_HOOKTCP, IDC_CHECK_HOOK_UDP, IDC_CHECK_HOOKCHILDPROCESS}, 44, innerX);
+        flow({IDC_CHECK_BLOCKUDP, IDC_CHECK_BLOCK_IPV6}, 44, innerX);
+        const int dnsLabelW = textWidth(IDC_STATIC_DNS_LABEL) + S(12);
+        place(IDC_STATIC_DNS_LABEL, innerX, row + S(4), dnsLabelW, labelH);
+        const int dnsOptionsW = textWidth(IDC_RADIO_DNSLOCAL) + textWidth(IDC_RADIO_DNSREMOTE)
+            + textWidth(IDC_RADIO_DNSDOH) + S(24 * 3 + 12 * 2);
+        int dnsLeft = innerX + dnsLabelW;
+        if (dnsLabelW + dnsOptionsW > innerW) { row += rowH; dnsLeft = innerX; }
+        flow({IDC_RADIO_DNSLOCAL, IDC_RADIO_DNSREMOTE, IDC_RADIO_DNSDOH}, 24, dnsLeft);
+        const int redirectW = min(innerW, textWidth(IDC_CHECK_REDIRECT_PRIVATE_DNS) + S(44));
+        place(IDC_CHECK_REDIRECT_PRIVATE_DNS, innerX, row, redirectW, checkH);
+        if (innerW - redirectW - S(12) < S(120)) {
+            row += rowH;
+            place(IDC_EDIT_REDIRECT_DNS, innerX, row, innerW, fieldH);
+        } else {
+            place(IDC_EDIT_REDIRECT_DNS, innerX + redirectW + S(12), row - (fieldH - checkH) / 2,
+                innerW - redirectW - S(12), fieldH);
+        }
+        const bool doh = m_btnDNSDoh.GetCheck() == BST_CHECKED;
+        for (UINT id : {IDC_STATIC_DOH_URL, IDC_EDIT_DOH_URL, IDC_EDIT_DOH_BOOTSTRAP})
+            GetDlgItem(id)->ShowWindow(m_activeTab == 0 && doh ? SW_SHOW : SW_HIDE);
+        GetDlgItem(IDC_CHECK_REDIRECT_PRIVATE_DNS)->ShowWindow(m_activeTab == 0 && !doh ? SW_SHOW : SW_HIDE);
+        GetDlgItem(IDC_EDIT_REDIRECT_DNS)->ShowWindow(m_activeTab == 0 && !doh ? SW_SHOW : SW_HIDE);
+        if (doh) {
+            const int labelW = textWidth(IDC_STATIC_DOH_URL) + S(16);
+            const int fieldsX = innerX + labelW;
+            const int fieldsW = max(0, innerW - labelW - gapX);
+            const int urlW = fieldsW / 2;
+            place(IDC_STATIC_DOH_URL, innerX, row, labelW - S(4), fieldH);
+            place(IDC_EDIT_DOH_URL, fieldsX, row, urlW, fieldH);
+            place(IDC_EDIT_DOH_BOOTSTRAP, fieldsX + urlW + gapX, row, fieldsW - urlW, fieldH);
+        }
+        const int height = m_activeTab == 0 ? row + max(fieldH, checkH) + S(16) - top
+            : max(S(220), client.Height() - margin - top);
+        const CRect frame(x0, top, x0 + contentW, top + height);
+        place(IDC_STATIC_GROUP_OTHER, frame.left, frame.top, frame.Width(), frame.Height());
+        place(IDC_STATIC_CHILDFILTER_GROUP, frame.left, frame.top, frame.Width(), frame.Height());
+        place(IDC_STATIC_TARGETFILTER_GROUP, frame.left, frame.top, frame.Width(), frame.Height());
+
+		// Child process and target filters share the same arrangement.
+		const int filterRadioTop = top + S(34);
+		const int hintH = S(36);
+		const int hintY = frame.bottom - pad - hintH + S(4);
+		const int editY = filterRadioTop + S(32);
+		const int editH = max(S(48), hintY - S(6) - editY);
+		place(IDC_RADIO_CHILDFILTER_EXCLUDE, innerX, filterRadioTop, S(190), checkH);
+		place(IDC_RADIO_CHILDFILTER_INCLUDE, innerX + S(200), filterRadioTop, S(200), checkH);
+		place(IDC_EDIT_CHILDFILTER, innerX, editY, innerW, editH);
+		place(IDC_STATIC_CHILDFILTER_HINT, innerX, hintY, innerW, hintH);
+		place(IDC_RADIO_TARGETFILTER_BYPASS, innerX, filterRadioTop, S(190), checkH);
+		place(IDC_RADIO_TARGETFILTER_PROXY, innerX + S(200), filterRadioTop, S(200), checkH);
+		place(IDC_EDIT_TARGETFILTER, innerX, editY, innerW, editH);
+		place(IDC_STATIC_TARGETFILTER_HINT, innerX, hintY, innerW, hintH);
+		y = frame.bottom + margin;
+	}
+
+	// Scroll range follows the content; showing or hiding the bar changes the
+	// client width, which needs one more pass.
+	const int maxScroll = max(0, y - client.Height());
+	SCROLLINFO info = { sizeof(info), SIF_RANGE | SIF_PAGE | SIF_POS, 0, y - 1, static_cast<UINT>(client.Height()),
+		min(scroll, maxScroll) };
+	SetScrollInfo(SB_VERT, &info, TRUE);
+	CRect after;
+	GetClientRect(&after);
+	if (freezeRedraw) SetRedraw(TRUE);
+	m_inLayout = FALSE;
+	if (scroll > maxScroll || after.Width() != client.Width())
+	{
+		m_scrollY = min(scroll, maxScroll);
+		LayoutSettingsPage();
+		return;
+	}
+	RedrawWindow(NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
 }
 
-void CPage1::LayoutFilterEditor(UINT groupId, CEdit& editor, UINT hintId)
+void CPage1::OnVScroll(UINT code, UINT position, CScrollBar* scrollBar)
 {
-	if (m_filterEditBaseHeight <= 0 || !editor.GetSafeHwnd())
-		return;
+	SCROLLINFO info = { sizeof(info), SIF_ALL };
+	GetScrollInfo(SB_VERT, &info);
+	const int line = UiTheme::ScaleForWindow(m_hWnd, 40);
+	int next = m_scrollY;
+	switch (code)
+	{
+	case SB_LINEUP: next -= line; break;
+	case SB_LINEDOWN: next += line; break;
+	case SB_PAGEUP: next -= static_cast<int>(info.nPage) - line; break;
+	case SB_PAGEDOWN: next += static_cast<int>(info.nPage) - line; break;
+	case SB_THUMBTRACK:
+	case SB_THUMBPOSITION: next = info.nTrackPos; break;
+	case SB_TOP: next = 0; break;
+	case SB_BOTTOM: next = info.nMax; break;
+	default: CModernDialog::OnVScroll(code, position, scrollBar); return;
+	}
+	next = max(0, min(next, info.nMax - static_cast<int>(info.nPage) + 1));
+	if (next != m_scrollY)
+	{
+		m_scrollY = next;
+		LayoutSettingsPage();
+	}
+}
 
-	CWnd* group = GetDlgItem(groupId);
-	CWnd* hint = GetDlgItem(hintId);
-	if (!group || !hint)
-		return;
+BOOL CPage1::OnMouseWheel(UINT flags, short delta, CPoint point)
+{
+	SCROLLINFO info = { sizeof(info), SIF_ALL };
+	GetScrollInfo(SB_VERT, &info);
+	const int maxScroll = max(0, info.nMax - static_cast<int>(info.nPage) + 1);
+	if (maxScroll <= 0)
+		return CModernDialog::OnMouseWheel(flags, delta, point);
+	const int next = max(0, min(maxScroll, m_scrollY - delta * UiTheme::ScaleForWindow(m_hWnd, 60) / WHEEL_DELTA));
+	if (next != m_scrollY)
+	{
+		m_scrollY = next;
+		LayoutSettingsPage();
+	}
+	return TRUE;
+}
 
-	CRect clientRect;
-	GetClientRect(&clientRect);
-
-	CRect editRect;
-	CRect hintRect;
-	CRect groupRect;
-	editor.GetWindowRect(&editRect);
-	hint->GetWindowRect(&hintRect);
-	group->GetWindowRect(&groupRect);
-	ScreenToClient(&editRect);
-	ScreenToClient(&hintRect);
-	ScreenToClient(&groupRect);
-
-	const int hintGap = max(0, hintRect.top - editRect.bottom);
-	const int groupPadding = max(0, groupRect.bottom - hintRect.bottom);
-	const int bottomMargin = UiTheme::ScaleForWindow(m_hWnd, 24);
-	const int desiredHeight = m_filterEditBaseHeight * 2;
-	const int maxHeight = clientRect.bottom - bottomMargin - editRect.top
-		- hintGap - hintRect.Height() - groupPadding;
-	const int targetHeight = max(m_filterEditBaseHeight,
-		min(desiredHeight, maxHeight));
-
-	editRect.bottom = editRect.top + targetHeight;
-	hintRect.OffsetRect(0, editRect.bottom + hintGap - hintRect.top);
-	groupRect.bottom = hintRect.bottom + groupPadding;
-
-	editor.MoveWindow(&editRect);
-	hint->MoveWindow(&hintRect);
-	group->MoveWindow(&groupRect);
+BOOL CPage1::UsesSecondaryText(UINT controlId) const
+{
+	switch (controlId)
+	{
+	case CSshAuthControls::LabelId:
+    case CSshAuthControls::KeyLabelId:
+	case IDC_STATIC_TYPE_LABEL:
+	case IDC_STATIC_HOST_LABEL:
+	case IDC_STATIC_PORT_LABEL:
+	case IDC_STATIC_USER_LABEL:
+	case IDC_STATIC_PASSWORD_LABEL:
+	case IDC_STATIC_TRANSPORT_LABEL:
+	case IDC_STATIC_PSK_LABEL:
+	case IDC_STATIC_DNS_LABEL:
+	case IDC_STATIC_CHILDFILTER_HINT:
+	case IDC_STATIC_TARGETFILTER_HINT:
+	case IDC_STATIC_UPSTREAM_HINT:
+		return TRUE;
+	}
+	return CModernDialog::UsesSecondaryText(controlId);
 }
 
 BOOL CPage1::GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI)
@@ -644,6 +855,22 @@ BOOL CPage1::GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI)
 	return TRUE;
 }
 
+INT CPage1::GetProxyChain(const LPPRCClient pPRCC, LPProxyInfo lpHops, INT nCapacity)
+{
+	// The caller asks only for a connection GetProxyInfo routed through a
+	// proxy, so the target filter has already had its say.
+	if (!pPRCC)
+		return 0;
+	CSingleLock runtimeLock(&m_runtimeLock, TRUE);
+	if (pPRCC->sType != SOCK_STREAM && !DohPolicy::Intercept(*pPRCC, m_ProxyInfo)) return 0;
+	if (!m_runtimeSettingsValid || m_runtimeChain.size() < 2)
+		return 0;
+	const INT hops = (INT)m_runtimeChain.size();
+	if (lpHops && nCapacity >= hops)
+		std::copy(m_runtimeChain.begin(), m_runtimeChain.end(), lpHops);
+	return hops;
+}
+
 BOOL CPage1::GetProxySettings(LPProxySettingsInfo lpPSI)
 {
 	if (!lpPSI)
@@ -670,7 +897,7 @@ BOOL CPage1::GetProxySettingsFromUi(LPProxySettingsInfo lpPSI)
 	psi.bBlockUDP = m_btnBlockUDP.GetCheck() == BST_CHECKED;
 	psi.bBlockIPv6 = m_btnBlockIPv6.GetCheck() == BST_CHECKED;
 	psi.bHookCreateProcess = m_btnHookChildProcess.GetCheck();
-	psi.nDNSOption = m_btnDNSLocal.GetCheck() ? PSI_DNSOPT_LOCAL : PSI_DNSOPT_REMOTE;
+	psi.nDNSOption = m_btnDNSDoh.GetCheck() ? PSI_DNSOPT_DOH : m_btnDNSLocal.GetCheck() ? PSI_DNSOPT_LOCAL : PSI_DNSOPT_REMOTE;
 	psi.bHookLanIP = m_bHookLanIP;
 	psi.bDisableLLMNR = m_bDisableLLMNR;
 	psi.bDisableMDNS = m_bDisableMDNS;
@@ -694,10 +921,22 @@ BOOL CPage1::GetProxySettingsFromUi(LPProxySettingsInfo lpPSI)
 BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 {
 	m_settingsValidationKey = _T("profile.invalid_endpoint");
+	m_settingsValidationName.Empty();
 
 	CString szType, szHost, szPort, szUser, szPass, szTransportPsk;
 
-	m_cbProxyType.GetLBText(m_cbProxyType.GetCurSel(), szType);
+	const int typeIndex = m_cbProxyType.GetCurSel();
+	if (typeIndex == CB_ERR)
+	{
+		m_settingsValidationKey = L"profile.unsupported_type";
+		return FALSE;
+	}
+	m_cbProxyType.GetLBText(typeIndex, szType);
+	if (szType != L"NOPROXY" && szType != L"SOCKS5" && szType != L"HTTP" && szType != L"SSH")
+	{
+		m_settingsValidationKey = L"profile.unsupported_type";
+		return FALSE;
+	}
 	m_edit_HostName.GetWindowText(szHost);
 	m_edit_Port.GetWindowText(szPort);
 	m_edit_User.GetWindowText(szUser);
@@ -715,10 +954,38 @@ BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 	pi.strProxyPass = szPass;
 	pi.reserved = transportMode;
 
-	if (!szHost.GetLength() || !szPort.GetLength() || !_ttoi(szPort))
+	if (szType.CompareNoCase(_T("NOPROXY")) == 0)
+	{
+		// Keep the explicit profile type, but discard irrelevant proxy settings.
+		pi.strProxyHost = _T("");
+		pi.nProxyPort = 0;
+		pi.strProxyUser = _T("");
+		pi.strProxyPass = _T("");
+		pi.reserved = PROXY_TRANSPORT_PLAIN;
+		SecureZeroMemory(pi.strTransportPsk.szbuf, sizeof(pi.strTransportPsk.szbuf));
+		*lpPI = pi;
+		return TRUE;
+	}
+
+	if (!szHost.GetLength() || !szPort.GetLength() || _ttoi(szPort) <= 0 || _ttoi(szPort) > 65535)
 		return FALSE;
+    if (szType == L"SSH") {
+        if (!m_sshAuth.Apply(pi)) { m_settingsValidationKey = L"ssh.key_required"; return FALSE; }
+        szTransportPsk.Trim();
+        if (szUser.IsEmpty() || !SshProfile::Encode(szUser, pi.strProxyUser.szbuf) ||
+            !SshProfile::Encode(szPass, pi.strProxyPass.szbuf) ||
+            !SshProfile::ValidFingerprint(szTransportPsk) ||
+            !SshProfile::Encode(szTransportPsk, pi.strTransportPsk.szbuf)) {
+            m_settingsValidationKey = L"profile.ssh_invalid"; return FALSE;
+        }
+    }
 	if (transportMode == PROXY_TRANSPORT_GONC_TLS_PSK)
 	{
+		if (!ProxySupportsOptionalModules())
+		{
+			m_settingsValidationKey = _T("profile.secure_transport_unavailable");
+			return FALSE;
+		}
 		if (!ProxyTransportPolicy::SupportsGoncTlsPsk(pi.GetProxyType()))
 		{
 			m_settingsValidationKey = _T("profile.secure_transport_unsupported");
@@ -752,12 +1019,81 @@ BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 	return TRUE;
 }
 
-void CPage1::OnBnClickedOk()
+BOOL CPage1::GetRoute(LPProxyInfo first, ProxyChain* chain)
 {
-	StartProxy(TRUE);
+	chain->clear();
+	if (!m_chainMode)
+        return GetSettings(first) && ApplyDohSettings(*first);
+
+	m_settingsValidationName.Empty();
+	if (!m_profileStore.ResolveChain(m_chainHops, *chain, m_settingsValidationKey,
+		m_settingsValidationName))
+		return FALSE;
+	for (size_t i = 0; i < chain->size(); ++i)
+	{
+		if ((*chain)[i].reserved == PROXY_TRANSPORT_GONC_TLS_PSK && !ProxySupportsOptionalModules())
+		{
+			m_settingsValidationKey = _T("profile.secure_transport_unavailable");
+			m_settingsValidationName = m_chainHops[i];
+			chain->clear();
+			return FALSE;
+		}
+	}
+	*first = chain->front();
+    if (!ApplyDohSettings(*first)) return FALSE;
+    chain->front() = *first;
+    return TRUE;
 }
 
-BOOL CPage1::LoadProfileByName(LPCTSTR profileName, BOOL rememberSelection)
+BOOL CPage1::ApplyDohSettings(ProxyInfo& proxy)
+{
+    proxy.dohEnabled = m_btnDNSDoh.GetCheck() == BST_CHECKED;
+    proxy.dohUrl.szbuf[0] = proxy.dohBootstrap.szbuf[0] = 0;
+    proxy.dohBlockIPv6 = m_btnBlockIPv6.GetCheck() == BST_CHECKED;
+    if (!proxy.dohEnabled) return TRUE;
+    m_settingsValidationName.Empty();
+    m_settingsValidationKey = L"profile.doh_unavailable";
+    if (!ProxySupportsOptionalModules()) return FALSE;
+    m_settingsValidationKey = L"profile.doh_requires_proxy";
+    if (proxy.GetProxyType() == PROXYTYPE_NOPROXY) return FALSE;
+    m_settingsValidationKey = L"profile.invalid_doh";
+    CString url, ips;
+    m_editDohUrl.GetWindowText(url); m_editDohBootstrap.GetWindowText(ips);
+    url.Trim(); ips.Trim();
+    for (int i=0; i<url.GetLength(); ++i) if (url[i] > 127) return FALSE;
+    for (int i=0; i<ips.GetLength(); ++i) if (ips[i] > 127) return FALSE;
+    std::vector<_SockAddr> endpoints;
+    if (!DohPolicy::Parse(CStringA(url), CStringA(ips), proxy.dohBlockIPv6 != FALSE, endpoints)) return FALSE;
+    proxy.dohUrl = url; proxy.dohBootstrap = ips;
+    return TRUE;
+}
+
+CString CPage1::SettingsValidationMessage() const
+{
+	// Chain errors name the hop; the others take no argument.
+	return m_settingsValidationName.IsEmpty()
+		? Localization::Get(m_settingsValidationKey)
+		: Localization::Format(m_settingsValidationKey, (LPCTSTR)m_settingsValidationName);
+}
+
+void CPage1::OnBnClickedOk()
+{
+	StartProxyFromUi();
+}
+
+BOOL CPage1::StartProxyFromUi()
+{
+	// Explicit enable buttons and tray actions remember the startup profile;
+	// automation and application launches use StartProxy directly.
+	if (m_proxyController.IsRunning())
+		return TRUE;
+	if (!StartProxy(TRUE))
+		return FALSE;
+	m_profileStore.SetLastSelected(GetCurrentProfileName());
+	return TRUE;
+}
+
+BOOL CPage1::LoadProfileByName(LPCTSTR profileName)
 {
 	if (!profileName || !profileName[0])
 		return FALSE;
@@ -773,8 +1109,6 @@ BOOL CPage1::LoadProfileByName(LPCTSTR profileName, BOOL rememberSelection)
 
 	m_cfgls.SetCurSel(index);
 	UILoadCfg(&item);
-	if (rememberSelection)
-		m_profileStore.SetLastSelected(item.strName);
 	return TRUE;
 }
 
@@ -794,8 +1128,6 @@ void CPage1::GetSavedProfileNames(std::vector<CString>& names)
 void CPage1::SetProfileDirty(BOOL dirty)
 {
 	m_profileDirty = dirty;
-	if (m_btnDeleteProfile.GetSafeHwnd())
-		m_btnDeleteProfile.EnableWindow(m_cfgls.GetCurSel() != CB_ERR);
 	if (m_OK.GetSafeHwnd())
 		UpdateProxyStateUi();
 	else if (m_btnSaveProfile.GetSafeHwnd())
@@ -816,12 +1148,50 @@ void CPage1::SetRuntimeDirty(BOOL dirty)
 
 void CPage1::OnProfileFieldChanged()
 {
+	// SetWindowText sends EN_CHANGE while UILoadCfg is still populating controls.
+	// Normalize only the complete profile, never a mixture of old and new fields.
+	if (m_loadingProfile) return;
+	if (!m_bIsTesting) ClearChainProgress();
 	UpdateTransportEnable();
-	if (!m_loadingProfile)
-	{
-		SetProfileDirty(TRUE);
-		SetRuntimeDirty(TRUE);
-	}
+	SetProfileDirty(TRUE);
+	SetRuntimeDirty(TRUE);
+}
+
+void CPage1::OnProtocolChanged()
+{
+    // A TLS PSK and an SSH host-key pin have different meanings.
+    const bool wasSsh = m_editTransportPsk.GetPasswordChar() == 0;
+    CString protocol; m_cbProxyType.GetWindowText(protocol);
+    ProxyInfo selectedProxy;
+    selectedProxy.strProxyType = protocol;
+    // Apply the default on a protocol selection, not on every UI refresh,
+    // so users can still explicitly choose to allow direct UDP traffic.
+    if (!m_loadingProfile && m_cbProxyType.GetCurSel() != CB_ERR &&
+        !ProxyTransportPolicy::SupportsUdpProxy(selectedProxy.GetProxyType()))
+        m_btnBlockUDP.SetCheck(BST_CHECKED);
+    if (wasSsh || protocol == L"SSH") m_editTransportPsk.SetWindowText(L"");
+    if (wasSsh != (protocol == L"SSH")) {
+        if (m_sshAuth.IsKey()) m_edit_Pass.SetWindowText(L"");
+        m_sshAuth.Load(NULL);
+    }
+    if (protocol == L"SSH") {
+        m_advancedOpen = TRUE; UpdateAdvancedCaption();
+        CString port; m_edit_Port.GetWindowText(port);
+        if (port.IsEmpty() || port == L"1080" || port == L"8080") m_edit_Port.SetWindowText(L"22");
+    }
+    OnProfileFieldChanged(); LayoutSettingsPage();
+}
+
+void CPage1::OnSshAuthChanged()
+{
+    if (m_loadingProfile) return;
+    m_edit_Pass.SetWindowText(L""); // Password and private-key passphrase are separate credentials.
+    UpdateTransportEnable(); LayoutSettingsPage(); OnProfileFieldChanged();
+}
+
+void CPage1::OnImportSshKey()
+{
+    if (m_sshAuth.Import()) OnProfileFieldChanged();
 }
 
 void CPage1::UpdateTransportEnable()
@@ -835,31 +1205,121 @@ void CPage1::UpdateTransportEnable()
 	ProxyInfo selectedProxy;
 	selectedProxy.strProxyType = proxyType;
 	const int selectedProxyType = selectedProxy.GetProxyType();
+    const BOOL ssh = selectedProxyType == PROXYTYPE_SSH;
+	// A chain's own (hidden) server fields do not describe the route.
+	const BOOL direct = !m_chainMode && proxyType.CompareNoCase(_T("NOPROXY")) == 0;
+	const CString group = Localization::Get(m_chainMode ? L"page1.chain_group" :
+		direct ? L"page1.direct_group" : L"page1.proxy_group");
+	const CString hint = m_chainMode ? Localization::Get(L"page1.chain_hint") :
+		typeIndex == CB_ERR ? Localization::Get(L"profile.unsupported_type") :
+		direct ? Localization::Get(L"page1.direct_hint") :
+        ssh ? Localization::Get(L"page1.ssh_hint") :
+		m_firstRunGuide ? Localization::Get(L"page1.first_run_hint") : CString();
+	CString previousHint, previousGroup;
+	GetDlgItemText(IDC_STATIC_UPSTREAM_HINT, previousHint);
+	GetDlgItemText(IDC_STATIC_PROXY_GROUP, previousGroup);
+	if (previousGroup != group) SetDlgItemText(IDC_STATIC_PROXY_GROUP, group);
+	if (previousHint != hint) SetDlgItemText(IDC_STATIC_UPSTREAM_HINT, hint);
+	m_edit_HostName.EnableWindow(!direct);
+	m_edit_Port.EnableWindow(!direct);
+	m_edit_User.EnableWindow(!direct);
+	m_edit_Pass.EnableWindow(!direct);
+	m_btnHookTCP.SetWindowText(Localization::Get(direct
+		? _T("page1.direct_tcp") : _T("page1.proxy_tcp")));
+	m_btnHookUDP.SetWindowText(Localization::Get(direct
+		? _T("page1.direct_udp") : _T("page1.proxy_udp")));
+	m_btnBlockUDP.SetWindowText(Localization::Get(direct
+		? _T("page1.direct_block_udp") : _T("page1.block_udp")));
 	const BOOL supportsSecureTransport =
 		ProxyTransportPolicy::SupportsGoncTlsPsk(selectedProxyType);
-	if (!supportsSecureTransport)
+	// Preserve an encrypted profile on unsupported hosts; never silently downgrade it.
+	const BOOL supportsModules = ProxySupportsOptionalModules();
+	if (direct || ssh || (typeIndex != CB_ERR && supportsModules && !supportsSecureTransport))
 		m_cbTransport.SetCurSel(PROXY_TRANSPORT_PLAIN);
-	m_cbTransport.EnableWindow(supportsSecureTransport);
-	m_editTransportPsk.EnableWindow(supportsSecureTransport &&
-		m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK);
+	m_cbTransport.EnableWindow(supportsModules && supportsSecureTransport);
+	m_editTransportPsk.EnableWindow(ssh || (supportsModules && supportsSecureTransport &&
+        m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK));
+    SetDlgItemText(IDC_STATIC_PSK_LABEL, Localization::Get(ssh ? L"ssh.host_key" : L"common.psk"));
+    SetDlgItemText(IDC_STATIC_PASSWORD_LABEL, Localization::Get(ssh && m_sshAuth.IsKey() ? L"ssh.passphrase" : L"common.password"));
+    const TCHAR passwordChar = ssh ? 0 : L'\x25cf';
+    if (m_editTransportPsk.GetPasswordChar() != passwordChar) {
+        m_editTransportPsk.SetPasswordChar(passwordChar); m_editTransportPsk.Invalidate();
+    }
 	if (m_btnHookUDP.GetSafeHwnd())
 	{
-		const BOOL supportsUdp =
-			ProxyTransportPolicy::SupportsUdpProxy(selectedProxyType);
-		if (!supportsUdp)
+		// UDP never goes through a chain.
+		const BOOL supportsUdp = !m_chainMode &&
+			typeIndex != CB_ERR && ProxyTransportPolicy::SupportsUdpProxy(selectedProxyType);
+		if ((typeIndex != CB_ERR || m_chainMode) && !supportsUdp)
 			m_btnHookUDP.SetCheck(BST_UNCHECKED);
 		m_btnHookUDP.EnableWindow(supportsUdp);
 	}
+	UpdateProfileTag();
+	if (previousHint != hint) LayoutSettingsPage();
+}
+
+void CPage1::OnDohPreset()
+{
+    // Presets only fill the existing fields; saving and applying remain explicit.
+    static const struct { LPCWSTR labelKey; LPCWSTR url; LPCWSTR ips; } presets[] = {
+        { L"page1.doh_preset_google", L"https://dns.google/dns-query", L"8.8.8.8, 8.8.4.4" },
+        { L"page1.doh_preset_cloudflare", L"https://cloudflare-dns.com/dns-query", L"1.1.1.1, 1.0.0.1" },
+        { L"page1.doh_preset_quad9", L"https://dns.quad9.net/dns-query", L"9.9.9.9, 149.112.112.112" },
+        { L"page1.doh_preset_ali", L"https://dns.alidns.com/dns-query", L"223.5.5.5, 223.6.6.6" }
+    };
+    CModernPopupMenu menu;
+    if (!menu.CreatePopupMenu()) return;
+    for (UINT i = 0; i < _countof(presets); ++i)
+        menu.AppendMenu(MF_STRING, i + 1, Localization::Get(presets[i].labelKey));
+    CRect anchor;
+    m_btnDohPreset.GetWindowRect(&anchor);
+    const UINT selected = menu.TrackPopupMenu(TPM_RETURNCMD | TPM_LEFTALIGN | TPM_RIGHTBUTTON,
+        anchor.left, anchor.bottom, this);
+    if (!selected || selected > _countof(presets)) return;
+
+    // Avoid handling a partial URL/IP pair through the EN_CHANGE callbacks.
+    const BOOL wasLoading = m_loadingProfile;
+    m_loadingProfile = TRUE;
+    m_editDohUrl.SetWindowText(presets[selected - 1].url);
+    m_editDohBootstrap.SetWindowText(presets[selected - 1].ips);
+    m_loadingProfile = wasLoading;
+    OnProfileFieldChanged();
 }
 
 void CPage1::OnDnsSettingsChanged()
 {
 	UpdateDnsRedirectEnable();
-	OnProfileFieldChanged();
+    OnProfileFieldChanged();
+    LayoutSettingsPage();
+    if (m_activeTab == 0 && m_btnDNSDoh.GetCheck() == BST_CHECKED) {
+        // Reveal the expanded DNS settings using the page's existing scroll
+        // position. Leave focus on the selected radio for keyboard navigation.
+        CRect settings, bootstrap, client;
+        m_btnDNSDoh.GetWindowRect(&settings);
+        m_editDohBootstrap.GetWindowRect(&bootstrap);
+        settings.UnionRect(settings, bootstrap);
+        ScreenToClient(&settings);
+        GetClientRect(&client);
+        const int margin = UiTheme::ScaleForWindow(m_hWnd, 8);
+        settings.InflateRect(0, margin);
+        int next = m_scrollY;
+        if (settings.bottom > client.bottom)
+            next += settings.bottom - client.bottom;
+        else if (settings.top < client.top)
+            next += settings.top - client.top;
+        SCROLLINFO info = { sizeof(info), SIF_ALL };
+        GetScrollInfo(SB_VERT, &info);
+        next = max(0, min(next, info.nMax - static_cast<int>(info.nPage) + 1));
+        if (next != m_scrollY) {
+            m_scrollY = next;
+            LayoutSettingsPage();
+        }
+    }
 }
 
 void CPage1::UpdateDnsRedirectEnable()
 {
+    m_btnDNSDoh.EnableWindow(ProxySupportsOptionalModules());
 	const BOOL remote = m_btnDNSRemote.GetCheck() == BST_CHECKED;
 	m_btnRedirectPrivateDNS.EnableWindow(remote);
 	m_editRedirectDNS.EnableWindow(remote &&
@@ -868,6 +1328,12 @@ void CPage1::UpdateDnsRedirectEnable()
 
 BOOL CPage1::ValidateDnsRedirectSettings(BOOL showError)
 {
+    if (m_btnDNSDoh.GetCheck() == BST_CHECKED) {
+        ProxyInfo proxy; ProxyChain chain;
+        if (GetRoute(&proxy, &chain)) return TRUE;
+        if (showError) MessageBox(SettingsValidationMessage(), Localization::Get(L"status.invalid_config"), MB_ICONERROR);
+        return FALSE;
+    }
 	if (m_btnDNSRemote.GetCheck() != BST_CHECKED ||
 		m_btnRedirectPrivateDNS.GetCheck() != BST_CHECKED)
 		return TRUE;
@@ -914,22 +1380,49 @@ BOOL CPage1::SaveCurrentProfile(LPCTSTR profileName)
 			Localization::Get(_T("profile.save_failed_title")), MB_ICONINFORMATION);
 		return FALSE;
 	}
-	if (!GetSettings(&item.pi))
+	// A profile keeps the type it was created with: never let a draft of the
+	// other type overwrite it.
 	{
-		MessageBox(Localization::Get(m_settingsValidationKey),
+		std::vector<CString> names;
+		m_profileStore.ListNames(names);
+		for (const CString& name : names)
+		{
+			if (name.CompareNoCase(item.strName) != 0)
+				continue;
+			CfgProxyItem existing;
+			existing.strName = name;
+			m_profileStore.Load(existing); // sets the type even for an invalid server profile
+			if (!existing.bChain != !m_chainMode)
+			{
+				MessageBox(Localization::Format(_T("profile.type_conflict"), (LPCTSTR)item.strName),
+					Localization::Get(_T("profile.save_failed_title")), MB_ICONINFORMATION);
+				return FALSE;
+			}
+		}
+	}
+	// A chain may be saved before it is complete; it is checked when enabled.
+	if (!m_chainMode && !GetSettings(&item.pi))
+	{
+		MessageBox(SettingsValidationMessage(),
 			Localization::Get(_T("profile.save_failed_title")), MB_ICONERROR);
 		return FALSE;
 	}
 	if (!ValidateDnsRedirectSettings(TRUE))
 		return FALSE;
 
-	m_profileStore.SetLastSelected(item.strName);
 	UIGetCfg(&item);
-	m_profileStore.Save(item);
+	if (!m_profileStore.Save(item))
+	{
+		const CString reason = ConfigStorage::ErrorText(GetLastError());
+		MessageBox(Localization::Format(L"storage.save_failed", (LPCTSTR)reason, (LPCTSTR)Localization::SettingsPath()),
+			Localization::Get(L"profile.save_failed_title"), MB_ICONERROR);
+		return FALSE;
+	}
 
 	int index = m_cfgls.FindStringExact(-1, item.strName);
 	if (index == CB_ERR)
 		index = m_cfgls.AddString(item.strName);
+	RefreshProfileEntries();
 	m_loadingProfile = TRUE;
 	m_cfgls.SetCurSel(index);
 	m_cfgls.SetWindowText(item.strName);
@@ -937,7 +1430,17 @@ BOOL CPage1::SaveCurrentProfile(LPCTSTR profileName)
 	m_loadedProfileName = item.strName;
 	m_draftProfileName = item.strName;
 	SetProfileDirty(FALSE);
+	EndFirstRunGuide();
 	return TRUE;
+}
+
+void CPage1::EndFirstRunGuide()
+{
+	if (!m_firstRunGuide)
+		return;
+	m_firstRunGuide = FALSE;
+	UpdateTransportEnable();
+	LayoutSettingsPage();
 }
 
 void CPage1::RestoreProfileSelection()
@@ -971,12 +1474,30 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 	if (m_proxyController.IsRunning())
 		return TRUE;
 
+	// A newly created draft needs a saved identity before it can run.
+	if (m_cfgls.FindStringExact(-1, GetCurrentProfileName()) == CB_ERR)
+	{
+		if (!showErrors)
+			return FALSE;
+		if (MessageBox(Localization::Get(_T("profile.save_before_start")),
+			Localization::Get(_T("profile.save_before_start_title")), MB_OKCANCEL | MB_ICONINFORMATION) != IDOK)
+			return FALSE;
+		CString name;
+		m_cfgls.GetWindowText(name);
+		name.Trim();
+		if (name.IsEmpty())
+			name = _T("proxy");
+		if (!SaveCurrentProfile(name))
+			return FALSE;
+	}
+
 	ProxyInfo proxyInfo;
+	ProxyChain chain;
 	ProxySettingsInfo runtimeSettings;
-	if (!GetSettings(&proxyInfo))
+	if (!GetRoute(&proxyInfo, &chain))
 	{
 		if (showErrors)
-			MessageBox(Localization::Get(m_settingsValidationKey),
+			MessageBox(SettingsValidationMessage(),
 				Localization::Get(_T("proxy.start_failed_title")), MB_ICONERROR);
 		return FALSE;
 	}
@@ -990,13 +1511,15 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 
 	if (!GetProxySettingsFromUi(&runtimeSettings))
 		return FALSE;
-	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()))
+	// UDP never goes through a chain: it stays unhooked (direct or blocked).
+	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()) || !chain.empty())
 		runtimeSettings.bHookUDP = FALSE;
 
 	PublishProfileSnapshots();
 	{
 		CSingleLock runtimeLock(&m_runtimeLock, TRUE);
 		m_ProxyInfo = proxyInfo;
+		m_runtimeChain = chain;
 		m_runtimeSettings = runtimeSettings;
 		m_runtimeSettingsValid = TRUE;
 	}
@@ -1042,16 +1565,50 @@ CString CPage1::GetCurrentProfileName()
 	return profileName;
 }
 
+CString CPage1::GetSelectedProfileSummary()
+{
+	// Read the same draft that StartProxy uses, without validating or saving it.
+	const CString name = GetCurrentProfileName();
+	if (name.IsEmpty()) return CString();
+	if (m_chainMode)
+	{
+		CString route;
+		for (const CString& hop : m_chainHops)
+			route += (route.IsEmpty() ? L"" : L" \x2192 ") + hop;
+		return name + L" \x00b7 " + Localization::Format(L"launch.profile_chain",
+			route.IsEmpty() ? L"\x2014" : (LPCTSTR)route);
+	}
+	CString type, host, port;
+	m_cbProxyType.GetWindowText(type);
+	if (type.CompareNoCase(L"NOPROXY") == 0)
+		return name + L" \x00b7 " + Localization::Get(L"launch.profile_direct");
+	m_edit_HostName.GetWindowText(host);
+	m_edit_Port.GetWindowText(port);
+	host.Trim(); port.Trim();
+	if (host.Find(L':') >= 0 && host.Left(1) != L"[") host = L"[" + host + L"]";
+	if (host.IsEmpty()) host = L"\x2014";
+	if (port.IsEmpty()) port = L"\x2014";
+	return name + L" \x00b7 " + type + L" " + host + L":" + port;
+}
+
+CString CPage1::GetSelectedRecentProfileId()
+{
+	const CString name = GetCurrentProfileName();
+	// Preview existing history without creating an identity for an unsaved draft.
+	return name.IsEmpty() ? CString() : g_ini.GetString(_T("proxy_") + name, _T("RecentAppsId"));
+}
+
 BOOL CPage1::ApplyRuntimeSettings()
 {
 	if (!m_proxyController.IsRunning())
 		return FALSE;
 
 	ProxyInfo proxyInfo;
+	ProxyChain chain;
 	ProxySettingsInfo runtimeSettings;
-	if (!GetSettings(&proxyInfo))
+	if (!GetRoute(&proxyInfo, &chain))
 	{
-		MessageBox(Localization::Get(m_settingsValidationKey),
+		MessageBox(SettingsValidationMessage(),
 			Localization::Get(_T("apply.failed_title")), MB_ICONERROR);
 		return FALSE;
 	}
@@ -1060,13 +1617,14 @@ BOOL CPage1::ApplyRuntimeSettings()
 
 	if (!GetProxySettingsFromUi(&runtimeSettings))
 		return FALSE;
-	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()))
+	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()) || !chain.empty())
 		runtimeSettings.bHookUDP = FALSE;
 
 	PublishProfileSnapshots();
 	{
 		CSingleLock runtimeLock(&m_runtimeLock, TRUE);
 		m_ProxyInfo = proxyInfo;
+		m_runtimeChain = chain;
 		m_runtimeSettings = runtimeSettings;
 		m_runtimeSettingsValid = TRUE;
 	}
@@ -1117,8 +1675,36 @@ BOOL CPage1::IsProxyRunning() const
 	return m_proxyController.IsRunning();
 }
 
+CString CPage1::QuicUdpWarning()
+{
+	if (!m_btnHookUDP.GetSafeHwnd()) return CString();
+	BOOL blocked, hooked;
+	int type;
+	if (IsProxyRunning()) {
+		CSingleLock runtimeLock(&m_runtimeLock, TRUE);
+		if (!m_runtimeSettingsValid) return CString();
+		blocked = m_runtimeSettings.bBlockUDP;
+		hooked = m_runtimeSettings.bHookUDP;
+		type = m_ProxyInfo.GetProxyType();
+	} else {
+		blocked = m_btnBlockUDP.GetCheck() == BST_CHECKED;
+		hooked = m_btnHookUDP.GetCheck() == BST_CHECKED;
+		const int selected = m_cbProxyType.GetCurSel();
+		if (selected == CB_ERR) return CString();
+		CString name; m_cbProxyType.GetLBText(selected, name);
+		ProxyInfo info; info.strProxyType = name; type = info.GetProxyType();
+	}
+	if (blocked) return Localization::Get(L"mitm.quic_udp_blocked");
+	if (!ProxyTransportPolicy::SupportsUdpProxy(type)) return Localization::Get(L"mitm.quic_udp_unsupported");
+	if (!hooked) return Localization::Get(L"mitm.quic_udp_not_captured");
+	return CString();
+}
+
 void CPage1::OnDestroy()
 {
+	++m_testGeneration;
+	m_testCompletionPending = false;
+	if (m_pProxyTester) { m_pProxyTester->Release(); m_pProxyTester = NULL; }
 	CModernDialog::OnDestroy();
 
 	// TODO: 在此处添加消息处理程序代码
@@ -1126,8 +1712,23 @@ void CPage1::OnDestroy()
 }
 
 
+CString CPage1::GetProxyTestStatus(CStatusLabel::Tone& tone) const
+{
+	CString text;
+	tone = CStatusLabel::TONE_NEUTRAL;
+	if (m_staticTestProxy.GetSafeHwnd())
+	{
+		m_staticTestProxy.GetWindowText(text);
+		tone = m_staticTestProxy.GetTone();
+	}
+	return text;
+}
+
 void CPage1::OnBnClickedTestproxy()
 {
+	++m_testGeneration; // Cancel/retry invalidates completion messages already queued.
+	m_testCompletionPending = false;
+	m_testCompletionDetail.Empty();
 	// TODO: 在此添加控件通知处理程序代码
 	if (m_pTestProxy == NULL)
 	{
@@ -1144,10 +1745,18 @@ void CPage1::OnBnClickedTestproxy()
 		m_pProxyTester->Release();
 		m_pProxyTester = NULL;
 		m_bIsTesting = FALSE;
+		UpdateChainButtons();
 		m_proxyTestPhase = PROXY_TEST_NONE;
 		m_testIpv6Result = IPV6_TEST_NOT_RUN;
 		m_btnTest.SetWindowText(Localization::Get(_T("action.test_current")));
 		UpdateProxyTestStatus();
+		if (!m_chainProgress.empty())
+		{
+			m_chainElapsed = GetTickCount() - m_chainStarted;
+			m_chainProgressRunning = false; KillTimer(0x312);
+			m_chainConclusion = Localization::Get(L"chain.test.cancelled");
+			UpdateChainProgress();
+		}
 		return;
 	}
 
@@ -1155,22 +1764,38 @@ void CPage1::OnBnClickedTestproxy()
 		m_pProxyTester->Release();
 	m_pProxyTester = NULL;
 	m_bIsTesting = FALSE;
+	UpdateChainButtons();
 	m_proxyTestPhase = PROXY_TEST_NONE;
 	m_testIpv6Result = IPV6_TEST_NOT_RUN;
 	m_testUdpRequested = FALSE;
+	m_testTcpPassed = FALSE;
+    m_testDohQuerying = false;
+	m_testUdpPassed = FALSE;
+	m_testUdpError = 0;
 
+	ClearChainProgress();
 	ProxyInfo testProxyInfo;
-	if (!GetSettings(&testProxyInfo))
+	if (!GetRoute(&testProxyInfo, &m_testChain))
 	{
-		MessageBox(Localization::Get(m_settingsValidationKey),
+		MessageBox(SettingsValidationMessage(),
 			Localization::Get(_T("test.invalid_title")), MB_ICONERROR);
 		m_staticTestProxy.SetStatus(Localization::Get(_T("status.invalid_config")), CStatusLabel::TONE_DANGER);
 		m_proxyTestPhase = PROXY_TEST_NONE;
 		return;
 	}
 	m_testProxyInfo = testProxyInfo;
-	m_testUdpRequested = m_btnHookUDP.GetCheck() == BST_CHECKED &&
-		testProxyInfo.GetProxyType() == PROXYTYPE_SOCKS5;
+	m_testChainNames = !m_testChain.empty() ? m_chainHops : std::vector<CString>();
+	if (m_testChain.size() > 1)
+	{
+		m_chainProgress.assign(m_testChain.size(), ProxyTestHopProgress());
+		m_chainErrors.resize(m_testChain.size());
+		m_chainStarted = GetTickCount(); m_chainElapsed = 0;
+		m_chainProgressRunning = true; m_chainView.followProgress = true;
+		SetTimer(0x312, 100, NULL);
+		UpdateChainProgress();
+	}
+	// This explicit UDP capability probe is independent of business DNS mode.
+	m_testUdpRequested = testProxyInfo.GetProxyType() == PROXYTYPE_SOCKS5 && m_testChain.empty();
 
 	PRCClient client;
 
@@ -1193,56 +1818,79 @@ void CPage1::OnBnClickedTestproxy()
 	strncpy(client.szDomainName, strTestHost, 255);
 #endif
 	client.dstAddr.SetPort(nTestPort);
+	m_testTcpTarget = Localization::Format(_T("test.result.tcp_target"), (LPCTSTR)strTestHost, nTestPort);
+    if (m_testProxyInfo.dohEnabled)
+        m_testTcpTarget = Localization::Get(L"test.result.doh_passed") + L"\r\n" + Localization::Format(L"test.result.doh_target", (LPCTSTR)strTestHost,
+            (LPCTSTR)CString(m_testProxyInfo.dohUrl));
 
 	if (!StartProxyTestPhase(client, PROXY_TEST_TCP, _T("status.testing")))
 	{
-		MessageBox(Localization::Get(_T("test.start_failed")),
-			Localization::Get(_T("test.failed_title")), MB_ICONERROR);
 		m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_failed")), CStatusLabel::TONE_DANGER);
+		ShowProxyTestResult(Localization::Get(_T("test.start_failed")));
 		ATLTRACE("OnBnClickedTestproxy -> Start failed.\r\n");
 		m_proxyTestPhase = PROXY_TEST_NONE;
 		return;
 	}
 	m_btnTest.SetWindowText(Localization::Get(_T("action.cancel_test")));
 	m_bIsTesting = TRUE;
+	UpdateChainButtons();
 
 }
 
 BOOL CPage1::StartProxyTestPhase(const PRCClient& client, int phase,
 	LPCTSTR statusKey)
 {
+	++m_testGeneration;
+	m_testCompletionPending = false;
+	m_testCompletionDetail.Empty();
+    m_singleTestStage = PTS_WAITING;
 	if (!m_pTestProxy || m_pProxyTester)
-		return FALSE;
-
-	m_pProxyTester = m_pTestProxy->CreateTester();
-	if (!m_pProxyTester)
-		return FALSE;
-
-	m_proxyTestPhase = phase;
-	PRCClient mutableClient = client;
-	if (!m_pProxyTester->Start(this, &mutableClient, &m_testProxyInfo))
 	{
-		m_pProxyTester->Release();
-		m_pProxyTester = NULL;
-		m_proxyTestPhase = PROXY_TEST_NONE;
+		WSASetLastError(WSAEINVAL);
 		return FALSE;
 	}
 
+	m_pProxyTester = m_pTestProxy->CreateTester();
+	if (!m_pProxyTester)
+	{
+		WSASetLastError(WSAENOBUFS);
+		return FALSE;
+	}
+	WSASetLastError(0);
+
+	m_proxyTestPhase = phase;
+	// Start may synchronously report a more specific DoH/transport stage.
+	// Set the initial caption first so that it cannot overwrite that event.
 	if (statusKey && statusKey[0])
-		m_staticTestProxy.SetStatus(Localization::Get(statusKey),
-			CStatusLabel::TONE_INFO);
+		m_staticTestProxy.SetStatus(Localization::Get(statusKey), CStatusLabel::TONE_INFO);
+	PRCClient mutableClient = client;
+	const BOOL started = m_testChain.size() > 1
+		? m_pProxyTester->StartChain(this, &mutableClient, &m_testChain[0], (INT)m_testChain.size())
+		: m_pProxyTester->Start(this, &mutableClient, &m_testProxyInfo);
+	if (!started)
+	{
+		const int error = WSAGetLastError();
+		m_pProxyTester->Release();
+		m_pProxyTester = NULL;
+		m_proxyTestPhase = PROXY_TEST_NONE;
+		WSASetLastError(error);
+		return FALSE;
+	}
+
 	return TRUE;
 }
 
 BOOL CPage1::SupportsIpv6ProxyTest()
 {
 	const int proxyType = m_testProxyInfo.GetProxyType();
-	return proxyType == PROXYTYPE_SOCKS5 ||
-		proxyType == PROXYTYPE_HTTP10 || proxyType == PROXYTYPE_HTTP11;
+	return proxyType == PROXYTYPE_NOPROXY || proxyType == PROXYTYPE_SOCKS5 ||
+		proxyType == PROXYTYPE_HTTP11 || proxyType == PROXYTYPE_SSH;
 }
 
 BOOL CPage1::StartIpv6ProxyTest()
 {
+	m_testIpv6Error = 0;
+	m_testIpv6Address.Empty();
 	if (!SupportsIpv6ProxyTest())
 	{
 		m_testIpv6Result = IPV6_TEST_UNSUPPORTED;
@@ -1273,8 +1921,15 @@ BOOL CPage1::StartIpv6ProxyTest()
 		return FALSE;
 	}
 	ipv6Client.dstAddr.SetPort(53);
-	return StartProxyTestPhase(ipv6Client, PROXY_TEST_IPV6,
-		_T("status.testing_ipv6"));
+	m_testIpv6Address = ipv6TestAddress;
+	if (StartProxyTestPhase(ipv6Client, PROXY_TEST_IPV6,
+		_T("status.testing_ipv6")))
+		return TRUE;
+	// A direct connect may fail immediately (for example, no IPv6 route).
+	m_testIpv6Error = WSAGetLastError();
+	if (!m_testIpv6Error) m_testIpv6Error = WSAEFAULT;
+	m_testIpv6Result = ClassifyIpv6TestResult(m_testIpv6Error);
+	return FALSE;
 }
 
 int CPage1::ClassifyIpv6TestResult(int errorCode) const
@@ -1282,21 +1937,121 @@ int CPage1::ClassifyIpv6TestResult(int errorCode) const
 	if (errorCode == 0)
 		return IPV6_TEST_AVAILABLE;
 
-	// The ordinary TCP test has already proved that the proxy and its
-	// authentication/secure transport work. A target negotiation failure here
-	// therefore means the proxy could not establish this literal IPv6 target.
+	// Failure of one target is not proof that IPv6 is unsupported.
 	if (errorCode == PROXYERROR_REQUESTFAILED ||
 		errorCode == WSAEAFNOSUPPORT || errorCode == WSAENETUNREACH ||
-		errorCode == WSAEHOSTUNREACH)
-		return IPV6_TEST_UNAVAILABLE;
+		errorCode == WSAEHOSTUNREACH || errorCode == WSAECONNREFUSED ||
+		errorCode == WSAEADDRNOTAVAIL || errorCode == WSAENETDOWN)
+		return IPV6_TEST_TARGET_FAILED;
 
-	// A new connection to the proxy can still fail transiently, and a timeout
-	// cannot distinguish proxy trouble from a temporarily unreachable public
-	// probe target. Report that as unknown instead of a false negative.
+	// Timeouts and unrelated setup/transport errors remain inconclusive.
 	return IPV6_TEST_UNKNOWN;
 }
 
+INT_PTR CPage1::ShowProxyTestResult(const CString& error, LPCTSTR actionKey)
+{
+	typedef CProxyTestResultRow Result;
+	typedef CProxyTestResultDialog::Row Row;
+	const auto text = [](LPCTSTR key) { return Localization::Get(key); };
+	std::vector<Row> rows;
+	rows.push_back({ m_testTcpPassed ? Result::Passed : Result::Failed, text(m_testProxyInfo.dohEnabled ? L"test.result.doh" : L"test.result.tcp"),
+		text(m_testTcpPassed ? L"test.result.passed" : L"test.result.failed"),
+		m_testTcpPassed ? m_testTcpTarget : actionKey ? text(_T("test.ssh_unknown_key")) : error });
+	const BOOL direct = m_testProxyInfo.GetProxyType() == PROXYTYPE_NOPROXY && m_testChain.empty();
+	const BOOL udpSupported = ProxyTransportPolicy::SupportsUdpProxy(m_testProxyInfo.GetProxyType()) && m_testChain.empty();
+	const BOOL udpUnsupported = !udpSupported || m_testUdpError == PROXYERROR_UDP_UNSUPPORTED;
+	const BOOL udpFailed = m_testUdpRequested && m_testTcpPassed && !m_testUdpPassed && !udpUnsupported;
+	LPCTSTR udpStatus = direct ? _T("test.result.skipped") : m_testUdpPassed ? _T("test.result.passed") : udpUnsupported ? _T("test.result.unsupported") :
+		udpFailed ? _T("test.result.failed") : !m_testUdpRequested ? _T("test.result.disabled") : _T("test.result.skipped");
+	CString udpNote = text(direct ? _T("test.result.udp_direct") : m_testUdpPassed ? _T("test.result.udp_ok") :
+		!m_testChain.empty() ? _T("test.result.udp_chain") : !udpSupported ? _T("test.result.udp_protocol") :
+		udpUnsupported ? _T("test.result.udp_server") : !m_testUdpRequested ? _T("test.result.udp_disabled") : _T("test.result.prerequisite"));
+	if (udpFailed) udpNote = ProxyTestErrorDescription(m_testUdpError, FALSE);
+	const bool suggestBlockUdp = !direct && udpUnsupported && m_btnBlockUDP.GetCheck() != BST_CHECKED;
+	if (suggestBlockUdp)
+		udpNote = text(L"test.result.udp_suggest_block");
+	rows.push_back({ m_testUdpPassed ? Result::Passed : udpFailed ? Result::Failed : Result::Skipped,
+		text(_T("test.result.udp")), text(udpStatus), udpNote, suggestBlockUdp });
+	Result::State ipv6State = Result::Skipped;
+	LPCTSTR ipv6Status = _T("test.result.skipped"), ipv6Note = _T("test.result.prerequisite");
+	switch (m_testIpv6Result)
+	{
+	case IPV6_TEST_AVAILABLE:
+		ipv6State = Result::Passed; ipv6Status = _T("test.result.passed"); break;
+	case IPV6_TEST_TARGET_FAILED:
+		ipv6State = Result::Failed; ipv6Status = _T("test.result.failed"); break;
+	case IPV6_TEST_UNSUPPORTED:
+		ipv6Status = _T("test.result.unsupported"); ipv6Note = _T("test.result.ipv6_unsupported"); break;
+	case IPV6_TEST_INVALID_CONFIG:
+		ipv6State = Result::Warning; ipv6Status = _T("test.result.invalid"); ipv6Note = _T("test.result.ipv6_invalid"); break;
+	case IPV6_TEST_UNKNOWN:
+		ipv6State = Result::Warning;
+		ipv6Status = m_testIpv6Error == WSAETIMEDOUT ? _T("test.result.timeout") : _T("test.result.unknown"); break;
+	}
+	CString ipv6Target = text(ipv6Note);
+	if (!m_testIpv6Address.IsEmpty() && m_testIpv6Result != IPV6_TEST_NOT_RUN)
+		ipv6Target = Localization::Format(_T("test.result.ipv6_target"), (LPCTSTR)m_testIpv6Address);
+	rows.push_back({ ipv6State, text(_T("test.result.ipv6")), text(ipv6Status), ipv6Target });
+	if (!m_chainProgress.empty())
+	{
+		m_chainElapsed = GetTickCount() - m_chainStarted;
+		m_chainProgressRunning = false; KillTimer(0x312);
+		m_chainConclusion = Localization::Format(m_testProxyInfo.dohEnabled ? L"chain.test.doh_results" : L"chain.test.results",
+			(LPCTSTR)rows[0].status, (LPCTSTR)rows[1].status, (LPCTSTR)rows[2].status);
+		for (int i = 0; i < (int)m_chainProgress.size(); ++i)
+			if (ChainLinkFailed(i)) { m_chainConclusion = L"\u00d7 " + ChainLinkText(i); break; }
+		UpdateChainProgress();
+	}
+	CProxyTestResultDialog dialog(rows, actionKey ? error : CString(), this);
+	return dialog.DoModal();
+}
+
 void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM wParam, LPARAM lParam)
+{
+	if (pTester != m_pProxyTester || m_testCompletionPending || !GetSafeHwnd()) return;
+	if (HIWORD(nErrorCode) != LAYERCALLBACK_LAYERSPECIFIC)
+	{
+		HandleProxyTesterCallback(pTester, nErrorCode, wParam, lParam);
+		return;
+	}
+	m_testCompletionCode = nErrorCode;
+	m_testCompletionParam = wParam;
+	m_testCompletionDetail.Empty();
+	const int code = LOWORD(nErrorCode);
+	// These callback strings belong to the transport; retain them before returning.
+	if (lParam && ((m_proxyTestPhase == PROXY_TEST_TCP && m_testProxyInfo.dohEnabled && code) ||
+		code == PROXYERROR_SSH_HOSTKEY_UNKNOWN || code == PROXYERROR_SSH_HOSTKEY_CHANGED))
+		m_testCompletionDetail = reinterpret_cast<LPCSTR>(lParam);
+	m_testCompletionPending = true;
+	pTester->Stop();
+	if (!PostMessage(ProxyTestCompletedMessage, m_testGeneration))
+	{
+		// Fail closed without a modal loop or timer polling if posting fails.
+		m_testCompletionPending = false;
+		m_pProxyTester = NULL;
+		pTester->Release();
+		m_bIsTesting = FALSE;
+		m_proxyTestPhase = PROXY_TEST_NONE;
+		m_chainProgressRunning = false; KillTimer(0x312);
+		m_chainConclusion = Localization::Get(L"test.start_failed");
+		UpdateChainProgress();
+		m_staticTestProxy.SetStatus(m_chainConclusion, CStatusLabel::TONE_DANGER);
+		m_btnTest.SetWindowText(Localization::Get(L"action.test_current"));
+		UpdateChainButtons();
+	}
+}
+
+LRESULT CPage1::OnProxyTestCompleted(WPARAM generation, LPARAM)
+{
+	if (generation != m_testGeneration || !m_testCompletionPending || !m_pProxyTester) return 0;
+	m_testCompletionPending = false;
+	const CStringA detail = m_testCompletionDetail;
+	HandleProxyTesterCallback(m_pProxyTester, m_testCompletionCode, m_testCompletionParam,
+		detail.IsEmpty() ? 0 : reinterpret_cast<LPARAM>((LPCSTR)detail));
+	return 0;
+}
+
+void CPage1::HandleProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM wParam, LPARAM lParam)
 {
 	ATLASSERT(pTester == m_pProxyTester);
 
@@ -1304,10 +2059,34 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 	int nCode = LOWORD(nErrorCode);
 
 	CString szText;
-	BOOL enabledIpv6Blocking = FALSE;
+    if (nType == LAYERCALLBACK_DOHTEST && m_proxyTestPhase == PROXY_TEST_TCP) {
+        m_testDohQuerying = nCode == DTS_QUERYING;
+        if (nCode == DTS_CONNECTING) {
+            m_singleTestStage = PTS_WAITING;
+            m_chainProgress.assign(m_chainProgress.size(), ProxyTestHopProgress());
+            for (auto& error : m_chainErrors) error.Empty();
+            m_chainFollowed = -1;
+        }
+        if (m_chainProgressRunning) UpdateChainProgress();
+        else m_staticTestProxy.SetStatus(Localization::Get(m_testDohQuerying ? L"test.doh_querying" : L"test.doh_connecting"), CStatusLabel::TONE_INFO);
+        return;
+    }
+	if (nType == LAYERCALLBACK_TESTPROGRESS)
+	{
+		const int hop = (int)wParam;
+        if (m_testChain.empty() && nCode > PTS_WAITING && nCode < PTS_PASSED) m_singleTestStage = nCode;
+		if (m_proxyTestPhase == PROXY_TEST_TCP && hop >= 0 && hop < (int)m_chainProgress.size())
+		{
+			m_chainProgress[hop].Apply(nCode, (DWORD)lParam);
+			UpdateChainProgress(true);
+			m_chainView.Invalidate(FALSE);
+		}
+		return;
+	}
 
 	if (nType == LAYERCALLBACK_STATECHANGE)
 	{
+		if (m_chainProgressRunning) { UpdateChainProgress(); return; }
 		if (m_proxyTestPhase == PROXY_TEST_IPV6)
 		{
 			szText = Localization::Get(_T("status.testing_ipv6"));
@@ -1332,11 +2111,42 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 	}else if (nType == LAYERCALLBACK_LAYERSPECIFIC)
 	{
 		const int completedPhase = m_proxyTestPhase;
-		//关闭测试对象， 否则下面的MessageBox内部的消息循环可能导致pTester触发其他事件
+        const int reportedHop = pTester->GetFailedHop();
+        const bool chainHop = reportedHop >= 0 && reportedHop < (int)m_testChain.size() && reportedHop < (int)m_chainProgress.size();
+        const int failedStage = chainHop ? m_chainProgress[reportedHop].lastActiveStage : m_singleTestStage;
+        const CString sshDetail = m_testDohQuerying ? CString() : ProxyTestSshErrorDescription(nCode,
+            chainHop ? m_testChain[reportedHop] : m_testProxyInfo, failedStage, (int)wParam);
+        CString dohDetail;
+        if (completedPhase == PROXY_TEST_TCP && m_testProxyInfo.dohEnabled && nCode && lParam &&
+            nCode != PROXYERROR_SSH_HOSTKEY_UNKNOWN && nCode != PROXYERROR_SSH_HOSTKEY_CHANGED) {
+            dohDetail = CString(CStringA(reinterpret_cast<LPCSTR>(lParam)).Left(2048));
+            dohDetail.Replace(L'\r', L' '); dohDetail.Replace(L'\n', L' ');
+        }
+		if (completedPhase == PROXY_TEST_TCP && nCode == 0) m_testTcpPassed = TRUE;
+		if (completedPhase == PROXY_TEST_UDP)
+		{
+			m_testUdpPassed = nCode == 0;
+			m_testUdpError = nCode;
+		}
+		// Stop callbacks before entering the result dialog's modal message loop.
 		pTester->Stop();
 
+		if (completedPhase == PROXY_TEST_TCP && nCode && !m_chainProgress.empty())
+		{
+			m_chainFailureCode = nCode;
+			const int hop = pTester->GetFailedHop();
+			if (hop >= 0 && hop < (int)m_chainErrors.size())
+				// The legacy generic error names the final test target even when
+				// the failed request was actually directed at the next proxy.
+				m_chainErrors[hop] = ChainLinkFailed(hop) &&
+					(nCode == PROXYERROR_REQUESTFAILED || nCode == PROXYERROR_NOCONN)
+					? CString() : !sshDetail.IsEmpty() ? sshDetail : ProxyTestErrorDescription(nCode, FALSE);
+            if (hop >= 0 && hop < (int)m_chainErrors.size() && !dohDetail.IsEmpty())
+                m_chainErrors[hop] += L"\r\n" + dohDetail;
+		}
 		if (completedPhase == PROXY_TEST_IPV6)
 		{
+			m_testIpv6Error = nCode;
 			m_testIpv6Result = ClassifyIpv6TestResult(nCode);
 			// IPv6 capability is supplementary information. The ordinary proxy
 			// test remains successful even when IPv6 is unavailable or unknown.
@@ -1356,10 +2166,11 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 			if (StartProxyTestPhase(udpClient, PROXY_TEST_UDP,
 				_T("status.testing_udp")))
 				return;
-			nCode = PROXYERROR_UDP_RELAY_FAILED;
+			m_testUdpError = PROXYERROR_UDP_RELAY_FAILED;
+			if (StartIpv6ProxyTest()) return;
+			nCode = 0;
 		}
-		else if (nCode == 0 && (completedPhase == PROXY_TEST_TCP ||
-			completedPhase == PROXY_TEST_UDP))
+		else if ((nCode == 0 && completedPhase == PROXY_TEST_TCP) || completedPhase == PROXY_TEST_UDP)
 		{
 			pTester->Release();
 			m_pProxyTester = NULL;
@@ -1372,34 +2183,16 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 
 		if(nCode == 0)
 		{
-			const BOOL ipv6Unavailable =
-				m_testIpv6Result == IPV6_TEST_UNAVAILABLE ||
+			const BOOL ipv6NeedsAttention =
+				m_testIpv6Result == IPV6_TEST_TARGET_FAILED ||
 				m_testIpv6Result == IPV6_TEST_UNSUPPORTED;
 			const BOOL ipv6AlreadyBlocked =
 				m_btnBlockIPv6.GetCheck() == BST_CHECKED;
-			const BOOL suggestIpv6Blocking =
-				ipv6Unavailable && !ipv6AlreadyBlocked;
-			szText = Localization::Get(m_testUdpRequested
-				? _T("test.success_tcp_udp") : _T("test.success"));
-			switch (m_testIpv6Result)
+			if (m_testUdpError && m_testUdpError != PROXYERROR_UDP_UNSUPPORTED)
 			{
-			case IPV6_TEST_AVAILABLE:
-				szText += Localization::Get(_T("test.ipv6_available"));
-				break;
-			case IPV6_TEST_UNAVAILABLE:
-				szText += Localization::Get(_T("test.ipv6_unavailable"));
-				break;
-			case IPV6_TEST_UNSUPPORTED:
-				szText += Localization::Get(_T("test.ipv6_unsupported"));
-				break;
-			case IPV6_TEST_INVALID_CONFIG:
-				szText += Localization::Get(_T("test.ipv6_invalid_config"));
-				break;
-			default:
-				szText += Localization::Get(_T("test.ipv6_unknown"));
-				break;
+				m_staticTestProxy.SetStatus(Localization::Get(L"status.test_failed"), CStatusLabel::TONE_DANGER);
 			}
-			if (m_profileDirty && m_runtimeDirty)
+			else if (m_profileDirty && m_runtimeDirty)
 			{
 				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_unsaved_unapplied")), CStatusLabel::TONE_WARNING);
 			}
@@ -1413,46 +2206,38 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 			}
 			else if (m_testIpv6Result == IPV6_TEST_AVAILABLE)
 				m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_passed_saved")), CStatusLabel::TONE_SUCCESS);
-			else if (ipv6Unavailable && ipv6AlreadyBlocked)
+			else if (ipv6NeedsAttention && ipv6AlreadyBlocked)
 				m_staticTestProxy.SetStatus(Localization::Get(
 					_T("status.test_passed_ipv6_blocked")),
 					CStatusLabel::TONE_INFO);
 			else
 				m_staticTestProxy.SetStatus(Localization::Get(
-					m_testIpv6Result == IPV6_TEST_UNAVAILABLE ||
 					m_testIpv6Result == IPV6_TEST_UNSUPPORTED
-						? _T("status.test_passed_ipv6_unavailable")
-						: _T("status.test_passed_ipv6_unknown")),
+						? _T("status.test_passed_ipv6_unsupported")
+						: m_testIpv6Result == IPV6_TEST_TARGET_FAILED
+							? _T("status.test_passed_ipv6_target_failed")
+							: _T("status.test_passed_ipv6_unknown")),
 					CStatusLabel::TONE_WARNING);
 
-			if (suggestIpv6Blocking)
-			{
-				szText += Localization::Get(_T("test.ipv6_block_suggestion"));
-				if (MessageBox(szText, Localization::Get(_T("test.title")),
-					MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON1) == IDYES)
-				{
-					m_btnBlockIPv6.SetCheck(BST_CHECKED);
-					OnProfileFieldChanged();
-					enabledIpv6Blocking = TRUE;
-				}
-			}
-			else
-			{
-				const UINT icon = m_testIpv6Result == IPV6_TEST_AVAILABLE ||
-					(ipv6Unavailable && ipv6AlreadyBlocked)
-						? MB_ICONINFORMATION : MB_ICONWARNING;
-				MessageBox(szText, Localization::Get(_T("test.title")), icon);
-			}
+			ShowProxyTestResult(CString());
 		}else
 		{
 			switch (nCode)
 			{
-			case PROXYERROR_NOCONN:
-				szText = Localization::Get(_T("test.no_connection"));
+			case PROXYERROR_SSH_UNAVAILABLE:
+                szText = Localization::Get(L"test.ssh_unavailable"); break;
+            case PROXYERROR_SSH_HOSTKEY_UNKNOWN:
+                szText = Localization::Get(L"test.ssh_unknown_key"); break;
+            case PROXYERROR_SSH_HOSTKEY_CHANGED:
+                szText = Localization::Get(L"test.ssh_changed_key"); break;
+            case PROXYERROR_NOCONN:
+				szText = Localization::Get(m_testProxyInfo.GetProxyType() == PROXYTYPE_NOPROXY ?
+					L"test.direct_connection_failed" : L"test.no_connection");
 				break;
 				/* fall through */
 			case PROXYERROR_REQUESTFAILED:
-				szText = Localization::Get(_T("test.target_failed"));
+				szText = Localization::Get(m_testProxyInfo.GetProxyType() == PROXYTYPE_NOPROXY ?
+					L"test.direct_connection_failed" : L"test.target_failed");
 				break;
 			case PROXYERROR_AUTHREQUIRED:
 				szText = Localization::Get(_T("test.auth_required"));
@@ -1477,10 +2262,19 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 				break;
 
 			default:
-				szText = Localization::Format(_T("test.negotiation_failed"), nCode);
+				szText = ProxyTestErrorDescription(nCode, m_testProxyInfo.GetProxyType() == PROXYTYPE_NOPROXY);
 				break;
 			}
+            if (!sshDetail.IsEmpty()) szText = sshDetail;
+			// In a chain, say which hop the failure belongs to.
+			const int failedHop = m_testChain.size() > 1 && m_pProxyTester ? m_pProxyTester->GetFailedHop() : -1;
+			if (ChainLinkFailed(failedHop))
+				szText = ChainLinkText(failedHop);
+			else if (failedHop >= 0 && failedHop < (int)m_testChainNames.size())
+				szText = Localization::Format(_T("test.chain_hop"), failedHop + 1,
+					(LPCTSTR)m_testChainNames[failedHop], (LPCTSTR)szText);
 			LPCTSTR statusKey = _T("status.test_failed");
+            if (!dohDetail.IsEmpty()) szText += L"\r\n\r\n" + dohDetail;
 			if (m_profileDirty && m_runtimeDirty)
 				statusKey = _T("status.test_failed_unsaved_unapplied");
 			else if (m_runtimeDirty)
@@ -1488,7 +2282,27 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 			else if (m_profileDirty)
 				statusKey = _T("status.test_failed_unsaved");
 			m_staticTestProxy.SetStatus(Localization::Get(statusKey), CStatusLabel::TONE_DANGER);
-			MessageBox(szText);
+            if ((nCode == PROXYERROR_SSH_HOSTKEY_UNKNOWN || nCode == PROXYERROR_SSH_HOSTKEY_CHANGED) && lParam) {
+                const CString fingerprint = SshProfile::Decode(reinterpret_cast<LPCSTR>(lParam));
+                szText += L"\r\n\r\n" + fingerprint;
+                if (nCode == PROXYERROR_SSH_HOSTKEY_UNKNOWN && SshProfile::ValidFingerprint(fingerprint)) {
+                    ProxyInfo endpoint = failedHop >= 0 && failedHop < (int)m_testChain.size() ? m_testChain[failedHop] : m_testProxyInfo;
+                    CString address; address.Format(L"\r\n%s:%d", (LPCTSTR)(CString)endpoint.strProxyHost, endpoint.nProxyPort);
+                    szText += address + L"\r\n\r\n" + Localization::Get(L"test.ssh_trust_key");
+                    if (ShowProxyTestResult(szText, _T("test.result.trust_key")) == IDYES) {
+                        if (failedHop < 0) {
+                            m_editTransportPsk.SetWindowText(fingerprint); OnProfileFieldChanged();
+                        } else {
+                            CfgProxyItem item; item.strName = m_testChainNames[failedHop];
+                            if (m_profileStore.Load(item)) {
+                                item.strTransportPsk = fingerprint;
+                                if (!m_profileStore.Save(item)) MessageBox(Localization::Get(L"profile.save_failed_title"));
+                                SetRuntimeDirty(TRUE);
+                            }
+                        }
+                    }
+                } else ShowProxyTestResult(szText);
+            } else ShowProxyTestResult(szText);
 		}
 
 		if (m_pProxyTester)
@@ -1498,15 +2312,18 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 		}
 		m_btnTest.SetWindowText(Localization::Get(_T("action.test_current")));
 		m_bIsTesting = FALSE;
+		UpdateChainButtons();
 		m_proxyTestPhase = PROXY_TEST_NONE;
-		if (enabledIpv6Blocking)
-			UpdateProxyTestStatus();
 
 	}
 
 }
 void CPage1::OnEnChangeEditAddr()
 {
+	// Loading a full profile already supplies a separate port. Do not interpret
+	// an IPv6 address as the interactive host:port shorthand while filling it.
+	if (m_loadingProfile)
+		return;
 	CString strHost;
 	m_edit_HostName.GetWindowText(strHost);
 
@@ -1526,21 +2343,9 @@ void CPage1::OnEnChangeEditAddr()
 
 void CPage1::OnCfgoptLoad()
 {
-	CfgProxyItem item;
-	CString previousDraftName = m_draftProfileName;
-	m_cfgls.GetWindowText(item.strName);
-	if (!ConfirmDiscardUnsavedChanges())
-	{
-		m_draftProfileName = previousDraftName;
-		RestoreProfileSelection();
-		return;
-	}
-
-	if (m_profileStore.Load(item))
-	{
-		m_profileStore.SetLastSelected(item.strName);
-		UILoadCfg(&item);
-	}
+	CString name;
+	m_cfgls.GetWindowText(name);
+	SelectProfileFromDisk(name);
 }
 
 void CPage1::OnCfgoptSave()
@@ -1567,6 +2372,15 @@ void CPage1::OnCfgoptDelete()
 		if (strName.GetLength() > 0)
 		{
 			CString prompt = Localization::Format(_T("profile.delete_confirm"), (LPCTSTR)strName);
+			// A hop of other chains: say which ones stop working.
+			std::vector<CString> users;
+			if (m_profileStore.ListChainUsers(strName, users) && !users.empty())
+			{
+				CString list;
+				for (const CString& user : users)
+					list += (list.IsEmpty() ? L"" : L", ") + user;
+				prompt = Localization::Format(_T("profile.chain_used_by"), (LPCTSTR)strName, (LPCTSTR)list);
+			}
 			if (MessageBox(prompt, Localization::Get(_T("profile.delete_title")),
 				MB_OKCANCEL | MB_ICONWARNING) != IDOK)
 			{
@@ -1578,7 +2392,6 @@ void CPage1::OnCfgoptDelete()
 				MessageBox(Localization::Get(L"recent.write_failed"), Localization::Get(L"profile.delete_title"), MB_OK | MB_ICONWARNING);
 				return;
 			}
-			ReloadRecentApplications(TRUE);
 			m_cfgls.DeleteString(idx);
 			m_loadingProfile = TRUE;
 			m_cfgls.SetCurSel(-1);
@@ -1594,6 +2407,8 @@ void CPage1::OnCfgoptDelete()
 void CPage1::UILoadCfg( CfgProxyItem *item )
 {
 	m_loadingProfile = TRUE;
+	m_chainMode = item ? item->bChain : FALSE;
+    m_sshAuth.Load(item ? &item->pi : NULL);
 	if (item == NULL)
 	{
 		m_cbProxyType.SelectString(0, _T("SOCKS5"));
@@ -1607,11 +2422,14 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_btnHookUDP.SetCheck(BST_CHECKED);
 		m_btnBlockUDP.SetCheck(BST_UNCHECKED);
 		m_btnBlockIPv6.SetCheck(BST_UNCHECKED);
-		m_btnDNSLocal.SetCheck(BST_CHECKED);
-		m_btnDNSRemote.SetCheck(BST_UNCHECKED);
+		m_btnDNSLocal.SetCheck(BST_UNCHECKED);
+		m_btnDNSRemote.SetCheck(BST_CHECKED);
+        m_btnDNSDoh.SetCheck(BST_UNCHECKED);
+        m_editDohUrl.SetWindowText(L"https://dns.google/dns-query");
+        m_editDohBootstrap.SetWindowText(L"8.8.8.8, 8.8.4.4");
 		m_btnRedirectPrivateDNS.SetCheck(BST_CHECKED);
 		m_editRedirectDNS.SetWindowText(_T("8.8.8.8"));
-		m_btnHookChildProcess.SetCheck(BST_UNCHECKED);
+		m_btnHookChildProcess.SetCheck(BST_CHECKED);
 		m_editChildFilter.SetWindowText(_T(""));
 		m_radioChildFilterInclude.SetCheck(BST_CHECKED);
 		m_radioChildFilterExclude.SetCheck(BST_UNCHECKED);
@@ -1628,10 +2446,15 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		szType = item->pi.strProxyType;
 		szHost = item->pi.strProxyHost;
 		szPort.Format(_T("%d"), item->pi.nProxyPort);
-		szUser = item->pi.strProxyUser;
-		szPass = item->pi.strProxyPass;
+		if (szType.CompareNoCase(_T("NOPROXY")) == 0 && !item->pi.nProxyPort)
+			szPort.Empty();
+		szUser = item->pi.GetProxyType() == PROXYTYPE_SSH ? SshProfile::Decode(item->pi.strProxyUser.szbuf) : (CString)item->pi.strProxyUser;
+		szPass = item->pi.GetProxyType() == PROXYTYPE_SSH ? SshProfile::Decode(item->pi.strProxyPass.szbuf) : (CString)item->pi.strProxyPass;
 
-		m_cbProxyType.SelectString(0, szType);
+		// Retain unsupported legacy profiles for editing, but do not leave the
+		// previous selection active (which would silently change their protocol).
+		if (szType.CompareNoCase(L"HTTP10") == 0 || szType.CompareNoCase(L"HTTP11") == 0) szType = L"HTTP";
+		m_cbProxyType.SetCurSel(m_cbProxyType.FindStringExact(-1, szType));
 		m_edit_HostName.SetWindowText(szHost);
 		m_edit_Port.SetWindowText(szPort);
 		m_edit_User.SetWindowText(szUser);
@@ -1647,7 +2470,10 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_btnBlockIPv6.SetCheck(item->bBlockIPv6 ? BST_CHECKED : BST_UNCHECKED);
 		m_btnHookChildProcess.SetCheck(item->bHookChildProcess ? BST_CHECKED : BST_UNCHECKED);
 		m_btnDNSLocal.SetCheck(item->dnsOpt==PSI_DNSOPT_LOCAL ? BST_CHECKED : BST_UNCHECKED);
-		m_btnDNSRemote.SetCheck(!m_btnDNSLocal.GetCheck());
+		m_btnDNSRemote.SetCheck(item->dnsOpt == PSI_DNSOPT_REMOTE);
+        m_btnDNSDoh.SetCheck(item->dnsOpt == PSI_DNSOPT_DOH);
+        m_editDohUrl.SetWindowText(item->strDohUrl);
+        m_editDohBootstrap.SetWindowText(item->strDohBootstrap);
 		m_btnRedirectPrivateDNS.SetCheck(item->bRedirectPrivateDNS ? BST_CHECKED : BST_UNCHECKED);
 		m_editRedirectDNS.SetWindowText(item->strRedirectDNS);
 
@@ -1661,31 +2487,53 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_radioTargetFilterBypass.SetCheck(bTgtProxy ? BST_UNCHECKED : BST_CHECKED);
 		UpdateChildFilterEnable();
 	}
+	m_chainHops = item ? item->chainHops : std::vector<CString>();
+	RefreshChainView();
+	ExpandConfiguredOptions();
 	UpdateDnsRedirectEnable();
 	UpdateTransportEnable();
+	SetTimer(0x311, 300, NULL); // Debounce profile selection; no Shell work on the UI thread.
 	m_loadedProfileName = item ? item->strName : _T("");
 	m_draftProfileName = m_loadedProfileName;
 	m_loadingProfile = FALSE;
 	SetProfileDirty(FALSE);
 	if (m_proxyController.IsRunning())
 		SetRuntimeDirty(TRUE);
+	LayoutSettingsPage();
 }
 
 void CPage1::UIGetCfg( CfgProxyItem *item )
 {
 
-	GetSettings(&item->pi);
+	if (m_chainMode || !GetSettings(&item->pi))
+	{
+		// A chain has no server of its own (the store writes it as Type=CHAIN);
+		// keep a direct placeholder rather than half-entered values.
+		ZeroMemory(&item->pi, sizeof(item->pi));
+		item->pi.szItemName = _T("myproxy");
+		item->pi.strProxyType = _T("NOPROXY");
+	}
+	item->bChain = m_chainMode;
+	item->chainHops = m_chainHops;
 	item->nTransportMode = m_cbTransport.GetCurSel() ==
 		PROXY_TRANSPORT_GONC_TLS_PSK ? PROXY_TRANSPORT_GONC_TLS_PSK :
 		PROXY_TRANSPORT_PLAIN;
 	m_editTransportPsk.GetWindowText(item->strTransportPsk);
+    if (item->pi.GetProxyType() == PROXYTYPE_SSH) item->strTransportPsk.Trim();
+	if (item->pi.GetProxyType() == PROXYTYPE_NOPROXY)
+	{
+		item->nTransportMode = PROXY_TRANSPORT_PLAIN;
+		item->strTransportPsk.Empty();
+	}
 
 	item->bHookTCP = m_btnHookTCP.GetCheck() == BST_CHECKED;
 	item->bHookUDP = m_btnHookUDP.GetCheck() == BST_CHECKED;
 	item->bBlockUDP = m_btnBlockUDP.GetCheck() == BST_CHECKED;
 	item->bBlockIPv6 = m_btnBlockIPv6.GetCheck() == BST_CHECKED;
 	item->bHookChildProcess = m_btnHookChildProcess.GetCheck() == BST_CHECKED;
-	item->dnsOpt = m_btnDNSLocal.GetCheck() ? PSI_DNSOPT_LOCAL : PSI_DNSOPT_REMOTE;
+	item->dnsOpt = m_btnDNSDoh.GetCheck() ? PSI_DNSOPT_DOH : m_btnDNSLocal.GetCheck() ? PSI_DNSOPT_LOCAL : PSI_DNSOPT_REMOTE;
+    m_editDohUrl.GetWindowText(item->strDohUrl); item->strDohUrl.Trim();
+    m_editDohBootstrap.GetWindowText(item->strDohBootstrap); item->strDohBootstrap.Trim();
 	item->bRedirectPrivateDNS =
 		m_btnRedirectPrivateDNS.GetCheck() == BST_CHECKED;
 	m_editRedirectDNS.GetWindowText(item->strRedirectDNS);
@@ -1756,7 +2604,8 @@ void CPage1::ShowTab(int nTab)
 	static const int idsBasic[] = {
 		IDC_CHECK_HOOKTCP, IDC_CHECK_HOOK_UDP, IDC_CHECK_HOOKCHILDPROCESS, IDC_CHECK_BLOCKUDP,
 		IDC_CHECK_BLOCK_IPV6,
-		IDC_RADIO_DNSLOCAL, IDC_RADIO_DNSREMOTE, IDC_STATIC_GROUP_OTHER, IDC_STATIC_DNS_LABEL,
+		IDC_RADIO_DNSLOCAL, IDC_RADIO_DNSREMOTE, IDC_RADIO_DNSDOH, IDC_STATIC_GROUP_OTHER, IDC_STATIC_DNS_LABEL,
+        IDC_STATIC_DOH_URL, IDC_EDIT_DOH_URL, IDC_EDIT_DOH_BOOTSTRAP,
 		IDC_CHECK_REDIRECT_PRIVATE_DNS, IDC_EDIT_REDIRECT_DNS };
 	static const int idsChild[] = {
 		IDC_EDIT_CHILDFILTER, IDC_RADIO_CHILDFILTER_EXCLUDE, IDC_RADIO_CHILDFILTER_INCLUDE,
@@ -1772,23 +2621,75 @@ void CPage1::ShowTab(int nTab)
 	m_radioTabBasic.SetCheck (nTab == 0 ? BST_CHECKED : BST_UNCHECKED);
 	m_radioTabChild.SetCheck (nTab == 1 ? BST_CHECKED : BST_UNCHECKED);
 	m_radioTabTarget.SetCheck(nTab == 2 ? BST_CHECKED : BST_UNCHECKED);
+	m_activeTab = nTab;
+	LayoutSettingsPage();
 }
 
 void CPage1::OnBnClickedTabBasic()  { ShowTab(0); }
 void CPage1::OnBnClickedTabChild()  { ShowTab(1); UpdateChildFilterEnable(); }
 void CPage1::OnBnClickedTabTarget() { ShowTab(2); }
 
-void CPage1::OnBnClickedWorkflowNext()
-{
-	if (g_MainTab)
-		g_MainTab->SelectPage(CMainTab::PAGE_APPLICATIONS);
-}
-
 void CPage1::OnCbnSelchangeComboCfgs()
 {
+	if (m_loadingProfile || m_cfgls.GetCurSel() == CB_ERR)
+		return;
+	CString name;
+	m_cfgls.GetLBText(m_cfgls.GetCurSel(), name);
+	SelectProfileFromDisk(name);
+}
+
+BOOL CPage1::RefreshProfileNames()
+{
+	std::vector<CString> names;
+	if (!m_profileStore.ListNames(names))
+	{
+		ShowProfileNotice(Localization::Get(_T("profile.refresh_failed")), NULL, CStatusLabel::TONE_WARNING);
+		return FALSE;
+	}
+	CString draft;
+	m_cfgls.GetWindowText(draft);
+	const BOOL selected = m_cfgls.GetCurSel() != CB_ERR;
+	m_loadingProfile = TRUE;
+	m_cfgls.ResetContent();
+	for (const CString& name : names)
+		m_cfgls.AddString(name);
+	RefreshProfileEntries();
+	const BOOL removed = !m_loadedProfileName.IsEmpty() &&
+		m_cfgls.FindStringExact(-1, m_loadedProfileName) == CB_ERR;
+	m_cfgls.SetCurSel(selected ? m_cfgls.FindStringExact(-1, draft) : -1);
+	m_cfgls.SetWindowText(draft);
+	m_loadingProfile = FALSE;
+	if (removed)
+	{
+		m_loadedProfileName.Empty();
+		m_draftProfileName = draft;
+		SetProfileDirty(TRUE);
+		ShowProfileNotice(Localization::Get(_T("profile.removed_elsewhere")),
+			Localization::Get(_T("profile.draft_preserved")), CStatusLabel::TONE_WARNING);
+	}
+	else
+		SetProfileDirty(m_profileDirty);
+	return TRUE;
+}
+
+void CPage1::OnCbnDropdownComboCfgs()
+{
+	RefreshProfileNames();
+}
+
+void CPage1::SelectProfileFromDisk(const CString& name)
+{
 	CfgProxyItem item;
+	item.strName = name;
 	CString previousDraftName = m_draftProfileName;
-	m_cfgls.GetLBText(m_cfgls.GetCurSel(), item.strName);
+	if (!m_profileStore.Load(item))
+	{
+		RestoreProfileSelection();
+		RefreshProfileNames();
+		MessageBox(Localization::Get(_T("profile.load_failed")),
+			Localization::Get(_T("status.invalid_config")), MB_ICONWARNING);
+		return;
+	}
 	if (!ConfirmDiscardUnsavedChanges())
 	{
 		m_draftProfileName = previousDraftName;
@@ -1796,10 +2697,21 @@ void CPage1::OnCbnSelchangeComboCfgs()
 		return;
 	}
 
+	// The prompt may have saved a profile, or another instance may have changed it.
 	if (m_profileStore.Load(item))
 	{
-		m_profileStore.SetLastSelected(item.strName);
+		m_loadingProfile = TRUE;
+		m_cfgls.SetCurSel(m_cfgls.FindStringExact(-1, item.strName));
+		m_cfgls.SetWindowText(item.strName);
+		m_loadingProfile = FALSE;
 		UILoadCfg(&item);
+	}
+	else
+	{
+		RestoreProfileSelection();
+		RefreshProfileNames();
+		MessageBox(Localization::Get(_T("profile.load_failed")),
+			Localization::Get(_T("status.invalid_config")), MB_ICONWARNING);
 	}
 }
 
@@ -1820,10 +2732,20 @@ void CPage1::UpdateProxyTestStatus()
 
 void CPage1::UpdateProxyStateUi()
 {
+	if (g_MainTab) g_MainTab->RefreshSidebarStatus();
 	BOOL running = m_proxyController.IsRunning();
+	if (running)
+		EndFirstRunGuide();
 	m_OK.SetWindowText(Localization::Get(_T("action.start_proxy")));
 	m_OK.EnableWindow(!running);
 	m_Cancel.EnableWindow(running);
+	// One state button: Enable while inactive, Disable while active. Both stay
+	// real controls (IDOK/IDCANCEL) so automation and handlers are unchanged.
+	CWnd* focus = GetFocus();
+	m_OK.ShowWindow(running ? SW_HIDE : SW_SHOW);
+	m_Cancel.ShowWindow(running ? SW_SHOW : SW_HIDE);
+	if (focus == &m_OK || focus == &m_Cancel)
+		(running ? m_Cancel : m_OK).SetFocus();
 	if (m_btnSaveProfile.GetSafeHwnd())
 	{
 		m_btnSaveProfile.SetWindowText(Localization::Get(running
@@ -1832,4 +2754,393 @@ void CPage1::UpdateProxyStateUi()
 			? (m_profileDirty || m_runtimeDirty) : m_profileDirty);
 	}
 	UpdateWorkflowCard();
+}
+
+BOOL CPage1::SavePendingProfile() { return !m_profileDirty || SaveCurrentProfile(m_draftProfileName); }
+void CPage1::ExpandConfiguredOptions()
+{
+ CString user, pass; m_edit_User.GetWindowText(user); m_edit_Pass.GetWindowText(pass);
+ CString protocol; m_cbProxyType.GetWindowText(protocol);
+ m_advancedOpen = protocol == L"SSH" || !user.IsEmpty() || !pass.IsEmpty() || m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK;
+ UpdateAdvancedCaption();
+}
+void CPage1::OnToggleAdvanced()
+{
+ m_advancedOpen = !m_advancedOpen; UpdateAdvancedCaption(); LayoutSettingsPage();
+}
+void CPage1::OnNewProfile() { NewProfile(FALSE); }
+void CPage1::OnNewChainProfile() { NewProfile(TRUE); }
+void CPage1::NewProfile(BOOL chain)
+{
+ if (m_bIsTesting || !ConfirmDiscardUnsavedChanges() || !RefreshProfileNames()) return;
+ CString base = Localization::Get(chain ? L"profile.new_chain_name" : L"profile.new_name"), name = base;
+ for (int i = 2; m_cfgls.FindStringExact(-1, name) != CB_ERR; ++i) name.Format(L"%s %d", (LPCWSTR)base, i);
+ UILoadCfg(NULL);
+	if (chain)
+	{
+		// Chain defaults: proxy TCP and child processes, block UDP (it is never
+		// chained), resolve DNS through the chain, redirect private DNS.
+		m_btnHookTCP.SetCheck(BST_CHECKED);
+		m_btnHookChildProcess.SetCheck(BST_CHECKED);
+		m_btnBlockUDP.SetCheck(BST_CHECKED);
+		m_btnDNSLocal.SetCheck(BST_UNCHECKED);
+		m_btnDNSRemote.SetCheck(BST_CHECKED);
+        m_btnDNSDoh.SetCheck(BST_UNCHECKED);
+        m_editDohUrl.SetWindowText(L"https://dns.google/dns-query");
+        m_editDohBootstrap.SetWindowText(L"8.8.8.8, 8.8.4.4");
+		m_btnRedirectPrivateDNS.SetCheck(BST_CHECKED);
+		m_editRedirectDNS.SetWindowText(_T("8.8.8.8"));
+		UpdateChildFilterEnable();
+		UpdateDnsRedirectEnable();
+		SetChainMode(TRUE);
+	}
+ m_loadingProfile = TRUE; m_cfgls.SetCurSel(-1); m_cfgls.SetWindowText(name); m_loadingProfile = FALSE;
+ m_draftProfileName = name; SetProfileDirty(TRUE); SetRuntimeDirty(TRUE);
+ m_scrollY = 0; LayoutSettingsPage(); m_cfgls.SetFocus(); m_cfgls.SetEditSel(0, -1);
+ UpdateProxyTestStatus();
+}
+
+void CPage1::UpdateAdvancedCaption()
+{
+ if (m_btnAdvanced.GetSafeHwnd())
+  m_btnAdvanced.SetWindowText(Localization::Get(m_advancedOpen ? L"profile.advanced_hide" : L"profile.advanced_show"));
+}
+
+namespace
+{
+	// "SOCKS5 host:port" for a saved profile, as the chain list and menu show it.
+	CString DescribeServer(const CfgProxyItem& item)
+	{
+		ProxyInfo pi = item.pi;
+		const int type = pi.GetProxyType();
+		CString host = (CString)pi.strProxyHost;
+		if (host.Find(L':') >= 0) host = L"[" + host + L"]";
+		CString text;
+		text.Format(L"%s %s:%d", type == PROXYTYPE_SSH ? L"SSH" : type == PROXYTYPE_SOCKS5 ? L"SOCKS5" : L"HTTP", (LPCWSTR)host, pi.nProxyPort);
+		return text;
+	}
+}
+
+void CPage1::SetChainMode(BOOL chain)
+{
+	m_chainMode = chain;
+	RefreshChainView();
+	UpdateTransportEnable();
+	LayoutSettingsPage();
+}
+
+void CPage1::RefreshProfileEntries()
+{
+	m_cfgls.ClearEntries();
+	for (int i = 0; i < m_cfgls.GetCount(); ++i)
+	{
+		CfgProxyItem item;
+		m_cfgls.GetLBText(i, item.strName);
+		const BOOL valid = m_profileStore.Load(item);
+		CProfileCombo::Entry entry;
+		ProxyInfo pi = item.pi;
+		if (item.bChain)
+		{
+			entry.tag = Localization::Get(L"profile.tag_chain");
+			entry.accent = TRUE;
+			for (const CString& hop : item.chainHops)
+				entry.detail += (entry.detail.IsEmpty() ? L"" : L" \x2192 ") + hop;
+		}
+		else if (!valid)
+			entry.tag = (CString)pi.strProxyType; // e.g. a retired SOCKS4 profile
+		else if (pi.GetProxyType() == PROXYTYPE_NOPROXY)
+			entry.tag = Localization::Get(L"profile.tag_direct");
+		else
+		{
+			// "SOCKS5 host:port" -> tag "SOCKS5", detail "host:port".
+			const CString server = DescribeServer(item);
+			const int space = server.Find(L' ');
+			entry.tag = server.Left(space);
+			entry.detail = server.Mid(space + 1);
+		}
+		m_cfgls.SetEntry(item.strName, entry);
+	}
+	UpdateProfileTag();
+}
+
+void CPage1::UpdateProfileTag()
+{
+	if (!m_cfgls.GetSafeHwnd())
+		return;
+	CString tag;
+	if (m_chainMode)
+		tag = Localization::Get(L"profile.tag_chain");
+	else if (m_cbProxyType.GetCurSel() != CB_ERR)
+	{
+		m_cbProxyType.GetLBText(m_cbProxyType.GetCurSel(), tag);
+		if (tag.CompareNoCase(L"NOPROXY") == 0)
+			tag = Localization::Get(L"profile.tag_direct");
+	}
+	m_cfgls.SetFieldTag(tag, m_chainMode);
+}
+
+namespace
+{
+    CString ChainDuration(DWORD milliseconds)
+    {
+        CString text;
+        if (milliseconds < 1000) text.Format(L"%lu ms", milliseconds);
+        else text.Format(L"%.2f s", milliseconds / 1000.0);
+        return text;
+    }
+}
+
+void CPage1::ClearChainProgress()
+{
+    if (GetSafeHwnd()) KillTimer(0x312);
+    m_chainProgress.clear(); m_chainErrors.clear(); m_chainConclusion.Empty();
+    m_chainProgressRunning = false; m_chainFollowed = -1;
+    m_chainFailureCode = 0;
+    if (m_staticTestProxy.GetSafeHwnd()) m_staticTestProxy.SetDetailText(CString());
+    if (m_chainView.GetSafeHwnd()) m_chainView.ClearProgress();
+}
+
+bool CPage1::ChainNodeNegotiated(int index) const
+{
+    if (index < 0 || index >= (int)m_chainProgress.size() || index >= (int)m_testChain.size()) return false;
+    const auto& progress = m_chainProgress[index];
+    if (progress.stage == PTS_PASSED) return true;
+    // SOCKS5 and SSH begin OPEN only after successful negotiation/authentication.
+    // HTTP CONNECT combines authentication and tunnel establishment in one reply.
+    ProxyInfo hop = m_testChain[index];
+    const int type = hop.GetProxyType();
+    return (type == PROXYTYPE_SOCKS5 || type == PROXYTYPE_SSH) &&
+        (progress.stage == PTS_OPENING || progress.lastActiveStage == PTS_OPENING);
+}
+
+bool CPage1::ChainLinkFailed(int index) const
+{
+    if (index < 0 || index >= (int)m_chainProgress.size()) return false;
+    const auto& progress = m_chainProgress[index];
+    // An HTTP 407 is a node authentication failure, not a failed next-hop link.
+    if (m_chainFailureCode == PROXYERROR_AUTHREQUIRED || m_chainFailureCode == PROXYERROR_AUTHFAILED ||
+        m_chainFailureCode == PROXYERROR_AUTHTYPEUNKNOWN || m_chainFailureCode == PROXYERROR_AUTHNOLOGON) return false;
+    return (progress.stage == PTS_FAILED || progress.stage == PTS_TIMED_OUT) &&
+        progress.lastActiveStage == PTS_OPENING;
+}
+
+CString CPage1::ChainLinkText(int index) const
+{
+    const CString from = Localization::Format(L"chain.test.node", index + 1);
+    const CString to = index + 1 < (int)m_chainProgress.size()
+        ? Localization::Format(L"chain.test.node", index + 2) : Localization::Get(L"chain.test.target");
+    const auto& progress = m_chainProgress[index];
+    const CString result = Localization::Get(progress.stage == PTS_TIMED_OUT ? L"chain.test.link_timeout" :
+        progress.Active() ? L"chain.test.link_connecting" : L"chain.test.link_failed");
+    return Localization::Format(L"chain.test.link", (LPCTSTR)from, (LPCTSTR)to, (LPCTSTR)result);
+}
+
+CString CPage1::ChainStageText(int index, int stage) const
+{
+    if (stage == PTS_OPENING)
+        return index + 1 < (int)m_chainProgress.size()
+            ? Localization::Format(L"chain.test.open_next", index + 2)
+            : Localization::Get(L"chain.test.open_target");
+    static LPCTSTR keys[PTS_COUNT] = {
+        L"chain.test.waiting", L"chain.test.connecting", L"chain.test.tls", L"chain.test.negotiating",
+        L"chain.test.ssh", L"chain.test.hostkey", L"chain.test.auth", L"chain.test.open_target",
+        L"chain.test.passed", L"chain.test.failed", L"chain.test.timeout", L"chain.test.cancelled", L"chain.test.skipped"
+    };
+    return Localization::Get(keys[stage >= 0 && stage < PTS_COUNT ? stage : PTS_WAITING]);
+}
+
+void CPage1::UpdateChainProgress(bool follow)
+{
+    if (!m_chainView.GetSafeHwnd() || m_chainProgress.empty() ||
+        m_chainView.Count() != (int)m_chainProgress.size()) return;
+    const DWORD now = GetTickCount();
+    int passed = 0, current = -1;
+    bool failed = false;
+    std::vector<bool> negotiated(m_chainProgress.size()), linkFailed(m_chainProgress.size());
+    for (int i = 0; i < (int)m_chainProgress.size(); ++i)
+    {
+        const auto& progress = m_chainProgress[i];
+        // Terminal progress precedes the error callback. Wait for that callback
+        // to distinguish HTTP authentication errors from next-hop failures.
+        if (ChainProgressPresentation::Failed(progress.stage) && !m_chainFailureCode) return;
+        negotiated[i] = ChainNodeNegotiated(i); linkFailed[i] = ChainLinkFailed(i);
+        if (progress.Active() || progress.stage == PTS_FAILED || progress.stage == PTS_TIMED_OUT) current = i;
+        if (progress.stage == PTS_FAILED || progress.stage == PTS_TIMED_OUT) failed = true;
+    }
+    const auto cards = ChainProgressPresentation::Project(m_chainProgress, negotiated, linkFailed, now);
+    for (int i = 0; i < (int)cards.size(); ++i)
+    {
+        const auto& progress = cards[i];
+        if (progress.stage == PTS_PASSED) ++passed;
+        const bool active = progress.stage > PTS_WAITING && progress.stage < PTS_PASSED;
+        CString status = ChainStageText(i, progress.stage);
+        if (progress.connectedOnly) status = Localization::Get(L"chain.test.connected_unconfirmed");
+        else if (progress.stage == PTS_FAILED || progress.stage == PTS_TIMED_OUT)
+            status = L"\u00d7 " + Localization::Format(L"chain.test.stage_result",
+                (LPCTSTR)status, (LPCTSTR)ChainStageText(i, progress.lastStage));
+        else if (progress.stage == PTS_PASSED) status = L"\u2713 " + Localization::Get(L"chain.test.passed");
+        else if (active) status = L"… " + status;
+        const CString elapsed = progress.started ? ChainDuration(progress.elapsed) : CString(L"—");
+        CString tip = m_chainView.At(i).name + L"\r\n" + m_chainView.At(i).host + L"\r\n" + status;
+        if (progress.linkSource >= 0) tip += L"\r\n" + ChainLinkText(progress.linkSource);
+        if (progress.errorSource >= 0 && !m_chainErrors[progress.errorSource].IsEmpty())
+            tip += L"\r\n" + m_chainErrors[progress.errorSource];
+        tip += L"\r\n" + Localization::Format(L"chain.test.node_elapsed", (LPCTSTR)elapsed);
+        for (int stage = PTS_CONNECTING; stage < PTS_PASSED; ++stage)
+        {
+            const DWORD duration = progress.stages[stage];
+            if (duration) tip += L"\r\n" + ChainStageText(i, stage) + L": " + ChainDuration(duration);
+        }
+        tip += L"\r\n" + Localization::Get(L"chain.test.timing_hint");
+        const auto state = progress.stage == PTS_FAILED || progress.stage == PTS_TIMED_OUT ? CChainRouteView::Failed :
+            active ? CChainRouteView::Running : progress.stage == PTS_PASSED ? CChainRouteView::Passed : CChainRouteView::Idle;
+        m_chainView.SetProgress(i, state, state == CChainRouteView::Passed || state == CChainRouteView::Failed ? elapsed : CString(), tip);
+    }
+    const bool opening = current >= 0 && (m_chainProgress[current].stage == PTS_OPENING || linkFailed[current]);
+    const int visibleCurrent = opening && current + 1 < (int)cards.size() ? current + 1 : current;
+    if ((follow || failed) && visibleCurrent >= 0 && visibleCurrent != m_chainFollowed)
+    { m_chainView.Follow(visibleCurrent); m_chainFollowed = visibleCurrent; }
+    CString status;
+    const CString total = ChainDuration(m_chainProgressRunning ? now - m_chainStarted : m_chainElapsed);
+    if (m_chainProgressRunning)
+    {
+        CString activity = m_proxyTestPhase == PROXY_TEST_IPV6 ? Localization::Get(L"chain.test.ipv6_probe") :
+            m_proxyTestPhase == PROXY_TEST_TCP && m_testDohQuerying ? Localization::Get(L"test.doh_querying") :
+            current >= 0 && (m_chainProgress[current].stage == PTS_OPENING || ChainLinkFailed(current)) ? ChainLinkText(current) :
+            current >= 0 ? Localization::Format(L"chain.test.current", current + 1,
+                (LPCTSTR)ChainStageText(current, m_chainProgress[current].stage)) : Localization::Get(L"chain.test.finishing");
+        status = Localization::Format(L"chain.test.progress", passed, (int)m_chainProgress.size(),
+            (LPCTSTR)activity, (LPCTSTR)total);
+    }
+    else status = Localization::Format(L"chain.test.finished", (LPCTSTR)m_chainConclusion, (LPCTSTR)total);
+    // Name both ends for a link failure. The source proxy must not look like
+    // the failed destination just because it reports the CONNECT error.
+    if (current >= 0) {
+        CString activity = m_chainProgress[current].stage == PTS_OPENING || ChainLinkFailed(current) ?
+            ChainLinkText(current) : ChainStageText(current, m_chainProgress[current].stage);
+        if (failed && current < (int)m_chainErrors.size() && !m_chainErrors[current].IsEmpty())
+            activity += L" · " + m_chainErrors[current];
+        activity.Replace(L'\r', L' '); activity.Replace(L'\n', L' ');
+        if (failed || (m_chainProgressRunning && m_proxyTestPhase == PROXY_TEST_TCP && !m_testDohQuerying))
+            status = (opening ? CString() : m_chainView.At(current).name + L" · ") + activity + L" · " + total;
+    }
+    m_staticTestProxy.SetDetailText(status);
+    CString previous; m_staticTestProxy.GetWindowText(previous);
+    if (previous != status)
+        m_staticTestProxy.SetStatus(status, m_chainProgressRunning ? CStatusLabel::TONE_INFO : failed ?
+            CStatusLabel::TONE_DANGER : m_testIpv6Result == IPV6_TEST_AVAILABLE ? CStatusLabel::TONE_SUCCESS : CStatusLabel::TONE_WARNING);
+}
+
+CChainRouteView::Node CPage1::ChainNode(int index) const
+{
+    CChainRouteView::Node node;
+    node.name = m_chainHops[index];
+    CfgProxyItem item; item.strName = node.name;
+    if (!m_profileStore.Load(item)) node.host = Localization::Get(L"page1.chain_hop_missing");
+    else if (!CProxyProfileStore::IsChainHop(item)) node.host = Localization::Get(L"page1.chain_hop_invalid");
+    else {
+        node.protocol = (CString)item.pi.strProxyType;
+        CString host = (CString)item.pi.strProxyHost;
+        if (host.Find(L':') >= 0 && host.Left(1) != L"[") host = L"[" + host + L"]";
+        node.host.Format(L"%s:%u", (LPCTSTR)host, (unsigned)item.pi.nProxyPort);
+    }
+    return node;
+}
+
+void CPage1::RefreshChainView(int select)
+{
+    ClearChainProgress();
+    if (!m_chainView.GetSafeHwnd()) return;
+    std::vector<CChainRouteView::Node> nodes;
+    for (int i = 0; i < (int)m_chainHops.size(); ++i) nodes.push_back(ChainNode(i));
+    m_chainView.SetNodes(nodes, select);
+    UpdateChainButtons();
+}
+
+void CPage1::UpdateChainButtons()
+{
+    if (!m_chainView.GetSafeHwnd()) return;
+    m_btnChainAdd.EnableWindow(!m_bIsTesting);
+    m_chainView.SetEditable(!m_bIsTesting);
+    m_cfgls.EnableWindow(!m_bIsTesting);
+    if (GetDlgItem(IDC_BUTTON_PROFILE_MENU)) GetDlgItem(IDC_BUTTON_PROFILE_MENU)->EnableWindow(!m_bIsTesting);
+}
+
+void CPage1::OnChainEdit()
+{
+    const int selected = m_chainView.Selected();
+    if (m_bIsTesting || !m_chainMode || selected < 0 || selected >= (int)m_chainHops.size()) return;
+    CfgProxyItem item; item.strName = m_chainHops[selected];
+    if (!m_profileStore.Load(item) || !CProxyProfileStore::IsChainHop(item))
+    {
+        ShowProfileNotice(Localization::Get(L"profile.load_failed"), NULL, CStatusLabel::TONE_DANGER);
+        return;
+    }
+    CChainNodeEditDialog dialog(m_profileStore, g_ini, item, this);
+    if (dialog.DoModal() != IDOK) return;
+    // Update the node in place: rebuilding would lose its page offset,
+    // selection, and the user's place in a long chain. Never save the chain draft.
+    for (int i = 0; i < (int)m_chainHops.size(); ++i)
+        if (m_chainHops[i].CompareNoCase(item.strName) == 0)
+            m_chainView.UpdateNode(i, ChainNode(i));
+    ClearChainProgress();
+    RefreshProfileEntries();
+    SetRuntimeDirty(TRUE);
+    if (!m_profileDirty && !m_runtimeDirty)
+        m_staticTestProxy.SetStatus(Localization::Get(L"chain.edit.saved"), CStatusLabel::TONE_INFO);
+    UpdateChainButtons();
+}
+
+void CPage1::OnChainAdd()
+{
+    if (m_bIsTesting) return;
+	// Offer saved Server-mode SOCKS5/HTTP/SSH profiles that are not already hops
+	// (and not this profile itself).
+	std::vector<CString> names, offered;
+	m_profileStore.ListNames(names);
+	const CString self = GetCurrentProfileName();
+	CModernPopupMenu menu;
+	if (!menu.CreatePopupMenu()) return;
+	for (const CString& name : names)
+	{
+		if (name.CompareNoCase(self) == 0) continue;
+		BOOL used = FALSE;
+		for (const CString& hop : m_chainHops) used = used || hop.CompareNoCase(name) == 0;
+		CfgProxyItem item;
+		item.strName = name;
+		if (used || !m_profileStore.Load(item) || !CProxyProfileStore::IsChainHop(item)) continue;
+		offered.push_back(name);
+		menu.AppendMenu(MF_STRING, offered.size(), name + L"  \x00b7  " + DescribeServer(item));
+	}
+	if (offered.empty())
+		menu.AppendMenu(MF_STRING | MF_GRAYED, 0, Localization::Get(L"page1.chain_add_none"));
+	CRect anchor;
+	m_btnChainAdd.GetWindowRect(&anchor);
+	const UINT selected = menu.TrackPopupMenu(TPM_RETURNCMD | TPM_LEFTALIGN | TPM_RIGHTBUTTON,
+		anchor.left, anchor.bottom, this);
+	if (!selected || selected > offered.size())
+		return;
+	m_chainHops.push_back(offered[selected - 1]);
+	RefreshChainView((int)m_chainHops.size() - 1);
+	OnProfileFieldChanged();
+}
+
+void CPage1::OnChainMove(int from, int to)
+{
+    if (m_bIsTesting || from < 0 || to < 0 || from >= (int)m_chainHops.size() || to >= (int)m_chainHops.size() || from == to) return;
+    const CString node = m_chainHops[from];
+    m_chainHops.erase(m_chainHops.begin() + from);
+    m_chainHops.insert(m_chainHops.begin() + to, node);
+    RefreshChainView(to);
+    OnProfileFieldChanged();
+}
+
+void CPage1::OnChainRemove()
+{
+    if (m_bIsTesting) return;
+	const int selected = m_chainView.Selected();
+	if (selected < 0) return;
+	m_chainHops.erase(m_chainHops.begin() + selected);
+	RefreshChainView(min(selected, (int)m_chainHops.size() - 1));
+	OnProfileFieldChanged();
 }

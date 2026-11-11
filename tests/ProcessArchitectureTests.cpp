@@ -145,6 +145,10 @@ int ProcessArchitectureTestsMain()
     CHECK(_tcscmp(ApplicationFileName(Arm64), _T("ProxyLaneARM64.exe")) == 0);
     CHECK(_tcscmp(TransportFileName(Arm64), _T("ProxyLaneSecureTransportARM64.dll")) == 0);
 
+    CHECK(MitmFileName(Unknown) == NULL && MitmFileName(X86) == NULL);
+    CHECK(_tcscmp(MitmFileName(X64), _T("ProxyLaneMitm64.dll")) == 0);
+    CHECK(_tcscmp(MitmFileName(Arm64), _T("ProxyLaneMitmARM64.dll")) == 0);
+
     // Exercise the actual dynamically-resolved Windows API as well as mocks.
     CHECK(Query(GetCurrentProcess(), info));
     CHECK(info.process == CurrentModule() && info.native != Unknown);

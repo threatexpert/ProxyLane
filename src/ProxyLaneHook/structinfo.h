@@ -2,6 +2,8 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include "InetCompat.h"
+#include "ProcessIdentity.h"
+#include "AppLauncherProtocol.h"
 
 #pragma pack(push, 1)
 
@@ -142,25 +144,6 @@ public:
 			reinterpret_cast<SOCKADDR_IN *>(this)->sin_port = htons(Port);
 	}
 
-	//
-	BYTE GetByte_sin_zero(int nPos)
-	{
-		SOCKADDR_IN *psa = (SOCKADDR_IN*)this;
-		return psa->sin_zero[nPos];
-	}
-
-	WORD GetWord_sin_zero(int nPos)
-	{
-		SOCKADDR_IN *psa = (SOCKADDR_IN*)this;
-		return *((WORD*)&psa->sin_zero[0]+nPos);
-	}
-
-	DWORD GetDword_sin_zero(int nPos)
-	{
-		SOCKADDR_IN *psa = (SOCKADDR_IN*)this;
-		return *((DWORD*)&psa->sin_zero[0]+nPos);
-	}
-
 	BOOL SameAddress(const _SockAddr &_dst) const
 	{
 		if (sa_family != _dst.sa_family)
@@ -232,7 +215,19 @@ typedef struct _tagProxyInfo
 	string<128> strProxyUser;
 	string<128> strProxyPass;
 	DWORD  reserved; // PROXY_TRANSPORT_*
+	// Protocol-specific transport parameter: TLS PSK, or SHA256 host-key pin
+	// for SSH. Reuses the existing field to keep the packed IPC ABI unchanged.
 	string<256> strTransportPsk;
+	// PRC-local suffix: never sent to injected processes. Keep the legacy
+	// 808-byte routing prefix on the pipe; authentication happens in PRC only.
+	DWORD sshAuth = 0; // 0 = password, 1 = managed private-key file
+	string<1024> strSshKeyFile; // UTF-8 absolute path; PRC-local only
+    string<65> strSshKeyDigest; // Snapshot identity used to isolate cached sessions
+    // Host-only, just like SSH authentication. Never extend the pipe prefix.
+    DWORD dohEnabled = 0;
+    string<1024> dohUrl;
+    string<512> dohBootstrap;
+    BOOL dohBlockIPv6 = FALSE;
 /////////////////////
 
 #define PROXY_TRANSPORT_PLAIN             0
@@ -244,6 +239,7 @@ typedef struct _tagProxyInfo
 #define PROXYTYPE_SOCKS5	3
 #define PROXYTYPE_HTTP10	4
 #define PROXYTYPE_HTTP11	5
+#define PROXYTYPE_SSH     6
 	INT GetProxyType()
 	{
 		if(!_stricmp(strProxyType, "SOCKS4"))
@@ -254,8 +250,10 @@ typedef struct _tagProxyInfo
 			return PROXYTYPE_SOCKS5;
 		else if(!_stricmp(strProxyType, "HTTP10"))
 			return PROXYTYPE_HTTP10;
-		else if(!_stricmp(strProxyType, "HTTP11"))
+		else if(!_stricmp(strProxyType, "HTTP") || !_stricmp(strProxyType, "HTTP11"))
 			return PROXYTYPE_HTTP11;
+		else if(!_stricmp(strProxyType, "SSH"))
+			return PROXYTYPE_SSH;
 		else
 			return PROXYTYPE_NOPROXY;
 	}
@@ -263,6 +261,8 @@ typedef struct _tagProxyInfo
 
 }ProxyInfo, *LPProxyInfo;
 
+static const DWORD PROXYINFO_PIPE_SIZE = 808;
+static_assert(offsetof(ProxyInfo, sshAuth) == PROXYINFO_PIPE_SIZE, "ProxyInfo pipe prefix changed");
 
 #define PRC_PIPESERVER_NAME _T("{1237C887-49E0-4a29-8FFA-2B4220B5BC99}")
 
@@ -284,6 +284,7 @@ typedef struct  _tagProxySettingsInfo
 
 #define PSI_DNSOPT_LOCAL 0
 #define PSI_DNSOPT_REMOTE 1
+#define PSI_DNSOPT_DOH 2 // FakeIP resolution plus host-side DNS-to-DoH interception.
 
 
 typedef struct _tagPRCINFO
@@ -300,6 +301,7 @@ typedef struct _tagPRCINFO
 }PRCINFO, *LPPRCINFO;
 
 #define PRC_CLIENT_FLAG_DNS_REDIRECT 0x00000001
+#define PRC_CLIENT_FLAG_DOH_RESOLVED 0x00000002
 
 typedef struct _tagPRCClient
 {
@@ -328,7 +330,7 @@ typedef struct _tagPRCClient
 	BOOL IsDNValid(){ return szDomainName[0] != '\0';}
 	BOOL HasProxyDestination() const
 	{
-		return (routingFlags & PRC_CLIENT_FLAG_DNS_REDIRECT) != 0;
+		return (routingFlags & (PRC_CLIENT_FLAG_DNS_REDIRECT | PRC_CLIENT_FLAG_DOH_RESOLVED)) != 0;
 	}
 	const _SockAddr& GetProxyDestination() const
 	{
@@ -384,18 +386,21 @@ typedef struct _HookNewProcessInfo
 	ULONGLONG processCreateTime;
 }HookNewProcessInfo, *LPHookNewProcessInfo;
 
-typedef struct _HookProcessIdentityInfo
+// Creation notification snapshot. Fixed-width packed fields have the same
+// layout in 32/64-bit senders; other child lifecycle messages stay unchanged.
+struct HookProcessSnapshot
 {
-	DWORD dwProcessId;
-	ULONGLONG processCreateTime;
-	WCHAR szAppPath[MAX_PATH];
-	DWORD hookState;
-	DWORD hookError;
-}HookProcessIdentityInfo, *LPHookProcessIdentityInfo;
+    DWORD dwProcessId;
+    ULONGLONG processCreateTime;
+    WCHAR szAppPath[MAX_PATH];
+};
+struct HookProcessCreationNotice
+{
+    HookNewProcessInfo child;
+    HookProcessSnapshot parent;
+};
 
-#define PROCESS_HOOK_STATE_PENDING 0
-#define PROCESS_HOOK_STATE_SUCCEEDED 1
-#define PROCESS_HOOK_STATE_FAILED 2
+
 
 //PRC Pipe Protocol Data Head
 typedef struct _tagPRCPDHead
@@ -421,6 +426,9 @@ struct HookBlockedIPv6Info
 	char domain[256];
 	WCHAR processName[MAX_PATH];
 };
+
+// UDP uses the same fixed-width payload, with its own pipe action.
+typedef HookBlockedIPv6Info HookBlockedUdpInfo;
 
 #pragma warning(push)
 #pragma warning(disable : 4200)
@@ -448,6 +456,11 @@ typedef struct _tagHookLogtext
 #define PRCPD_REGISTER_PROCESS_IDENTITY 12
 #define PRCPD_CHILD_RELEASED 13
 #define PRCPD_BLOCKED_IPV6 14
+#define PRCPD_QUIC_INIT_POLICY 15
+#define PRCPD_QUIC_LOCATE 16 // retired: no remote locator
+#define PRCPD_QUIC_STATUS 17
+#define PRCPD_BLOCKED_UDP 18
+#define PRCPD_LAUNCH_PACKAGED_APP 19
 
 #pragma pack(pop)
 

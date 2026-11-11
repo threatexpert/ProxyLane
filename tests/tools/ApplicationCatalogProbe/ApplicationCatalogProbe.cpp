@@ -24,6 +24,7 @@ static BOOL WaitForCatalog(ApplicationCatalogLoad* load)
 
 static BOOL CheckCatalogCache()
 {
+	PreloadApplicationCatalog();
 	ApplicationCatalogLoad* first = AcquireApplicationCatalog(FALSE);
 	first->Release(); // Simulate closing the picker before the first scan completes.
 	first = AcquireApplicationCatalog(FALSE);
@@ -50,7 +51,14 @@ static BOOL CheckCatalogCache()
 	first->Release();
 	// Reopening during a refresh can reuse the last successful snapshot.
 	ApplicationCatalogLoad* detached = AcquireApplicationCatalog(TRUE);
+	ApplicationCatalogLoad* previous = AcquireReadyApplicationCatalog();
+	passed = passed && previous != NULL;
+	if (previous) previous->Release();
 	ApplicationCatalogLoad* reopened = AcquireApplicationCatalog(FALSE);
+	passed = passed && reopened == detached && WaitForSingleObject(detached->cancel, 0) == WAIT_TIMEOUT;
+	reopened->Release(); // Closing during refresh leaves the same worker running.
+	reopened = AcquireApplicationCatalog(FALSE);
+	passed = passed && reopened == detached;
 	passed = WaitForCatalog(reopened) && passed;
 	passed = WaitForCatalog(detached) && passed;
 	ApplicationCatalogLoad* completed = AcquireApplicationCatalog(FALSE);

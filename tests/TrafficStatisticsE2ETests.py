@@ -1,6 +1,7 @@
 """Check native traffic_statistics.exe against controlled local endpoints."""
 import argparse
 import ctypes
+import os
 import pathlib
 import socket
 import subprocess
@@ -47,11 +48,11 @@ def main():
         if not unhook():
             raise RuntimeError("Inherited Hook cannot be detached; run tests from an unproxied process")
     tcp = socket.socket()
-    tcp.bind(("127.0.0.1", 0))
+    tcp.bind(("0.0.0.0", 0))
     tcp.listen()
     port = tcp.getsockname()[1]
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    udp.bind(("127.0.0.1", port))
+    udp.bind(("0.0.0.0", port))
     for target, sock in ((tcp_server, tcp), (udp_server, udp)):
         threading.Thread(target=target, args=(sock,), daemon=True).start()
     with socket.socket() as reservation:
@@ -72,6 +73,12 @@ def main():
             else:
                 raise RuntimeError("SOCKS test server did not start")
             subprocess.run([str(args.probe.resolve()), str(proxy_port), str(port)],
+                           check=True, timeout=40)
+            # Loopback deliberately bypasses interception; use this machine's LAN IP.
+            ip = next(ip for ip in socket.gethostbyname_ex(socket.gethostname())[2]
+                      if not ip.startswith("127."))
+            subprocess.run([str(args.probe.resolve()), "0", str(port), "NOPROXY"],
+                           env=dict(os.environ, PROXYLANE_TRAFFIC_TARGET=ip),
                            check=True, timeout=40)
         finally:
             server.terminate()

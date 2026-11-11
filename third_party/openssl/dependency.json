@@ -1,0 +1,7 @@
+{
+  "package": "openssl-native",
+  "version": "3.5.9",
+  "url": "https://api.nuget.org/v3-flatcontainer/openssl-native/3.5.9/openssl-native.3.5.9.nupkg",
+  "sha256": "5884c788d624b8a9d9d0510d13f02a9ce487fc0bb570418b8d53444205423d42",
+  "library": "lib/win-x64/native/libcrypto_static_v142.lib"
+}

@@ -1,9 +1,52 @@
 # Windows ARM64 原生支持评估
 
 初始评估日期：2026-10-15；初始基线：`main` 的 `26386d2`。
-开发分支：`codex/windows-arm64-assessment`。2026-10-16 已合入 `main` 的 `a14a721`，
-保留当前显式卸载约定：无 HookCallGate，不暂停其他线程，调用者保证卸载时机。
-本分支正在分阶段适配，尚不能发布为支持 ARM64 的完整产品。
+开发分支：`codex/windows-arm64-assessment`。
+本分支正在分阶段适配，尚不能发布为支持 ARM64 的完整产品。下文旧阶段记录保留为历史，当前状态以最新章节为准。
+
+## 2026-11-12：同步 main 与构建回归
+
+同步主线 `6fabf2c`（包含 DoH、SSH、协议分析、UI 更新及 XP 静态 TLS 修复）。
+解决八个文件的合并冲突，并检查自动合并的架构边界：
+
+- 将 ARM64 `InjectDll` 入口同步为主线的 UTF-16 DLL 路径接口，保留 ARM64 原生注入实现。
+- 合并架构路由和主线的 PRC、提权、测试变更；保留 `/Zc:threadSafeInit-` 和 DoH 动态 TLS 状态。
+- 安全传输脚本默认仍只构建主线使用的 x64 后端；显式传入 `ARM64` 时构建原生后端，不恢复已停用的 Win32 Rust 后端。
+- `build-mitm.ps1` 增加 ARM64 目标及独立输出目录，ARM64 产品构建同时生成
+  `ProxyLaneMitmARM64.dll` 和 CA 工具 `ProxyLaneMitmARM64.exe`；Hook 按实际架构加载 MITM/DoH 模块。
+- 浏览器 QUIC 策略 Hook 使用 x64 指令定位及 x64 unwind 表，只在纯 x64 下启用。
+  ARM64 不编译或执行这条路径；这与通用 MITM/QUIC/DoH Rust 模块的交叉构建是两回事。
+- SSH 固定依赖目前是 x64 OpenSSL/libssh2，ARM64 明确返回后端不可用，不尝试加载 `ProxyLaneSsh64.dll`。
+  ARM64 SSH 后端仍待单独适配，本次没有更换密码学依赖。
+- 修复 ARM64 可执行文件的便携配置名，使 `ProxyLaneARM64.exe` 使用 `ProxyLane.ini`，
+  而非误裁剪成 `ProxyLaneARM.ini`；在现有配置存储测试中覆盖三种产品文件名。
+- 将配置初始化前的宿主转交判断统一为共享架构检测，删除自动合并遗留的 `IsWow64` 调用；
+  32 位宿主测试也同步使用新的架构检测替身，仍运行真实 UI 与注入实现。
+- 缩短 SSH 依赖构建目录名，修复长 worktree 路径下 VS 2019/CMake 的临时路径超限；
+  缓存仍以平台、libssh2 补丁哈希及固定 OpenSSL 包哈希区分。
+
+- 更新 MITM 接口回归测试的预期设置，保留主线新增的 `recording` 字段；原断言与当前接口结构不一致，未修改产品行为。
+
+已通过的验证（日志位于 `build/qa/arm64-main-merge-*.log`）：
+
+| 检查 | 结果与日志后缀 |
+| --- | --- |
+| ARM64 Release / Debug | 两种配置均通过，分别验证 9 个产物的 PE Machine 为 `0xAA64`；`release.log` / `debug.log` |
+| ARM64 引导代码 | 400 字节源码/生成结果一致、无重定位；Unicorn 两组共 9 条路径通过；`bootstrap.log` |
+| Win32 / x64 Release 回归 | 完整解决方案、单元测试、TCP/UDP 统计、重启及显式卸载；`regression.log` |
+| 托管启动及重绑定 | 四种父子/孙进程架构组合、8 次代理连接、MSBuild 启动、x86/x64 PRC 重绑定及 IPv6/DNS；同上 |
+| 配置存储 | Win32/x64 测试通过，包含 ARM64 便携文件名；`config.log` |
+| 32 位宿主 | 真实 UI、功能限制、普通代理启动与注入通过；`legacy.log` |
+| Hook 静态 TLS | 最终 `ProxyLaneHook32.dll` / `ProxyLaneHook64.dll` 均无 PE TLS 目录；`static-tls.log` |
+| MITM Release API | 设置、配额、停用/重启和过期对象测试通过；`mitm.log` |
+| DoH 离线连通性 | 超时、取消、SOCKS/SSH 信任失败归因及禁止重复重建代理链通过；`doh.log` |
+
+ARM64 产物与 SHA256 清单在 `build/qa/arm64-build/{Release,Debug}/verification.json`，
+`RuntimeTested` 仍为 `false`。C++ Debug/Release 分开构建，可选 Rust 模块沿用 Release 构建。
+
+仍未在 Windows ARM64 或 Windows XP 上实测。交叉构建、PE 检查、机器码仿真和
+x86/x64 本机回归不能替代这两项平台验收。ARM64 的跨架构/仿真进程注入、提权 helper、
+SSH 后端和浏览器 QUIC 策略 Hook 仍不支持；本次不更新正式发行包。
 
 ## 2026-10-16 第三阶段：ARM64 → ARM64 原生注入
 

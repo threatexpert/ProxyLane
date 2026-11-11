@@ -4,11 +4,12 @@ param(
     [ValidateRange(1, 60)]
     [int]$ObserveSeconds = 10,
     [ValidateRange(1, 10)]
-    [int]$Repetitions = 2
+    [int]$Repetitions = 2,
+    [string]$BinaryDirectory = (Join-Path $PSScriptRoot '..\bin')
 )
 
 $ErrorActionPreference = 'Stop'
-$binaryDirectory = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\bin'))
+$binaryDirectory = [IO.Path]::GetFullPath($BinaryDirectory)
 
 # Run on an unlocked Windows desktop, after building Release binaries to bin.
 # This tests real dialog initialization and the message loop, not just /? or

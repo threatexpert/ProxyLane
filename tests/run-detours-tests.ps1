@@ -25,11 +25,12 @@ try {
 @echo off
 call "$vcvars" >nul
 if errorlevel 1 exit /b 1
-cl /nologo /EHsc /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /D_WINSOCK_DEPRECATED_NO_WARNINGS tests\e2e\traffic_statistics.cpp /Fo"$qa\traffic$bits.obj" /Fe"bin\traffic$bits.exe" /link "bin\$platform\Release\ProxyLaneHook.lib" ws2_32.lib
+cl /nologo /EHsc /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0601 /D_WINSOCK_DEPRECATED_NO_WARNINGS tests\e2e\traffic_statistics.cpp /Fo"$qa\traffic$bits.obj" /Fe"$qa\traffic$bits.exe" /link "bin\$platform\Release\ProxyLaneHook.lib" ws2_32.lib
 "@ | Set-Content -LiteralPath $batch -Encoding Default
         & $env:ComSpec /d /c $batch
         if ($LASTEXITCODE) { throw "$platform traffic probe build failed." }
-        & $python tests/TrafficStatisticsE2ETests.py --probe "bin/traffic$bits.exe" --socks-server "$qa\socks5_udp_server.exe"
+        Copy-Item -Path (Join-Path $repo 'bin\*.dll') -Destination $qa -Force
+        & $python tests/TrafficStatisticsE2ETests.py --probe "$qa\traffic$bits.exe" --socks-server "$qa\socks5_udp_server.exe"
         if ($LASTEXITCODE) { throw "$platform traffic/explicit-detach tests failed." }
     }
     & $python tests/ManagedStartupE2ETests.py --bin bin --msbuild-dir (Split-Path -Parent $msbuild)

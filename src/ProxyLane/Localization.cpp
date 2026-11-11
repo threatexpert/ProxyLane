@@ -1,8 +1,11 @@
 #include "stdafx.h"
 #include "ProxyLane.h"
 #include "Localization.h"
+#include "ConfigStorage.h"
 #include "resource.h"
 #include <stdarg.h>
+
+CString Localization::SettingsPath() { return ConfigStorage::Path(); }
 
 namespace
 {
@@ -10,16 +13,6 @@ namespace
 	CString g_currentLanguage;
 	CString g_preferredLanguage;
 
-	CString SettingsPath()
-	{
-		TCHAR path[MAX_PATH] = { 0 };
-		GetModuleFileName(NULL, path, _countof(path));
-		CString result(path);
-		if (result.Right(6).CompareNoCase(_T("64.exe")) == 0)
-			return result.Left(result.GetLength() - 6) + _T(".ini");
-		int dot = result.ReverseFind(_T('.'));
-		return (dot >= 0 ? result.Left(dot) : result) + _T(".ini");
-	}
 
 	void SkipWhitespace(const CString& text, int& position)
 	{
@@ -205,8 +198,9 @@ BOOL Localization::SetPreferredLanguage(LPCTSTR language)
 {
 	if (!language)
 		return FALSE;
+	if (!ConfigStorage::WriteValue(_T("options"), _T("language"), language, SettingsPath())) return FALSE;
 	g_preferredLanguage = language;
-	return WritePrivateProfileString(_T("options"), _T("language"), language, SettingsPath());
+	return TRUE;
 }
 
 void Localization::ApplyDialog(CWnd* dialog, UINT dialogId)
@@ -216,7 +210,7 @@ void Localization::ApplyDialog(CWnd* dialog, UINT dialogId)
 	static const ControlTranslation page1[] = {
 		{ IDC_STATIC_PAGE_TITLE, _T("page1.title") }, { IDC_STATIC_PAGE_SUBTITLE, _T("page1.subtitle") },
 		{ IDC_STATIC_PROXY_GROUP, _T("page1.proxy_group") }, { IDC_STATIC_CONFIG_LABEL, _T("common.config") },
-		{ IDC_BUTTON_SAVE_PROFILE, _T("common.save_profile") }, { IDC_BUTTON_DELETE_PROFILE, _T("common.delete") },
+		{ IDC_BUTTON_SAVE_PROFILE, _T("common.save_profile") }, { IDC_BUTTON_PROFILE_MENU, _T("profile.actions") },
 		{ IDC_STATIC_TYPE_LABEL, _T("common.type") }, { IDC_STATIC_HOST_LABEL, _T("common.host") },
 		{ IDC_STATIC_PORT_LABEL, _T("common.port") }, { IDC_STATIC_USER_LABEL, _T("common.username") },
 		{ IDC_STATIC_PASSWORD_LABEL, _T("common.password") }, { IDC_STATIC_TestProxy, _T("status.test_not_run") },
@@ -229,6 +223,8 @@ void Localization::ApplyDialog(CWnd* dialog, UINT dialogId)
 		{ IDC_CHECK_BLOCKUDP, _T("page1.block_udp") }, { IDC_CHECK_BLOCK_IPV6, _T("page1.block_ipv6") },
 		{ IDC_STATIC_DNS_LABEL, _T("page1.dns") },
 		{ IDC_RADIO_DNSLOCAL, _T("page1.dns_local") }, { IDC_RADIO_DNSREMOTE, _T("page1.dns_remote") },
+        { IDC_RADIO_DNSDOH, L"page1.dns_doh" },
+        { IDC_STATIC_DOH_URL, L"page1.doh_url" },
 		{ IDC_CHECK_REDIRECT_PRIVATE_DNS, _T("page1.redirect_private_dns") },
 		{ IDC_STATIC_CHILDFILTER_GROUP, _T("page1.child_group") }, { IDC_RADIO_CHILDFILTER_EXCLUDE, _T("page1.child_exclude") },
 		{ IDC_RADIO_CHILDFILTER_INCLUDE, _T("page1.child_include") }, { IDC_STATIC_CHILDFILTER_HINT, _T("page1.child_hint") },
@@ -237,15 +233,16 @@ void Localization::ApplyDialog(CWnd* dialog, UINT dialogId)
 	};
 	static const ControlTranslation page2[] = {
 		{ IDC_STATIC_PAGE_TITLE, _T("page2.title") }, { IDC_STATIC_PAGE_SUBTITLE, _T("page2.subtitle") },
-		{ IDC_BTN_COPY_LOG, _T("action.copy_all") }, { IDC_BTN_CLEAR_LOG, _T("action.clear") }
+		{ IDC_BTN_COPY_LOG, _T("action.copy_all") }, { IDC_BTN_CLEAR_LOG, _T("action.clear") },
+		{ IDC_CHECK_LOADER_CAPTURE, _T("page2.loader_capture") }
 	};
 	static const ControlTranslation page3[] = {
 		{ IDC_STATIC_PAGE_TITLE, _T("page3.title") }, { IDC_STATIC_PAGE_SUBTITLE, _T("page3.subtitle") },
-		{ IDC_REFRESH, _T("action.refresh") }, { IDC_INJECTDLL, _T("action.proxy_selected") },
+		{ IDC_INJECTDLL, _T("action.proxy_selected") },
 		{ IDC_SELECT_APP, _T("apps.select") }, { IDC_TERMINATE_PROCESS, _T("action.end_process") }
 	};
 	static const ControlTranslation page4[] = {
-		{ IDC_STATIC_PAGE_TITLE, _T("page4.title") }, { IDC_STATIC_PAGE_SUBTITLE, _T("page4.subtitle") },
+		{ IDC_STATIC_PAGE_TITLE, _T("page4.title") },
 		{ IDC_CHECK1, _T("page4.monitor") }, { IDC_CHECK_HEX, _T("page4.hex") },
 		{ IDC_BTN_CLEAR, _T("action.clear") }, { IDC_STATIC_TASKCOUNT, _T("page4.connections_zero") }
 	};

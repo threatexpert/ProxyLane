@@ -1,9 +1,10 @@
-/************************************************************************/
+﻿/************************************************************************/
 /*                                                                      */
 /*                                                                      */
 /************************************************************************/
 
 #include "stdafx.h"
+#include "BrowserQuicPolicy.h"
 #include "HookWinsock.h"
 #include <psapi.h>
 #include "GlobalProxy.h"
@@ -74,13 +75,27 @@ static BOOL NormalizeSocketAddress(const SOCKADDR *address, int addressLength,
 	return TRUE;
 }
 
-static BOOL IsUdpLoopbackDestination(SOCKET socketHandle,
+BOOL CHookWinsock::IsUdpAllowedLoopback(const _SockAddr& address)
+{
+	// Dummy DNS addresses represent remote hosts, even inside 127.0.0.0/8.
+	return address.IsLoopback() &&
+		!(address.IsIPv4() && m_DummyDNS.IsDummyIP(address.GetdwIP())) &&
+		!(address.IsIPv6() && m_DummyDNS.IsDummyIPv6(address.GetAddr6()));
+}
+
+BOOL CHookWinsock::IsDohDnsRequest(const SOCKADDR* destination, int length)
+{
+    _SockAddr address;
+    return NormalizeSocketAddress(destination, length, &address) && IsDohDnsDestination(address);
+}
+
+BOOL CHookWinsock::IsUdpLoopbackDestination(SOCKET socketHandle,
 	const SOCKADDR *destination, int destinationLength)
 {
 	_SockAddr normalized;
 	if (destination)
 		return NormalizeSocketAddress(destination, destinationLength,
-			&normalized) && normalized.IsLoopback();
+			&normalized) && IsUdpAllowedLoopback(normalized);
 
 	SOCKADDR_STORAGE peer;
 	ZeroMemory(&peer, sizeof(peer));
@@ -89,7 +104,7 @@ static BOOL IsUdpLoopbackDestination(SOCKET socketHandle,
 		&peerLength) == SOCKET_ERROR)
 		return FALSE;
 	return NormalizeSocketAddress(reinterpret_cast<SOCKADDR *>(&peer),
-		peerLength, &normalized) && normalized.IsLoopback();
+		peerLength, &normalized) && IsUdpAllowedLoopback(normalized);
 }
 
 static BOOL GetSocketDestination(SOCKET socketHandle,
@@ -308,8 +323,13 @@ CHookWinsock::CHookWinsock(void)
 	InitializeCriticalSection(&m_RequestPipeLock);
 	InitializeCriticalSection(&m_PRCPipeNameLock);
 	m_ProcessCreationTls = TlsAlloc();
+	m_tlsError = m_ProcessCreationTls == TLS_OUT_OF_INDEXES ? ::GetLastError() : 0;
+	m_hookFailure.Set(0, NULL, NULL, NULL);
+	ZeroMemory(m_HookModules, sizeof(m_HookModules));
+	ZeroMemory(m_HookApis, sizeof(m_HookApis));
 	ZeroMemory(m_HookedInfo, sizeof(m_HookedInfo));
 	ZeroMemory(&m_psi, sizeof(m_psi));
+	ZeroMemory(&m_appLauncherHost, sizeof(m_appLauncherHost));
 	ZeroMemory(m_LocalDnsHostName, sizeof(m_LocalDnsHostName));
 	ZeroMemory(m_ChildGuardName, sizeof(m_ChildGuardName));
 	m_ChildGuardInstalled = FALSE;
@@ -378,6 +398,27 @@ void CHookWinsock::LogBlockedIPv6(SOCKET socketHandle,
 		m_RequestPipe.Disconnect();
 }
 
+void CHookWinsock::LogBlockedUDP(SOCKET socketHandle, const SOCKADDR* destination, int length)
+{
+	HookBlockedUdpInfo info = { 0 };
+	GetSocketDestination(socketHandle, destination, length, &info.destination);
+	if (!m_udpBlockLogLimiter.Allow(info.destination)) return;
+	info.processId = GetCurrentProcessId();
+	info.socketType = SOCK_DGRAM;
+	WCHAR processPath[MAX_PATH] = L"";
+	GetModuleFileNameW(NULL, processPath, _countof(processPath));
+	processPath[_countof(processPath) - 1] = L'\0';
+	const WCHAR* name = wcsrchr(processPath, L'\\');
+	name = name ? name + 1 : processPath;
+	wcscpy_s(info.processName, name[0] ? name : L"Unknown");
+	if (info.destination.IsIPv4() && m_DummyDNS.IsDummyIP(info.destination.GetdwIP()))
+		m_DummyDNS.GetHostByIP(info.destination.GetdwIP(), info.domain, sizeof(info.domain) - 1);
+	else if (info.destination.IsIPv6() && m_DummyDNS.IsDummyIPv6(info.destination.GetAddr6()))
+		m_DummyDNS.GetHostByIPv6(info.destination.GetAddr6(), info.domain, sizeof(info.domain));
+	CScopedCriticalSection pipeLock(&m_RequestPipeLock);
+	if (EnsureRequestPipe() && !m_RequestPipe.PRCLogBlockedUDP(info)) m_RequestPipe.Disconnect();
+}
+
 CString CHookWinsock::GetLastError()
 {
 	return m_szLastError;
@@ -393,16 +434,31 @@ BOOL CHookWinsock::EnableHook()
 	CPRCPipeClient PRCPipeClient;
 
 	if (!PRCPipeClient.Connect(m_szPRCPipeName))
-		return FALSE;
+	{
+		SetHookFailure(::GetLastError(), "connect-control-pipe", "kernel32.dll", "CreateFile/WaitNamedPipe");
+		return ReportHookFailure(NULL);
+	}
 
 	if (!PRCPipeClient.PRCGetProxySettingsInfo(&m_psi))
 	{
-		return FALSE;
+		SetHookFailure(::GetLastError(), "read-proxy-settings", "PRC", "PRCGetProxySettingsInfo");
+		// A failed exchange can leave unread bytes. Report on a fresh connection.
+		PRCPipeClient.Disconnect();
+		PRCPipeClient.Connect(m_szPRCPipeName);
+		return ReportHookFailure(&PRCPipeClient);
 	}
 
 	PRCINFO startupInfo;
-	if (!PRCPipeClient.GetPRCStartupInfo(&startupInfo))
-		return FALSE;
+	bool quicPolicy=false;
+	AppLauncherHostInfo launcher = {};
+	if (!PRCPipeClient.GetPRCStartupInfo(&startupInfo, &quicPolicy, &launcher))
+	{
+		SetHookFailure(::GetLastError(), "read-startup-info", "PRC", "GetPRCStartupInfo");
+		PRCPipeClient.Disconnect();
+		PRCPipeClient.Connect(m_szPRCPipeName);
+		return ReportHookFailure(&PRCPipeClient);
+	}
+	{ CScopedCriticalSection lock(&m_PRCPipeNameLock); m_appLauncherHost=launcher; }
 
 	DWORD localDnsHostNameLength = _countof(m_LocalDnsHostName);
 	if (!GetComputerNameExA(ComputerNameDnsHostname, m_LocalDnsHostName,
@@ -438,6 +494,7 @@ BOOL CHookWinsock::EnableHook()
 
 	//hook API
 
+	BrowserQuicPolicy::Initialize(m_szPRCPipeName,quicPolicy && m_psi.bHookUDP && !m_psi.bBlockUDP);
 	BOOL bOK = HookWinsock();
 	if (!bOK && m_ChildGuardInstalled)
 	{
@@ -445,12 +502,44 @@ BOOL CHookWinsock::EnableHook()
 		m_ChildGuardInstalled = FALSE;
 	}
 
-	PRCPipeClient.PRCNotifyHookWSockResult(
-		bOK ? 0 : 1, GetCurrentProcessCreateTimeValue());
+	if (!bOK)
+		ReportHookFailure(&PRCPipeClient);
+	else
+		PRCPipeClient.PRCNotifyHookWSockResult(0, GetCurrentProcessCreateTimeValue());
 
 	PRCPipeClient.Disconnect();
 
+	if (!bOK) ::SetLastError(m_hookFailure.error);
 	return bOK;
+}
+
+BOOL CHookWinsock::SetHookFailure(DWORD error, const char* stage, const char* module, const char* api)
+{
+	m_hookFailure.Set(error, stage, module, api);
+	m_szLastError.Format(_T("%hs: %hs!%hs, error %lu"), stage,
+		module ? module : "n/a", api ? api : "n/a", error);
+	::SetLastError(error);
+	return FALSE;
+}
+
+BOOL CHookWinsock::ReportHookFailure(CPRCPipeClient* client)
+{
+	WCHAR path[MAX_PATH] = {}, message[1536] = {};
+	GetModuleFileNameW(NULL, path, _countof(path));
+	path[_countof(path) - 1] = L'\0';
+	m_hookFailure.Format(message, _countof(message), path, GetCurrentProcessId());
+	// Still observable under a debugger if the control pipe itself is unavailable.
+	OutputDebugStringW(message);
+	if (client && client->IsConnected())
+	{
+		// Keep the original protocol, including compatibility with older PL hosts.
+		client->PRCLogtext(message);
+		client->PRCNotifyHookWSockResult(m_hookFailure.error ? m_hookFailure.error : ERROR_GEN_FAILURE,
+			GetCurrentProcessCreateTimeValue());
+	}
+	if (client) client->Disconnect();
+	::SetLastError(m_hookFailure.error);
+	return FALSE;
 }
 
 BOOL CHookWinsock::SetPRCPipeName(LPCSTR lpszPipeName)
@@ -468,7 +557,8 @@ BOOL CHookWinsock::RebindPRC(LPCSTR lpszPipeName)
 	CString nextPipe(lpszPipeName);
 	CPRCPipeClient client;
 	PRCINFO startupInfo;
-	if (!client.Connect(nextPipe) || !client.GetPRCStartupInfo(&startupInfo) ||
+	AppLauncherHostInfo launcher = {};
+	if (!client.Connect(nextPipe) || !client.GetPRCStartupInfo(&startupInfo, NULL, &launcher) ||
 		!RegisterCurrentProcessIdentity(client))
 		return FALSE; // Keep the previous endpoint and cached connection on failure.
 	{
@@ -479,6 +569,7 @@ BOOL CHookWinsock::RebindPRC(LPCSTR lpszPipeName)
 		m_RequestPipe.Disconnect();
 		CScopedCriticalSection nameLock(&m_PRCPipeNameLock);
 		m_szPRCPipeName = nextPipe;
+		m_appLauncherHost = launcher;
 	}
 	// Report the surviving host to the new GUI too. A failed notification does
 	// not undo an already published binding; retrying the request is safe.
@@ -508,17 +599,19 @@ BOOL CHookWinsock::DisableHook()
 BOOL CHookWinsock::ApplyHooks(bool attach)
 {
 	DetourHookBinding bindings[HOOKAPI_COUNT];
+	int indices[HOOKAPI_COUNT];
 	size_t count = 0;
 	for (int i = 0; i < HOOKAPI_COUNT; ++i)
-		if (m_HookedInfo[i].original) bindings[count++] = m_HookedInfo[i];
-	LONG error = attach ? InstallDetourHooks(bindings, count)
-	                    : RemoveDetourHooks(bindings, count);
+		if (m_HookedInfo[i].original) { indices[count] = i; bindings[count++] = m_HookedInfo[i]; }
+	DetourHookFailure failure = {};
+	LONG error = attach ? InstallDetourHooks(bindings, count, &failure)
+	                    : RemoveDetourHooks(bindings, count, &failure);
 	if (error != NO_ERROR)
 	{
-		m_szLastError.Format(_T("Detours %s failed: %ld"),
-			attach ? _T("attach") : _T("detach"), error);
-		::SetLastError(error);
-		return FALSE;
+		const int index = failure.bindingIndex < count ? indices[failure.bindingIndex] : -1;
+		return SetHookFailure(error, failure.stage,
+			index >= 0 ? m_HookModules[index] : NULL,
+			index >= 0 ? m_HookApis[index] : NULL);
 	}
 	m_bHookEnabled = attach ? TRUE : FALSE;
 	return TRUE;
@@ -529,15 +622,18 @@ BOOL CHookWinsock::HookAPI(eHOOKMODUDLE ehm, eHOOKFUN ehf, char *exportfunc,
 	LPVOID myfuncaddr, PVOID* original)
 {
 	HMODULE module = GetModuleHandleA(m_ModuleName[ehm]);
+	if (!module)
+		return SetHookFailure(::GetLastError(), "resolve-module", m_ModuleName[ehm], exportfunc);
 	PVOID target = module ? reinterpret_cast<PVOID>(GetProcAddress(module, exportfunc)) : NULL;
 	if (!target)
 	{
-		m_szLastError.Format(_T("Unable to resolve hook export: %hs"), exportfunc);
-		return FALSE;
+		return SetHookFailure(::GetLastError(), "GetProcAddress", m_ModuleName[ehm], exportfunc);
 	}
 	*original = target;
 	m_HookedInfo[ehf].original = original;
 	m_HookedInfo[ehf].replacement = myfuncaddr;
+	m_HookModules[ehf] = m_ModuleName[ehm];
+	m_HookApis[ehf] = exportfunc;
 	return TRUE;
 }
 
@@ -580,7 +676,7 @@ BOOL CHookWinsock::HackDNS(const char *name)
 	{
 		return FALSE;
 	}
-	else if (m_psi.nDNSOption == PSI_DNSOPT_REMOTE)
+	else if (m_psi.nDNSOption == PSI_DNSOPT_REMOTE || m_psi.nDNSOption == PSI_DNSOPT_DOH)
 	{
 		return !IsHostNameReserved(name);
 	}
@@ -949,8 +1045,9 @@ CHookWinsock::inhook_connect(SOCKET s, const struct sockaddr FAR * name, int nam
 	int socketTypeLength = sizeof(socketType);
 	if (m_psi.bBlockUDP &&
 		getsockopt(s, SOL_SOCKET, SO_TYPE, (char*)&socketType, &socketTypeLength) == 0 &&
-		socketType == SOCK_DGRAM && !addrname.IsLoopback())
+		socketType == SOCK_DGRAM && !IsUdpAllowedLoopback(addrname))
 	{
+		LogBlockedUDP(s, name, namelen);
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
 	}
@@ -1006,8 +1103,9 @@ CHookWinsock::inhook_WSAConnect(SOCKET s, const struct sockaddr* name, int namel
 	int socketTypeLength = sizeof(socketType);
 	if (m_psi.bBlockUDP &&
 		getsockopt(s, SOL_SOCKET, SO_TYPE, (char*)&socketType, &socketTypeLength) == 0 &&
-		socketType == SOCK_DGRAM && !addrname.IsLoopback())
+		socketType == SOCK_DGRAM && !IsUdpAllowedLoopback(addrname))
 	{
+		LogBlockedUDP(s, name, namelen);
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
 	}
@@ -1128,7 +1226,6 @@ BOOL PASCAL CHookWinsock::inhook_ConnectEx(
 }
 
 static __WSASENDMSG Original_WSASendMsg = NULL;
-
 INT PASCAL hook_WSASendMsg(SOCKET s, LPWSAMSG lpMsg, DWORD dwFlags,
 	LPDWORD lpNumberOfBytesSent, LPWSAOVERLAPPED lpOverlapped,
 	LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine)
@@ -1165,6 +1262,7 @@ INT PASCAL CHookWinsock::inhook_WSASendMsg(SOCKET s, LPWSAMSG lpMsg,
 	if (m_psi.bBlockUDP && (!lpMsg ||
 		!IsUdpLoopbackDestination(s, lpMsg->name, lpMsg->namelen)))
 	{
+		LogBlockedUDP(s, lpMsg ? lpMsg->name : NULL, lpMsg ? lpMsg->namelen : 0);
 		WSASetLastError(WSAEACCES);
 		return SOCKET_ERROR;
 	}
@@ -1174,7 +1272,7 @@ INT PASCAL CHookWinsock::inhook_WSASendMsg(SOCKET s, LPWSAMSG lpMsg,
 		WSASetLastError(WSAEHOSTUNREACH);
 		return SOCKET_ERROR;
 	}
-	if (!m_psi.bHookUDP || !lpMsg)
+	if (!lpMsg || (!m_psi.bHookUDP && !IsDohDnsRequest(lpMsg->name, lpMsg->namelen)))
 		return Original_WSASendMsg(s, lpMsg, dwFlags, lpNumberOfBytesSent,
 			lpOverlapped, lpCompletionRoutine);
 	if (!lpMsg->name)
@@ -1188,6 +1286,7 @@ INT PASCAL CHookWinsock::inhook_WSASendMsg(SOCKET s, LPWSAMSG lpMsg,
 			WSASetLastError(WSAEMSGSIZE);
 			return SOCKET_ERROR;
 		}
+		if (connectedMaxPayload) NotifyQuicUdp();
 		return Original_WSASendMsg(s, lpMsg, dwFlags, lpNumberOfBytesSent,
 			lpOverlapped, lpCompletionRoutine);
 	}
@@ -1245,14 +1344,6 @@ INT PASCAL CHookWinsock::inhook_WSASendMsg(SOCKET s, LPWSAMSG lpMsg,
 
 HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 {
-	if (addrname.IsIPv4() && *(DWORD*)&addrname.sa_data[6] == 'pass' &&
-		*(DWORD*)&addrname.sa_data[10] == 'port')
-	{
-		*(DWORD*)&addrname.sa_data[6] = 0;
-		*(DWORD*)&addrname.sa_data[10] = 0;
-		return HOOK_BYPASS;
-	}
-
 	//check SO_REUSEADDR?
 	int nSockType = SOCK_STREAM;
 	int nTypeLen = sizeof(nSockType);
@@ -1273,9 +1364,9 @@ HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 		WSASetLastError(WSAEHOSTUNREACH);
 		return HOOK_FAILED;
 	}
-	if (nSockType == SOCK_DGRAM && !m_psi.bHookUDP)
+	if (nSockType == SOCK_DGRAM && !m_psi.bHookUDP && !IsDohDnsDestination(addrname))
 		return HOOK_BYPASS;
-	if (nSockType == SOCK_STREAM && !m_psi.bHookTCP)
+	if (nSockType == SOCK_STREAM && !m_psi.bHookTCP && !IsDohDnsDestination(addrname))
 		return HOOK_BYPASS;
 
 	// 127.255.0.0/16 is ProxyLane's IPv4 dummy-DNS range.  It is part of
@@ -1366,7 +1457,8 @@ HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 	{
 		const int registrationError = WSAGetLastError();
 		if (registrationError != WSAEOPNOTSUPP &&
-			registrationError != WSAEHOSTUNREACH)
+			registrationError != WSAEHOSTUNREACH &&
+			registrationError != WSAENETUNREACH)
 			m_RequestPipe.Disconnect();
 		return HOOK_FAILED;
 	}
@@ -1375,7 +1467,7 @@ HookDecision CHookWinsock::HackConnect(SOCKET s, _SockAddr &addrname)
 	if (nSockType == SOCK_DGRAM)
 	{
 		size_t maxPayload = UdpPayloadPolicy::MaxPayload(
-			proxyInfo.GetProxyType() == PROXYTYPE_SOCKS5,
+			proxyInfo.GetProxyType() == PROXYTYPE_SOCKS5 && !IsDohDnsDestination(prcc.dstAddr),
 			prcc.IsDNValid() ? prcc.szDomainName : NULL,
 			prcc.dstAddr.IsIPv6());
 		m_HackedSocket.SetUDPMaxPayload(&prcc, maxPayload, TRUE);
@@ -1425,7 +1517,7 @@ MyDetourProc(has_Return,
 
 int WSAAPI CHookWinsock::inhook_getpeername(SOCKET s, struct sockaddr* name, int* namelen)
 {
-	if (!m_psi.bHookTCP && !m_psi.bHookUDP)
+	if (!m_psi.bHookTCP && !m_psi.bHookUDP && m_psi.nDNSOption != PSI_DNSOPT_DOH)
 	{
 		return CallTrampoline(getpeername)(s, name, namelen);
 	}
@@ -1434,6 +1526,7 @@ int WSAAPI CHookWinsock::inhook_getpeername(SOCKET s, struct sockaddr* name, int
 	比如之前connect的原目的是aa.aa.aa.aa， 然后被HackConnect修改为PRC的服务地址, 为了避免getpeername得到PRC的地址，这里要做处理
 	*/
 	PRCClient prcc;
+	// UDP exposes the actual local relay endpoint; never rewrite its peer address.
 	if (m_HackedSocket.GetInfo(s, &prcc) && prcc.sType == SOCK_STREAM)
 	{
 		const int requiredLength = prcc.dstAddr.Size();
@@ -1461,7 +1554,7 @@ MyDetourProc(has_Return,
 
 int WSAAPI CHookWinsock::inhook_closesocket(SOCKET s)
 {
-	if (!m_psi.bHookTCP && !m_psi.bHookUDP)
+	if (!m_psi.bHookTCP && !m_psi.bHookUDP && m_psi.nDNSOption != PSI_DNSOPT_DOH)
 	{
 		return CallTrampoline(closesocket)(s);
 	}
@@ -1521,50 +1614,12 @@ MyDetourProc(has_Return, int, WSAAPI, WSASendTo, (
 
 int WSAAPI CHookWinsock::inhook_sendto(SOCKET s, const char* buf, int len, int flags, const struct sockaddr* to, int tolen)
 {
-	_SockAddr blockedIPv6Destination;
-	if (m_psi.bBlockIPv6 &&
-		IsBlockedIPv6Destination(s, to, tolen, &blockedIPv6Destination))
-	{
-		LogBlockedIPv6(s, blockedIPv6Destination);
-		WSASetLastError(WSAEAFNOSUPPORT);
+	WSABUF buffer = { len >= 0 ? static_cast<ULONG>(len) : 0, const_cast<char*>(buf) };
+	UdpSendTarget target;
+	if (!PrepareUdpSend(s, to, tolen, &buffer, 1, target, len >= 0))
 		return SOCKET_ERROR;
-	}
-	if (m_psi.bBlockUDP &&
-		!IsUdpLoopbackDestination(s, to, tolen))
-	{
-		WSASetLastError(WSAEACCES);
-		return SOCKET_ERROR;
-	}
-	if (m_psi.bDisableMDNS && IsMdnsDestination(to, tolen))
-	{
-		WSASetLastError(WSAEHOSTUNREACH);
-		return SOCKET_ERROR;
-	}
-	if (!m_psi.bHookUDP)
-	{
-		return CallTrampoline(sendto)(s, buf, len, flags, to, tolen);
-	}
-	if (len < 0)
-		return CallTrampoline(sendto)(s, buf, len, flags, to, tolen);
-
-	WSABUF bufs;
-
-	bufs.buf = (char FAR *)buf;
-	bufs.len = len;
-
-	DWORD dwNumberOfBytesSent = 0;
-	int nRetVal = inhook_WSASendTo(s, &bufs, 1, &dwNumberOfBytesSent, flags, to, tolen, NULL, NULL);
-
-	if (nRetVal == 0)
-	{
-		return (int)dwNumberOfBytesSent;
-	}
-	else
-	{
-		//SOCKET_ERROR
-		return nRetVal;
-	}
-
+	// Preserve sendto's own flags, errors and byte-count return convention.
+	return CallTrampoline(sendto)(s, buf, len, flags, target.destination, target.length);
 }
 
 int WSAAPI CHookWinsock::inhook_WSASendTo(
@@ -1579,104 +1634,97 @@ int WSAAPI CHookWinsock::inhook_WSASendTo(
 	LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
 	)
 {
+	UdpSendTarget target;
+	if (!PrepareUdpSend(s, lpTo, iToLen, lpBuffers, dwBufferCount, target))
+		return SOCKET_ERROR;
+	// Buffers and completion state remain owned by Winsock.
+	return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount,
+		lpNumberOfBytesSent, dwFlags, target.destination, target.length,
+		lpOverlapped, lpCompletionRoutine);
+}
+
+BOOL CHookWinsock::PrepareUdpSend(SOCKET s, const SOCKADDR* destination, int length,
+	LPWSABUF buffers, DWORD count, UdpSendTarget& target, BOOL validPayloadLength)
+{
+	target.destination = destination;
+	target.length = length;
 	_SockAddr blockedIPv6Destination;
 	if (m_psi.bBlockIPv6 &&
-		IsBlockedIPv6Destination(s, lpTo, iToLen, &blockedIPv6Destination))
+		IsBlockedIPv6Destination(s, destination, length, &blockedIPv6Destination))
 	{
 		LogBlockedIPv6(s, blockedIPv6Destination);
 		WSASetLastError(WSAEAFNOSUPPORT);
-		return SOCKET_ERROR;
+		return FALSE;
 	}
-	if (m_psi.bBlockUDP &&
-		!IsUdpLoopbackDestination(s, lpTo, iToLen))
+	if (m_psi.bBlockUDP && !IsUdpLoopbackDestination(s, destination, length))
 	{
+		LogBlockedUDP(s, destination, length);
 		WSASetLastError(WSAEACCES);
-		return SOCKET_ERROR;
+		return FALSE;
 	}
-	if (m_psi.bDisableMDNS && IsMdnsDestination(lpTo, iToLen))
+	if (m_psi.bDisableMDNS && IsMdnsDestination(destination, length))
 	{
 		WSASetLastError(WSAEHOSTUNREACH);
-		return SOCKET_ERROR;
+		return FALSE;
 	}
-	if (!m_psi.bHookUDP)
-	{
-		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped, lpCompletionRoutine);
-	}
+	if (!m_psi.bHookUDP && !IsDohDnsRequest(destination, length))
+		return TRUE;
+	// sendto's signed negative length must reach its original API unchanged,
+	// after the existing blocking-policy checks and before any route setup.
+	if (!validPayloadLength)
+		return TRUE;
 
-	_SockAddr addrname;
-	if (!lpTo)
+	if (!destination)
 	{
 		size_t connectedMaxPayload = 0;
-		if (m_HackedSocket.GetConnectedUDPMaxPayload(s,
-			&connectedMaxPayload) &&
-			!IsWSABufferPayloadAllowed(lpBuffers, dwBufferCount,
-				connectedMaxPayload))
+		if (m_HackedSocket.GetConnectedUDPMaxPayload(s, &connectedMaxPayload) &&
+			!IsWSABufferPayloadAllowed(buffers, count, connectedMaxPayload))
 		{
 			WSASetLastError(WSAEMSGSIZE);
-			return SOCKET_ERROR;
+			return FALSE;
 		}
-		// Buffers and completion state remain owned by Winsock.
-		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount,
-			lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped,
-			lpCompletionRoutine);
+		if (connectedMaxPayload) NotifyQuicUdp();
+		return TRUE;
 	}
-	if (!NormalizeSocketAddress(lpTo, iToLen, &addrname))
-		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount,
-			lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped,
-			lpCompletionRoutine);
-	if (!EnsureSocketBound(s, lpTo))
-		return SOCKET_ERROR;
+	if (!NormalizeSocketAddress(destination, length, &target.address))
+		return TRUE;
+	if (!EnsureSocketBound(s, destination))
+		return FALSE;
 
-	PRCClient prcc;
-
+	PRCClient client;
 	size_t maxPayload = UdpPayloadPolicy::MAX_IPV4_UDP_PAYLOAD;
-	HookDecision decision = HackSendTo(s, addrname, &prcc, &maxPayload);
+	HookDecision decision = HackSendTo(s, target.address, &client, &maxPayload);
 	if (decision == HOOK_FAILED)
 	{
 		if (WSAGetLastError() == 0)
 			WSASetLastError(WSAENETDOWN);
-		return SOCKET_ERROR;
+		return FALSE;
 	}
 	if (decision == HOOK_BYPASS)
-	{
-		return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount, lpNumberOfBytesSent, dwFlags, lpTo, iToLen, lpOverlapped, lpCompletionRoutine);
-	}
-	if (!IsWSABufferPayloadAllowed(lpBuffers, dwBufferCount, maxPayload))
+		return TRUE;
+	if (!IsWSABufferPayloadAllowed(buffers, count, maxPayload))
 	{
 		WSASetLastError(WSAEMSGSIZE);
-		return SOCKET_ERROR;
+		return FALSE;
 	}
 
-
-	// Only the destination is replaced. Application buffers and completion
-	// state remain owned by Winsock, so Overlapped/IOCP works naturally.
-	SOCKADDR_STORAGE redirectedStorage;
-	int redirectedLength = 0;
-	const SOCKADDR *redirected = MakeSocketAddress(lpTo, addrname,
-		&redirectedStorage, &redirectedLength);
-	if (!redirected)
+	// Keep both normalized and mapped address storage in the caller's frame
+	// until its original send API returns. Never point at a helper local.
+	target.destination = MakeSocketAddress(destination, target.address,
+		&target.storage, &target.length);
+	if (!target.destination)
 	{
 		WSASetLastError(WSAEAFNOSUPPORT);
-		return SOCKET_ERROR;
+		return FALSE;
 	}
-	return CallTrampoline(WSASendTo)(s, lpBuffers, dwBufferCount,
-		lpNumberOfBytesSent, dwFlags, redirected, redirectedLength,
-		lpOverlapped, lpCompletionRoutine);
+	return TRUE;
 }
 
 HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname,
 	LPPRCClient lpC, size_t *maxPayload)
 {
-	if (!m_psi.bHookUDP)
+	if (!m_psi.bHookUDP && !IsDohDnsDestination(addrname))
 		return HOOK_BYPASS;
-
-	if (addrname.IsIPv4() && *(DWORD*)&addrname.sa_data[6] == 'pass' &&
-		*(DWORD*)&addrname.sa_data[10] == 'port')
-	{
-		*(DWORD*)&addrname.sa_data[6] = 0;
-		*(DWORD*)&addrname.sa_data[10] = 0;
-		return HOOK_BYPASS;
-	}
 
 	int nSockType;
 	int nTypeLen = sizeof(nSockType);
@@ -1741,6 +1789,7 @@ HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname,
 		if (addrname.IsAny())
 			SetLoopbackAddress(&addrname, prcc.dstAddr.sa_family);
 
+		NotifyQuicUdp();
 		*lpC = prcc;
 		if (maxPayload)
 			m_HackedSocket.GetUDPMaxPayload(&prcc, maxPayload);
@@ -1768,6 +1817,7 @@ HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname,
 		addrname = prcc.udpAddr;
 		if (addrname.IsAny())
 			SetLoopbackAddress(&addrname, prcc.dstAddr.sa_family);
+		NotifyQuicUdp();
 		*lpC = prcc;
 		if (maxPayload)
 			m_HackedSocket.GetUDPMaxPayload(&prcc, maxPayload);
@@ -1785,6 +1835,7 @@ HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname,
 		return decision;
 	}
 
+	prcc.reserved=BrowserQuicPolicy::OnUdp();
 	if (!m_RequestPipe.PRCRegisterClient(&prcc))
 	{
 		const int registrationError = WSAGetLastError();
@@ -1811,7 +1862,7 @@ HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname,
 
 	m_HackedSocket.push(&prcc);
 	size_t routeMaxPayload = UdpPayloadPolicy::MaxPayload(
-		proxyInfo.GetProxyType() == PROXYTYPE_SOCKS5,
+		proxyInfo.GetProxyType() == PROXYTYPE_SOCKS5 && !IsDohDnsDestination(prcc.dstAddr),
 		prcc.IsDNValid() ? prcc.szDomainName : NULL,
 		prcc.dstAddr.IsIPv6());
 	m_HackedSocket.SetUDPMaxPayload(&prcc, routeMaxPayload, FALSE);
@@ -2205,12 +2256,126 @@ private:
 	BOOL m_armed;
 };
 
-BOOL WINAPI CHookWinsock::inhook_CreateProcessInternalW(HANDLE hToken, LPCWSTR lpApplicationName, LPWSTR lpCommandLine, LPSECURITY_ATTRIBUTES lpProcessAttributes, LPSECURITY_ATTRIBUTES lpThreadAttributes, BOOL bInheritHandles, DWORD dwCreationFlags, LPVOID lpEnvironment, LPCWSTR lpCurrentDirectory, LPSTARTUPINFOW lpStartupInfo, LPPROCESS_INFORMATION lpProcessInformation, PHANDLE hNewToken)
+static BOOL IsSameUserLauncherToken(HANDLE token)
+{
+	if (!token) return TRUE;
+	HANDLE currentToken = NULL;
+	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &currentToken)) return FALSE;
+	BYTE targetUser[1024] = {}, currentUser[1024] = {};
+	DWORD needed = 0;
+	BOOL same = GetTokenInformation(token, TokenUser, targetUser, sizeof(targetUser), &needed) &&
+		GetTokenInformation(currentToken, TokenUser, currentUser, sizeof(currentUser), &needed) &&
+		EqualSid(reinterpret_cast<TOKEN_USER*>(targetUser)->User.Sid,
+			reinterpret_cast<TOKEN_USER*>(currentUser)->User.Sid);
+	CloseHandle(currentToken);
+	return same;
+}
+
+bool CHookWinsock::TryCreateAppLauncher(
+	HANDLE hToken, LPCWSTR lpApplicationName, LPCWSTR lpCommandLine,
+	LPSECURITY_ATTRIBUTES lpProcessAttributes, LPSECURITY_ATTRIBUTES lpThreadAttributes,
+	BOOL bInheritHandles, DWORD dwCreationFlags, LPVOID lpEnvironment,
+	LPCWSTR lpCurrentDirectory, LPSTARTUPINFOW lpStartupInfo,
+	LPPROCESS_INFORMATION lpProcessInformation, PHANDLE hNewToken, BOOL& created)
+{
+	// A real, short-lived PL process replaces only the simple AppsFolder launcher.
+	// Its original suspension belongs to the caller; do not activate the app here.
+	CString launchCommand(lpCommandLine ? lpCommandLine : L"");
+	launchCommand.MakeLower();
+	if (launchCommand.Find(L"shell:appsfolder\\") < 0)
+		return false;
+
+	AppLauncherHostInfo host = {};
+	CString pipe;
+	{
+		CScopedCriticalSection lock(&m_PRCPipeNameLock);
+		host = m_appLauncherHost;
+		pipe = m_szPRCPipeName;
+	}
+	auto logLauncher = [&](LPCWSTR reason, DWORD pid, DWORD error) {
+		const DWORD savedError = ::GetLastError();
+		CString message;
+		message.Format(L"AppsFolder helper: %s; flags=0x%08lX, token=%u, tokenOut=%u, host=%lu/v%lu, helper=%lu, error=%lu, image=%s",
+			reason, dwCreationFlags, hToken != NULL, hNewToken != NULL,
+			host.processId, host.version, pid, error, lpApplicationName ? lpApplicationName : L"(command line)");
+		ATLTRACE(L"%s\r\n", static_cast<LPCWSTR>(message));
+		// Successful creation is an intermediate step. The host logs the final
+		// activation/Hook result; retain failures and skips in the run log.
+		if (!pid || error)
+		{
+			CScopedCriticalSection lock(&m_RequestPipeLock);
+			if (EnsureRequestPipe() && !m_RequestPipe.PRCLogtext(message)) m_RequestPipe.Disconnect();
+		}
+		::SetLastError(savedError);
+	};
+
+	std::wstring appAumid;
+	LPCWSTR skipped = NULL;
+	if (!AppLauncherProtocol::ParseExplorerLaunch(lpApplicationName, lpCommandLine, appAumid)) skipped = L"skipped: command/image mismatch";
+	else if (!lpStartupInfo || !lpProcessInformation) skipped = L"skipped: missing startup/output";
+	// Replacing a debuggee changes the caller's debug event stream. All
+	// other flags are forwarded unchanged and validated by Windows.
+	else if (dwCreationFlags & (DEBUG_PROCESS | DEBUG_ONLY_THIS_PROCESS)) skipped = L"skipped: debugger launch";
+	else if (!IsWin8OrLater()) skipped = L"skipped: unsupported OS";
+	else if (host.version != 1 || !host.executable[0]) skipped = L"skipped: host capability unavailable";
+	else if (!IsSameUserLauncherToken(hToken)) skipped = L"skipped: different user or unreadable token";
+	if (skipped)
+	{
+		logLauncher(skipped, 0, ::GetLastError());
+		return false;
+	}
+
+	GUID id;
+	WCHAR idText[40] = {};
+	if (FAILED(CoCreateGuid(&id)) || !StringFromGUID2(id, idText, _countof(idText)))
+	{
+		logLauncher(L"skipped: request ID creation failed", 0, ::GetLastError());
+		return false;
+	}
+	CString command;
+	command.Format(L"\"%s\" --internal-launch-app \"%s\" \"%s\" \"%s\" %lu %I64u %lu %I64u",
+		host.executable, (LPCWSTR)pipe, idText, appAumid.c_str(), host.processId,
+		host.creationTime, GetCurrentProcessId(), AppLauncherProtocol::ProcessTime(GetCurrentProcess()));
+
+	std::vector<BYTE> environment;
+	if (m_ChildGuardInstalled && !BuildChildEnvironment(
+		lpEnvironment, dwCreationFlags, FALSE, m_ChildGuardName, 0, environment))
+	{
+		logLauncher(L"skipped: environment preparation failed", 0, ::GetLastError());
+		return false;
+	}
+	LPVOID helperEnvironment = m_ChildGuardInstalled ? &environment[0] : lpEnvironment;
+	// Forward the token, output token, flags and complete STARTUPINFOEX unchanged.
+	created = CallTrampoline(CreateProcessInternalW)(hToken, host.executable, command.GetBuffer(),
+		lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, helperEnvironment,
+		lpCurrentDirectory, lpStartupInfo, lpProcessInformation, hNewToken);
+	const DWORD error = ::GetLastError();
+	command.ReleaseBuffer();
+	logLauncher(created ? L"created" : L"creation failed",
+		created ? lpProcessInformation->dwProcessId : 0, created ? 0 : error);
+	::SetLastError(error);
+	return true; // A failed helper creation must not fall through and launch Explorer.
+}
+
+BOOL WINAPI CHookWinsock::inhook_CreateProcessInternalW(
+	HANDLE hToken, LPCWSTR lpApplicationName, LPWSTR lpCommandLine,
+	LPSECURITY_ATTRIBUTES lpProcessAttributes, LPSECURITY_ATTRIBUTES lpThreadAttributes,
+	BOOL bInheritHandles, DWORD dwCreationFlags, LPVOID lpEnvironment,
+	LPCWSTR lpCurrentDirectory, LPSTARTUPINFOW lpStartupInfo,
+	LPPROCESS_INFORMATION lpProcessInformation, PHANDLE hNewToken)
 {
 	if (!m_psi.bHookCreateProcess || TlsGetValue(m_ProcessCreationTls))
 	{
-		return CallTrampoline(CreateProcessInternalW)(hToken, lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, lpEnvironment, lpCurrentDirectory, lpStartupInfo, lpProcessInformation, hNewToken);
+		return CallTrampoline(CreateProcessInternalW)(hToken, lpApplicationName, lpCommandLine,
+			lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, lpEnvironment,
+			lpCurrentDirectory, lpStartupInfo, lpProcessInformation, hNewToken);
 	}
+
+	BOOL helperCreated = FALSE;
+	if (TryCreateAppLauncher(hToken, lpApplicationName, lpCommandLine,
+		lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, lpEnvironment,
+		lpCurrentDirectory, lpStartupInfo, lpProcessInformation, hNewToken, helperCreated))
+		return helperCreated;
 
 	const DWORD originalCreationFlags = dwCreationFlags;
 	//如果没标志挂起主线程， 则修改之
@@ -2420,17 +2585,49 @@ int WSAAPI CHookWinsock::inhook_WSAIoctl(
 	return ret;
 }
 
+void CHookWinsock::NotifyQuicUdp()
+{
+    if(!BrowserQuicPolicy::Enabled()||m_psi.bBlockUDP||!m_psi.bHookUDP)return;
+    int error=WSAGetLastError();
+    BrowserQuicPolicy::OnUdp();
+    if(!BrowserQuicPolicy::NeedsPublish()){WSASetLastError(error);return;}
+    CScopedCriticalSection pipeLock(&m_RequestPipeLock);
+    if(EnsureRequestPipe())BrowserQuicPolicy::Publish(m_RequestPipe);
+    WSASetLastError(error);
+}
+void CHookWinsock::NotifyConnectedQuicUdp(SOCKET s)
+{
+    if(!BrowserQuicPolicy::Enabled()||m_psi.bBlockUDP||!m_psi.bHookUDP)return;
+    size_t maxPayload=0;
+    if(m_HackedSocket.GetConnectedUDPMaxPayload(s,&maxPayload))NotifyQuicUdp();
+}
+MyDetourProc(has_Return, HMODULE, WINAPI, LoadLibraryExW, (LPCWSTR path,HANDLE file,DWORD flags))
+{
+    HMODULE result=Original_LoadLibraryExW(path,file,flags);DWORD error=GetLastError();
+    if(result)BrowserQuicPolicy::ModuleLoaded(path,flags);
+    SetLastError(error);return result;
+}
+MyDetourProc(has_Return, int, WSAAPI, send, (SOCKET s,const char* data,int len,int flags))
+{
+    if(g_pHookWinsock)g_pHookWinsock->NotifyConnectedQuicUdp(s);
+    return Original_send(s,data,len,flags);
+}
+MyDetourProc(has_Return, int, WSAAPI, WSASend, (SOCKET s,LPWSABUF buffers,DWORD count,LPDWORD sent,DWORD flags,LPWSAOVERLAPPED ov,LPWSAOVERLAPPED_COMPLETION_ROUTINE completion))
+{
+    if(g_pHookWinsock)g_pHookWinsock->NotifyConnectedQuicUdp(s);
+    return Original_WSASend(s,buffers,count,sent,flags,ov,completion);
+}
+
 BOOL CHookWinsock::HookWinsock()
 {
 	if (m_ProcessCreationTls == TLS_OUT_OF_INDEXES)
-		return FALSE;
+		return SetHookFailure(m_tlsError, "allocate-tls", "kernel32.dll", "TlsAlloc");
 	int i;
 	for (i = 0; i < HOOKMODULE_COUNT; i++)
 	{
 		if (!GetModuleHandleA(m_ModuleName[i]) && !LoadLibraryA(m_ModuleName[i]))
 		{
-			m_szLastError = _T("Failed to initialize HookWinsock: LoadLibrary");
-			return FALSE;
+			return SetHookFailure(::GetLastError(), "LoadLibraryA", m_ModuleName[i], "LoadLibraryA");
 		}
 	}
 
@@ -2483,7 +2680,18 @@ BOOL CHookWinsock::HookWinsock()
 				break;
 		}
 
-		return ApplyHooks(true);
+        if(BrowserQuicPolicy::Enabled()) {
+            // Kernel32's export resolves to KernelBase on modern Windows.
+            bool prepared=HookAPI(HOOKMODULE_KERNEL32,_EHF(LoadLibraryExW),"LoadLibraryExW",_HOOKFUNC(LoadLibraryExW),_TRAMPFUNC(LoadLibraryExW))
+                &&HookAPI(HOOKMODULE_WS2_32,_EHF(send),"send",_HOOKFUNC(send),_TRAMPFUNC(send))
+                &&HookAPI(HOOKMODULE_WS2_32,_EHF(WSASend),"WSASend",_HOOKFUNC(WSASend),_TRAMPFUNC(WSASend));
+            if(prepared && ApplyHooks(true))return TRUE;
+            // Optional compatibility must not prevent ordinary proxy injection.
+            // Failed Detours transactions have rolled back the entire batch.
+            for(int i=HOOKAPI_LoadLibraryExW;i<HOOKAPI_COUNT;++i)m_HookedInfo[i]={};
+            BrowserQuicPolicy::SetupFailed();
+        }
+        return ApplyHooks(true);
 	} while (FALSE);
 
 	return FALSE;

@@ -58,7 +58,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'build\qa\arm64-assessment\bin\DetoursBuildProbe.exe') -Destination $output -Force
 
     $files = @('ProxyLaneARM64.exe', 'ProxyLaneHookARM64.dll', 'ProxyLaneSecureTransportARM64.dll',
-        'ProxyLaneTrafficARM64.exe', 'DetoursBuildProbe.exe', 'InjectionTestsARM64.exe', 'InjectionFixtureARM64.dll')
+        'ProxyLaneTrafficARM64.exe', 'DetoursBuildProbe.exe', 'InjectionTestsARM64.exe', 'InjectionFixtureARM64.dll', 'ProxyLaneMitmARM64.dll', 'ProxyLaneMitmARM64.exe')
     $verified = foreach ($name in $files) {
         $path = Join-Path $output $name
         $bytes = [IO.File]::ReadAllBytes($path)

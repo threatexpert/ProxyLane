@@ -1,0 +1,3 @@
+# Preserve dependency patch bytes across Windows checkouts. Blank context
+# lines in unified diffs intentionally contain one space.
+third_party/libssh2/*.patch text eol=lf whitespace=-blank-at-eol

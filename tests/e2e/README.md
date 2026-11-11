@@ -1,4 +1,144 @@
-# ProxyLane end-to-end test tools
+﻿# ProxyLane end-to-end test tools
+
+## DoH through the selected proxy chain
+
+After building x64 Release and the Rust DLL, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run-doh-tests.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run-doh-tests.ps1 -Online
+```
+
+The first command runs offline DNS TTL/CNAME/validation and TLS/HTTP tests.
+`-Online` adds real certificate-verified Google DoH over local SOCKS5 and
+SOCKS5 → HTTP fixtures. It checks shared concurrent requests, cancellation of
+one waiter, subsequent cache hits, numeric business destinations and explicit
+HTTP failure without fallback. Only the DoH service is external; fixtures echo
+business payloads locally. No user profiles or certificate trust are changed.
+The SOCKS5 UDP echo case runs only when an independent loopback UDP probe works;
+otherwise the test reports that part as skipped, not passed.
+
+For the DNS settings layout after building x64 Release:
+
+```powershell
+python tests/DohLayoutE2ETests.py
+python tests/DohLayoutE2ETests.py --language en-US
+```
+
+This uses the existing GUI test harness with an isolated portable profile. It
+checks unique child-control IDs (including dynamic SSH controls), exclusive DNS
+mode selection, DoH/legacy field visibility, non-overlapping rows at two window
+sizes, settings-tab changes, and SSH authentication alongside DoH. Screenshots
+and measured rectangles are retained under `build/qa/doh-layout-*`. No proxy or
+certificate trust is enabled.
+
+## Desktop startup regression
+
+After building both Release platforms, run on an unlocked desktop:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/run-startup-smoke.ps1
+```
+
+This launches the real main dialog twice through each entry executable and
+checks that it remains responsive for 10 seconds. On 64-bit Windows the Win32
+launcher is verified through its exact x64 child. Use `-BinaryDirectory` with
+an isolated copy of the release and sample INI to avoid using personal profiles.
+The test starts no proxy and changes no certificate trust.
+
+This catches initialization recursion such as calling an MFC `OnSize` handler
+directly from `OnInitDialog`: its default handler redispatches the current
+`WM_INITDIALOG`, causing stack overflow before the main window appears.
+Initialization and resize must call a shared layout helper instead.
+
+For monitor page activation, resizing and CA dialog layout (Python + Pillow):
+
+```powershell
+python tests/MonitorLayoutE2ETests.py
+python tests/MonitorLayoutE2ETests.py --language en-US
+python tests/MonitorLayoutE2ETests.py --ca-guidance
+```
+
+This uses an isolated release copy and CA directory, checks actual control
+rectangles after navigation, a parameterless `WM_SIZE`, resize and reactivation,
+and opens the CA status dialog without changing trust. Screenshots and results
+are retained in `build/qa/monitor-layout-*`. A running process alone does not
+count as passing this check: controls must be visible and inside the page.
+
+The optional `--ca-guidance` case installs a unique temporary CA through the GUI
+and removes that exact CA in `finally`. It checks missing CA guidance,
+cancel without installation, direct installation without an initialization button,
+and automatic decryption after installation
+and closing the dialog. Adding `--ca-read-error` deliberately opens an error popup
+for a corrupt test CA file, which is restored before cleanup.
+
+## HTTPS MITM validation
+
+Build both solution Release platforms (x64 Release also builds both MITM DLLs),
+or run `scripts/build-mitm.ps1` to build only the optional TLS components.
+Core tests (no trust-store changes):
+
+```powershell
+cargo test --manifest-path src/ProxyLaneMitm/Cargo.toml --locked
+cargo clippy --manifest-path src/ProxyLaneMitm/Cargo.toml --locked --all-targets -- -D warnings
+```
+
+Compile `mitm_host.cpp` in an x64 Visual Studio developer prompt (create `build/tools` first). Test executables stay outside `bin`; the runner stages them with runtime DLLs in its own `build/qa` directory:
+
+```bat
+cl /nologo /EHsc /O2 /DUNICODE /D_UNICODE tests\e2e\mitm_host.cpp /Fo:build\qa\mitm_host64.obj /Fe:build\tools\mitm_host64.exe /link /LIBPATH:bin\x64\Release ProxyLaneHook.lib ws2_32.lib user32.lib
+```
+
+Only the x64 host is built. `--arch 32` selects a 32-bit target curl, still handled by `mitm_host64.exe` with `ProxyLaneHook32.dll` injection.
+Then run with Python 3 and `cryptography` installed:
+
+```powershell
+python tests/e2e/mitm_e2e.py --arch 64
+python tests/e2e/mitm_e2e.py --arch 32
+```
+
+The test creates a unique CA in `build/qa/mitm-<id>/pki`, installs that exact
+CA in CurrentUser ROOT, and removes it in `finally`. It does not change existing
+proxy profiles, other certificates, or revocation caches. If the test is forcibly
+killed, set `PROXYLANE_MITM_HOME` to the printed test directory's `pki` subdirectory
+and run `build/tools/ProxyLaneMitm64.exe remove` to remove that test CA.
+
+The test controller removes any inherited ProxyLane hooks **inside its own
+process** before creating threads and children, so an already-running developer
+proxy does not redirect the test. It leaves that developer proxy running.
+The test host explicitly injects the matching Hook DLL into Windows curl.
+By default all origins and proxy relays are local; TEST-NET addresses are mapped
+to them. Optional `--external-ifconfig` reproduces a live HTTPS request to
+ifconfig.io through the test relay and records shutdown diagnostics.
+
+Cases cover certificate persistence and idempotent installation/removal,
+Schannel TLS 1.2 with normal revocation checking through SOCKS5 and HTTP CONNECT,
+plain TCP, 2 MiB bidirectional payload integrity, rejection of a mismatched
+upstream identity, and process-associated plaintext records. The x64 run also
+injects a Python/OpenSSL TLS 1.3 client for systems without Schannel TLS 1.3.
+Rust tests additionally exercise byte-at-a-time ClientHello and short writes,
+ALPN agreement, bounded buffers, malformed TLS, and half-close behavior.
+Tests also check that TLS ciphertext/handshake JSON never enters the simple
+monitor, plain TCP remains visible, clean shutdown has no error, and missing
+close_notify reports its endpoint once. Abrupt close after a complete response
+is distinguished from a truncated HTTP response, which must fail at the client.
+CA tests verify the new name and identity-preserving directory migration.
+
+The host uses the same object interfaces as the GUI: CA status/init/install/remove,
+enable preflight and live event polling through `IGlobalProxy`. The environment enable flag is off.
+Tests reject enabling before CA trust, verify request/response plaintext with
+the injected PID, creation time and connection ID, disable decryption during an
+established TLS stream without interrupting it, and verify new connections pass
+through after disabling. Both TLS versions also check observer byte integrity
+in the Rust tests, including an unusable capture path. End-to-end tests assert
+that default sessions never create a `captures` directory while still delivering
+process-associated plaintext to the memory observer. Temporary CA removal is
+checked after every run.
+
+Manual GUI check: open Data monitoring, enable HTTPS decryption, install the CA
+when prompted, and reconnect an injected application. Verify process-associated requests, request/response headers and decoded bodies,
+per-request HEX, pause, clear, and CA removal. The request view has no raw-log tab. These interactive
+checks are separate from the backend API tests.
 
 These small Go and Python programs provide controlled endpoints for testing the
 real injected Windows binaries. They intentionally use TEST-NET-3 addresses
@@ -105,8 +245,9 @@ directions, duplicate counting, and inclusion of SOCKS framing fail the test.
 After building x64 Release, compile in an x64 Visual Studio developer prompt:
 
 ```bat
-cl /nologo /EHsc /O2 /DUNICODE /D_UNICODE tests\e2e\traffic_statistics.cpp /Fo:build\qa\traffic_statistics.obj /Fe:bin\traffic_statistics.exe /link /LIBPATH:bin\x64\Release ProxyLaneHook.lib ws2_32.lib user32.lib
-python tests\TrafficStatisticsE2ETests.py --probe bin\traffic_statistics.exe --socks-server build\qa\go\socks5_e2e_server.exe
+cl /nologo /EHsc /O2 /DUNICODE /D_UNICODE tests\e2e\traffic_statistics.cpp /Fo:build\qa\traffic_statistics.obj /Fe:build\qa\traffic_statistics.exe /link /LIBPATH:bin\x64\Release ProxyLaneHook.lib ws2_32.lib user32.lib
+copy bin\*.dll build\qa\
+python tests\TrafficStatisticsE2ETests.py --probe build\qa\traffic_statistics.exe --socks-server build\qa\go\socks5_e2e_server.exe
 ```
 
 For Win32, use an x86 developer prompt and `bin\Win32\Release` as the library
@@ -138,6 +279,43 @@ This covers the startup-context regression where a newly created x86 CLR
 process receives `_CorExeMain` in EAX during loader initialization, but the
 injection trampoline used to overwrite it with the pre-initialization
 snapshot on return from `remoteCode`.
+
+## Simple data monitoring under load
+
+After building Release for both platforms, run:
+
+```powershell
+python tests/MonitorLayoutE2ETests.py --binary-directory bin
+python tests/MonitorLayoutE2ETests.py --binary-directory bin --language en-US
+python tests/MonitorTrafficE2ETests.py --binary-directory bin
+```
+
+The traffic test launches a disposable GUI with a unique profile and transfers
+128 MiB through an injected child and a local SOCKS5 relay. It verifies complete
+delivery by SHA-256, one TCP session across progress updates, directional HEX
+preview and cache truncation, without creating a CA. Private memory growth stays
+below 48 MiB and window message latency below one second. ProtocolPageHarness
+covers per-session HEX, stream row updates and clearing during asynchronous queries. Screenshots and measurements remain in `build/qa/monitor-traffic-*`.
+No user profiles or CA trust are changed. `mitm_host64.exe monitor-queue`
+tests queue overflow order, clear, and pause.
+The queue checks also cover capture through the existing data-handler interface
+without GUI callbacks, and service lifetime across proxy owner recreation.
+The ordinary native tests cover HEX byte formatting and text budget boundaries.
+
+Host architecture checks (build Release/Win32 and Release/x64 first):
+
+```powershell
+scripts/test-legacy-host.ps1
+python tests/e2e/mitm_host_arch.py
+```
+
+The first builds a test-only 32-bit GUI with x64 bootstrap forwarding bypassed,
+then verifies disabled controls, preserved/rejected encrypted profiles, ignored
+MITM settings and ordinary proxy startup. It does not emulate Windows XP.
+The second requires the existing user CA to be trusted and `build/tools/mitm_host64.exe`
+to be built; it checks both x86/x64 curl through an x64 host with only the x64
+MITM DLL. It neither installs nor removes certificates. Only its disposable
+host bypasses validation of the local test origin; curl validates the MITM leaf normally.
 
 ## Alternate-user process creation
 
@@ -191,3 +369,13 @@ inheritance path requires Vista or later; XP retains the existing PID-based
 cross-bitness helper and is not covered by this test matrix. The installation
 directory must be readable/executable by the target account; production file
 ACLs and account privileges are not modified.
+
+### DNS packets through DoH
+
+Run `tests/run-dns-relay-tests.ps1 -Online` after building x64 release binaries and the Rust DoH DLL. This owns a PRC host and installs its hook only in the test host. Before starting test threads or sockets, it removes any automatically inherited PL hooks from its own process (including DLL copies loaded from other paths); other processes and running PL instances are untouched. It checks private/public DNS targets, TCP framing, shared queries across transaction IDs and transports, UDP send APIs with Proxy UDP disabled, strict Block UDP precedence, and TCP DNS while UDP is blocked. SOCKS5, HTTP CONNECT and a SOCKS5→HTTP chain connect to Google's DoH service; invalid endpoints must yield SERVFAIL without any upstream port-53 connection. It requires real UDP replies for both a fresh UDP-only AAAA query and cached A queries, and checks that recvfrom, IOCP WSARecvFrom and event-based WSARecvMsg expose the actual local relay source without rewriting; connected UDP getpeername must also expose the local relay. Clients requiring the original resolver source are unsupported. Private IPv4 PTR receives local REFUSED over UDP and TCP even with a broken DoH endpoint; the fixture request count verifies those lookups never reach DoH, while a public PTR does. UDP reply timeouts fail the test; an unrelated loopback probe must not turn this coverage into a passing skip. No user profile, system DNS, certificate trust or firewall setting is modified.
+
+The relay test also sends 80 cached queries in one TCP burst followed by a half-close to verify message-driven continuation past the per-dispatch limit. `run-doh-tests.ps1 -Online` covers ordinary TCP/UDP hostname destinations, shared-query cancellation and a proxy tester that deliberately discards WM_TIMER while awaiting both network and cached completions; a locally rejected bootstrap IP tests retry notifications. Both runners accept `-DohUrl` and `-Bootstrap` for an accessible standard DoH endpoint without changing application defaults. The Python fixture and C++ host isolate their own inherited hooks; UDP tests are mandatory, not environment-dependent skips. For example: `tests/run-doh-tests.ps1 -Online -DohUrl https://dns.alidns.com/dns-query -Bootstrap 223.5.5.5`.
+
+Rust DoH TLS tests exercise the actual FFI feed operation with both seven-byte fragments and coalesced 16 KiB input chunks, a certificate flight larger than 4 KiB and a padded HTTP response. The feed must consume the entire caller buffer or report an error; short rustls reads must not discard the remainder. Certificate rejection remains covered. The DNS relay runner also accepts `--query-name` to reproduce a particular lookup.
+
+`tests/run-doh-deadline-tests.ps1` is a local-only, approximately one-minute test. A fixture accepts connections but withholds proxy negotiation or TLS replies. It verifies that a persistent TCP DNS session (without send-side shutdown) and a concurrent UDP request receive SERVFAIL after a 12-second tunnel connection deadline (initial proxy negotiation or target CONNECT withheld); two blocked bootstrap IPs finish after approximately 24 seconds. Once CONNECT succeeds, a stalled TLS exchange retains the 60-second total query deadline, or approximately 30 seconds for two 15-second attempts. No timeout constants are shortened for testing.

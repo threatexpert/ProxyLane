@@ -22,16 +22,18 @@ class Settings : public IProxySettings
 {
 public:
 	int port;
+	bool direct;
 	BOOL GetProxySettings(LPProxySettingsInfo settings)
 	{
 		ZeroMemory(settings, sizeof(*settings));
 		settings->bHookTCP = settings->bHookUDP = TRUE;
+		settings->bHookLanIP = TRUE;
 		return TRUE;
 	}
 	BOOL GetProxyInfo(const LPPRCClient, LPProxyInfo proxy)
 	{
 		ZeroMemory(proxy, sizeof(*proxy));
-		proxy->strProxyType = TEXT("SOCKS5");
+		proxy->strProxyType = direct ? TEXT("NOPROXY") : TEXT("SOCKS5");
 		proxy->strProxyHost = TEXT("127.0.0.1");
 		proxy->nProxyPort = port;
 		return TRUE;
@@ -47,7 +49,9 @@ static void Transfer(int type, int port, int length)
 	setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout, sizeof(timeout));
 	sockaddr_in target = { 0 };
 	target.sin_family = AF_INET;
-	target.sin_addr.s_addr = inet_addr("203.0.113.10");
+	char address[64] = "203.0.113.10";
+	GetEnvironmentVariableA("PROXYLANE_TRAFFIC_TARGET", address, sizeof(address));
+	target.sin_addr.s_addr = inet_addr(address);
 	target.sin_port = htons(static_cast<u_short>(port));
 	Require(connect(sock, (sockaddr*)&target, sizeof(target)) == 0, "connect");
 	std::vector<char> data(length, 'x');
@@ -84,6 +88,9 @@ static void VerifyTotals(IProxyReceptionCentre* centre, ULONGLONG expected)
 	printf("upload=%I64u download=%I64u expected=%I64u/%I64u\n",
 		upload, download, expected, expected * 2);
 	Require(upload == expected && download == expected * 2, "exact traffic totals");
+	Sleep(200); // Detect delayed duplicate accounting after the first matching snapshot.
+	centre->GetTrafficTotals(upload, download);
+	Require(upload == expected && download == expected * 2, "stable traffic totals");
 }
 
 static void RunClient(const char* pipe, int port, int type, int length)
@@ -183,12 +190,14 @@ int main(int argc, char** argv)
 		WSACleanup();
 		return 0;
 	}
-	if (argc != 3)
+	if (argc != 3 && argc != 4)
 		return 2;
+	gp_UnhookWinsock();
 	WSADATA wsa;
 	Require(WSAStartup(MAKEWORD(2, 2), &wsa) == 0, "WSAStartup");
 	Settings settings;
 	settings.port = atoi(argv[1]);
+	settings.direct = argc == 4 && strcmp(argv[3], "NOPROXY") == 0;
 	IGlobalProxy* proxy = GetGlobalProxyInstance();
 	Require(proxy != NULL, "global proxy");
 	proxy->GetSettingsInstance()->AddInstance(&settings);

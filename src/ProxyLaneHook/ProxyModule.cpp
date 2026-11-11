@@ -192,11 +192,32 @@ BOOL WINAPI gp_HookWinsock(LPCSTR lpszPRCPipeName)
 		GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
 		reinterpret_cast<LPCWSTR>(&gp_HookWinsock), &pinned))
 	{
+		const DWORD error = GetLastError();
+		HookFailureDiagnostics failure;
+		failure.Set(error, "pin-hook-module", "kernel32.dll", "GetModuleHandleExW");
+		WCHAR path[MAX_PATH] = {}, message[1536] = {};
+		GetModuleFileNameW(NULL, path, _countof(path));
+		path[_countof(path) - 1] = L'\0';
+		failure.Format(message, _countof(message), path, GetCurrentProcessId());
+		OutputDebugStringW(message);
+		CPRCPipeClient client;
+		if (client.Connect(CString(lpszPRCPipeName)))
+		{
+			client.PRCLogtext(message);
+			FILETIME created, exited, kernel, user;
+			ULONGLONG createdAt = 0;
+			if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user))
+				createdAt = (static_cast<ULONGLONG>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+			client.PRCNotifyHookWSockResult(error ? error : ERROR_GEN_FAILURE, createdAt);
+		}
+		client.Disconnect();
+		SetLastError(error);
 		return FALSE;
 	}
 	g_pPMHookWs = new CHookWinsock;
 	g_pPMHookWs->SetPRCPipeName(lpszPRCPipeName);
 	const BOOL result = g_pPMHookWs->EnableHook();
+	const DWORD hookError = GetLastError();
 	// Only failed installation may destroy this object; installed callbacks keep using it.
 	if (!result && !g_pPMHookWs->IsHookEnabled())
 	{
@@ -204,6 +225,7 @@ BOOL WINAPI gp_HookWinsock(LPCSTR lpszPRCPipeName)
 		g_pPMHookWs = NULL;
 	}
 	DeferredMitigationPolicy::RestoreCigPolicy();
+	if (!result) SetLastError(hookError);
 	return result;
 }
 
@@ -261,13 +283,14 @@ DWORD WINAPI AttachToHandles(HANDLE hProcess, HANDLE hThread, LPCSTR szPipeName)
 	if (InjectDllArm64W(hProcess, hThread, myDllPath, szPipeName) == 1)
 		dwExitCode = 0xFF01;
 #else
-	char myDllPath[MAX_PATH];
+	WCHAR myDllPath[MAX_PATH];
 
 	if (!hProcess || !hThread || !szPipeName || !szPipeName[0])
 		return dwExitCode;
 	if (!ProcessArchitecture::RequireDirectInjection(hProcess)) return dwExitCode;
 
-	if (!GetModuleFileNameA(g_hDllModule, myDllPath, MAX_PATH))
+	DWORD pathLength = GetModuleFileNameW(g_hDllModule, myDllPath, _countof(myDllPath));
+	if (!pathLength || pathLength >= _countof(myDllPath))
 		return dwExitCode;
 	myDllPath[MAX_PATH - 1] = '\0';
 
@@ -300,7 +323,7 @@ DWORD WINAPI AttachToI(DWORD dwPid, DWORD dwTid, LPCSTR szPipeName)
 	DWORD dwExitCode = 0xf;
 	HANDLE hProc = NULL;
 	HANDLE hThread = NULL;
-	char myDllPath[MAX_PATH];
+	WCHAR myDllPath[MAX_PATH];
 
 	HANDLE hRemoteThread = NULL;
 	PTHREAD_START_ROUTINE pfnThreadRtn = NULL;
@@ -314,7 +337,8 @@ DWORD WINAPI AttachToI(DWORD dwPid, DWORD dwTid, LPCSTR szPipeName)
 	memcpy(scspace + sizeof(scspace)-sizeof(sc_ret), sc_ret, sizeof(sc_ret));
 #endif
 
-	if (!GetModuleFileNameA(g_hDllModule, myDllPath, MAX_PATH))
+	DWORD pathLength = GetModuleFileNameW(g_hDllModule, myDllPath, _countof(myDllPath));
+	if (!pathLength || pathLength >= _countof(myDllPath))
 		return dwExitCode;
 	myDllPath[MAX_PATH - 1] = '\0';
 

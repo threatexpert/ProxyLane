@@ -9,11 +9,12 @@
 namespace
 {
 	const DWORD kCommandMagic = 0x434C5050; // PPLC
-	const DWORD kCommandVersion = 1;
+	const DWORD kCommandVersion = 3;
 	const DWORD kMaxCommandBytes = 60 * 1024;
 	const DWORD kMaxProfileChars = 255;
 	const DWORD kMaxTargetChars = 32767;
 	const DWORD kMaxArguments = 128;
+	enum LaunchFlags { LaunchElevated = 1, LaunchPackaged = 2, LaunchFromShortcut = 4 };
 
 	struct CommandHeader
 	{
@@ -265,7 +266,11 @@ namespace
 		bytes.clear();
 		CommandHeader header = { 0 };
 		header.magic = kCommandMagic;
-		header.version = kCommandVersion;
+		// Ordinary requests retain the released v1 format. Extended requests use
+		// one format for all launch metadata, including the notification fields.
+		const BOOL extended = options.shortcut || options.elevated || options.packaged ||
+			!options.applicationName.IsEmpty() || !options.initialArguments.IsEmpty() || !options.workingDirectory.IsEmpty();
+		header.version = extended ? kCommandVersion : 1;
 		header.argumentCount = static_cast<DWORD>(options.targetArguments.size());
 		bytes.resize(sizeof(header));
 		if (!AppendString(bytes, options.profileName, kMaxProfileChars) ||
@@ -277,6 +282,15 @@ namespace
 		{
 			if (!AppendString(bytes, options.targetArguments[i], kMaxTargetChars))
 				return FALSE;
+		}
+		if (header.version == kCommandVersion)
+		{
+			if (!AppendString(bytes, options.initialArguments, kMaxTargetChars) ||
+				!AppendString(bytes, options.workingDirectory, kMaxTargetChars) ||
+				!AppendString(bytes, options.applicationName, kMaxTargetChars)) return FALSE;
+			const DWORD flags = (options.elevated ? LaunchElevated : 0) |
+				(options.packaged ? LaunchPackaged : 0) | (options.shortcut ? LaunchFromShortcut : 0);
+			AppendDword(bytes, flags);
 		}
 		header.totalBytes = static_cast<DWORD>(bytes.size());
 		header.profileChars = static_cast<DWORD>(options.profileName.GetLength());
@@ -294,13 +308,14 @@ namespace
 			return FALSE;
 		CommandHeader header;
 		memcpy(&header, bytes, sizeof(header));
-		if (header.magic != kCommandMagic || header.version != kCommandVersion ||
+		if (header.magic != kCommandMagic || (header.version != 1 && header.version != kCommandVersion) ||
 			header.totalBytes != byteCount || byteCount > kMaxCommandBytes ||
 			header.argumentCount > kMaxArguments)
 		{
 			return FALSE;
 		}
 
+		options = AutomationOptions();
 		const BYTE* cursor = bytes + sizeof(header);
 		const BYTE* end = bytes + byteCount;
 		if (!ReadString(cursor, end, options.profileName, kMaxProfileChars) ||
@@ -316,6 +331,17 @@ namespace
 			if (!ReadString(cursor, end, argument, kMaxTargetChars))
 				return FALSE;
 			options.targetArguments.push_back(argument);
+		}
+		if (header.version == kCommandVersion)
+		{
+			if (!ReadString(cursor, end, options.initialArguments, kMaxTargetChars) ||
+				!ReadString(cursor, end, options.workingDirectory, kMaxTargetChars) ||
+				!ReadString(cursor, end, options.applicationName, kMaxTargetChars)) return FALSE;
+			DWORD flags;
+			if (!ReadDword(cursor, end, flags) || (flags & ~(LaunchElevated | LaunchPackaged | LaunchFromShortcut))) return FALSE;
+			options.elevated = (flags & LaunchElevated) != 0;
+			options.packaged = (flags & LaunchPackaged) != 0;
+			options.shortcut = (flags & LaunchFromShortcut) != 0;
 		}
 		options.enabled = TRUE;
 		return cursor == end;
@@ -496,7 +522,7 @@ ProfileCommandForwardResult CProfileCommandBroker::Forward(
 		pipeHandle, &response, sizeof(response), &bytesRead, NULL);
 	CloseHandle(pipeHandle);
 	if (!readResult || bytesRead != sizeof(response) ||
-		response.magic != kCommandMagic || response.version != kCommandVersion ||
+		response.magic != kCommandMagic || response.version != reinterpret_cast<const CommandHeader*>(&request[0])->version ||
 		response.size != sizeof(response))
 	{
 		return PROFILE_COMMAND_TRANSPORT_FAILED;
@@ -724,6 +750,7 @@ BOOL CProfileCommandBroker::ProcessClient(HANDLE pipeHandle)
 	AutomationOptions options;
 	CommandResponse response = { kCommandMagic, kCommandVersion,
 		sizeof(CommandResponse), AUTOMATION_EXIT_INVALID_COMMAND_LINE };
+	if (bytesRead >= sizeof(CommandHeader)) response.version = reinterpret_cast<const CommandHeader*>(&buffer[0])->version;
 	if (!ParseCommand(&buffer[0], bytesRead, options) ||
 		options.profileName.CompareNoCase(m_profileName) != 0)
 	{
@@ -741,9 +768,7 @@ BOOL CProfileCommandBroker::ProcessClient(HANDLE pipeHandle)
 		response.exitCode = AUTOMATION_EXIT_CREATE_PROCESS_FAILED;
 		return WritePipeMessage(pipeHandle, m_stopEvent, &response, sizeof(response));
 	}
-	request->profileName = options.profileName;
-	request->targetPath = options.targetPath;
-	request->targetArguments = options.targetArguments;
+	request->options = options;
 
 	if (!PostMessage(m_notifyWindow, WM_PROFILE_COMMAND_REQUEST, 0,
 		reinterpret_cast<LPARAM>(request)))

@@ -64,6 +64,12 @@ namespace
 			if (successful) successful->Release();
 			successful = load;
 		}
+		ApplicationCatalogLoad* Ready()
+		{
+			Remember(latest);
+			if (successful) successful->AddRef();
+			return successful;
+		}
 		ApplicationCatalogLoad* Acquire(BOOL refresh)
 		{
 			Remember(latest); // A picker may have closed before completion.
@@ -74,14 +80,9 @@ namespace
 				done = latest->done;
 				LeaveCriticalSection(&latest->lock);
 			}
-			// Reopening while an explicit refresh is still running can display
-			// the last good snapshot immediately, without another loading pause.
-			if (!refresh && successful)
-			{
-				successful->AddRef();
-				return successful;
-			}
-			if (refresh || !latest || (done && !successful))
+			// Reuse an in-flight warmup/refresh. Ready() supplies the previous
+			// snapshot separately while callers subscribe to this latest task.
+			if ((refresh && done) || !latest || (done && !successful))
 			{
 				// Allocate before releasing the previous snapshot.
 				ApplicationCatalogLoad* replacement = new ApplicationCatalogLoad;
@@ -109,3 +110,11 @@ ApplicationCatalogLoad* AcquireApplicationCatalog(BOOL forceRefresh)
 { return g_applicationCatalogCache.Acquire(forceRefresh); }
 void RememberApplicationCatalog(ApplicationCatalogLoad* load)
 { g_applicationCatalogCache.Remember(load); }
+
+ApplicationCatalogLoad* AcquireReadyApplicationCatalog()
+{ return g_applicationCatalogCache.Ready(); }
+void PreloadApplicationCatalog()
+{
+	ApplicationCatalogLoad* load = AcquireApplicationCatalog(FALSE);
+	load->Release();
+}

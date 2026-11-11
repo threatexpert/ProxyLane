@@ -1,0 +1,18 @@
+libssh2 1.11.1 (BSD-3-Clause), https://libssh2.org/
+The public header and license are vendored here. The pinned source archive is
+downloaded and verified by scripts/build-ssh.ps1, then built with the pinned OpenSSL static library (see ../openssl/UPSTREAM.txt).
+Source: https://libssh2.org/download/libssh2-1.11.1.tar.gz
+SHA256: d9ec76cbe34db98eec3539fe2c899d26b0c837cb3eb466a56b0f109cabf658f7
+Fork: https://github.com/threatexpert/libssh2, branch codex/concurrent-channel-open
+Fork revision: 25917e764b295bc2c43e6aa7407eb8efd1981c66
+The checked-in concurrent-channel-open.patch is the reviewed fork delta against
+official tag libssh2-1.11.1, including its tests and API documentation. Until a
+fork revision is published, builds use the pinned official archive plus this
+patch, not a moving remote branch or a developer's sibling checkout. The patch
+SHA256 is part of the source/build cache name and successful build stamp.
+Regenerate the patch against libssh2-1.11.1 after staging new fork source files;
+copy the matching include/libssh2.h here. Existing libssh2 APIs are preserved.
+The optional DLL is named ProxyLaneSsh64.dll. Existing
+protocols do not load it. SSH requires Windows 10 / Server 2016 or newer, x64. ECDSA/ECDH is enabled
+with statically linked OpenSSL; older Windows versions and a 32-bit host are not supported.
+The release packager merges COPYING into the single archive LICENSE.

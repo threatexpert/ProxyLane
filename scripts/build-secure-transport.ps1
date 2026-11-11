@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Win32', 'x64', 'ARM64')]
-    [string[]]$Platforms = @('Win32', 'x64'),
+    [ValidateSet('x64', 'ARM64')]
+    [string[]]$Platforms = @('x64'),
     [string]$OutputDirectory
 )
 
@@ -14,7 +14,6 @@ $binaryDirectory = if ($OutputDirectory) {
     Join-Path $repositoryRoot 'bin'
 }
 $targets = @{
-    Win32 = @{ Triple = 'i686-pc-windows-msvc'; File = 'ProxyLaneSecureTransport32.dll' }
     x64 = @{ Triple = 'x86_64-pc-windows-msvc'; File = 'ProxyLaneSecureTransport64.dll' }
     ARM64 = @{ Triple = 'aarch64-pc-windows-msvc'; File = 'ProxyLaneSecureTransportARM64.dll' }
 }

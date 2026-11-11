@@ -10,11 +10,14 @@
 #include "ProxyReceptionCentre.h"
 #include "ProxyDataHandle.h"
 #include "ProxyTransportPolicy.h"
+#include "MitmBridge.h"
 
 CPRCTcpPeer::CPRCTcpPeer(CTcpProxyTask *pNotify)
 {
 	m_pProxyLayer = NULL;
 	m_pSecureLayer = NULL;
+	m_pChain = NULL;
+	m_chainFailureLogged = FALSE;
 	m_pNotify = pNotify;
 	m_pProxyDataHandle = (CProxyDataHandle*)pNotify->m_pTaskmgr->m_pPRC->GetPDHInstance();
 	m_ppi.lpC = &pNotify->m_PRCClient;
@@ -39,7 +42,10 @@ CPRCTcpPeer::CPRCTcpPeer(CTcpProxyTask *pNotify)
 
 CPRCTcpPeer::~CPRCTcpPeer(void)
 {
-	//???
+	// SetTaskInfo can delete a partially initialized peer without EndTask.
+	// Close while the derived RemoveAllLayers override is still active so all
+	// proxy/TLS layers are released, including a partially constructed chain.
+	Close();
 }
 
 DWORD CPRCTcpPeer::GetLastError()
@@ -53,30 +59,17 @@ void CPRCTcpPeer::SetPartner(CPRCTcpPeer *pPartner)
 }
 
 BOOL CPRCTcpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
-	IProxyLog::ConnectionStage& stage)
+	IProxyLog::ConnectionStage& stage, const ProxyChain *lpChain)
 {
 
 	stage = IProxyLog::STAGE_TRANSPORT;
 	//设置代理
-	if(!AddProxyLayer(lpProxyInfo))
+	if(!AddProxyLayer(lpProxyInfo, lpChain))
 		return FALSE;
 
 
-	//注意
-	//代理请求调用connect也会给HookWinsock拦截，
-	//旧方法1
-	//SetConnectionFlag 将设置一个8字节的标志， 告知HookWinsock直接调用系统的connect
-	//8字节的标志放置在sockaddr_in.sin_zero的中, :)
-	/*
-	struct sockaddr_in {
-	short   sin_family;
-	u_short sin_port;
-	struct  in_addr sin_addr;
-	char    sin_zero[8];
-	*/
-	//m_pProxyLayer->SetConnectionFlag('pass', 'port');
-
-	//方法2
+	// Upstream connections use the original Winsock entry points to avoid
+	// intercepting the proxy transport itself. Never mark address bytes.
 	m_pProxyLayer->BypassHook(TRUE);
 
 	BOOL bConnect = FALSE;
@@ -119,8 +112,21 @@ BOOL CPRCTcpPeer::ConnectProxy(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
 	return TRUE;
 }
 
-BOOL CPRCTcpPeer::AddProxyLayer(LPProxyInfo lpProxyInfo)
+BOOL CPRCTcpPeer::AddProxyLayer(LPProxyInfo lpProxyInfo, const ProxyChain *lpChain)
 {
+	if ((lpChain && lpChain->size() > 1) || (lpProxyInfo && lpProxyInfo->GetProxyType() == PROXYTYPE_SSH))
+	{
+		m_pChain = new CProxyChainLayers;
+		const ProxyInfo* hops = lpChain && lpChain->size() > 1 ? lpChain->data() : lpProxyInfo;
+		const int count = lpChain && lpChain->size() > 1 ? (int)lpChain->size() : 1;
+		if (!m_pChain->Add(*this, hops, count))
+			return FALSE;
+		if (m_pChain->HasSsh()) m_TimeoutMonitor[TM_CONN].SetTimeoutVal(60000);
+		m_pProxyLayer = m_pChain->Top();
+		m_pSecureLayer = NULL;
+		return TRUE;
+	}
+
 	const bool useSecureTransport = ProxyTransportPolicy::UsesGoncTlsPsk(lpProxyInfo);
 	if (useSecureTransport &&
 		(!ProxyTransportPolicy::SupportsGoncTlsPsk(
@@ -184,10 +190,27 @@ BOOL CPRCTcpPeer::AddProxyLayer(LPProxyInfo lpProxyInfo)
 void CPRCTcpPeer::RemoveAllLayers()
 {
 	CAsyncSocketEx::RemoveAllLayers();
+	if (m_pChain)
+	{
+		// The chain owns every layer, including the one m_pProxyLayer names.
+		m_pChain->Free();
+		delete m_pChain;
+		m_pChain = NULL;
+		m_pProxyLayer = NULL;
+		m_pSecureLayer = NULL;
+		return;
+	}
 	delete m_pProxyLayer;
 	delete m_pSecureLayer;
 	m_pProxyLayer = NULL;
 	m_pSecureLayer = NULL;
+}
+
+BOOL CPRCTcpPeer::HasPendingSecureRead() const
+{
+	if (m_pChain)
+		return m_pChain->HasPendingSecureRead();
+	return m_pSecureLayer && m_pSecureLayer->HasPendingRead();
 }
 
 //void CPRCTcpPeer::PostSocketEvent(long lEvent, int nErrorCode)
@@ -204,6 +227,8 @@ void CPRCTcpPeer::RemoveAllLayers()
 
 int CPRCTcpPeer::TestSocketStatus(long lEvent)
 {
+	if (m_pChain && m_pChain->HasSsh())
+		return ((lEvent & FD_READ) && HasPendingSecureRead()) || ((lEvent & FD_WRITE) && m_bForwardingReady);
 	DWORD timepassed = 0;
 	fd_set FdRead, FdWrite;
 	struct timeval TimeOut;
@@ -240,6 +265,7 @@ void CPRCTcpPeer::ClearBuffer()
 
 void CPRCTcpPeer::OnReceive(int nErrorCode)
 {
+	if (m_pNotify->m_pMitm) { m_pNotify->m_pMitm->OnRead(this, nErrorCode); return; }
 	const int MAX_EVENT_READ_BYTES = MAXTCPBUFSIZE * 16;
 	if(nErrorCode != 0)
 	{
@@ -281,6 +307,7 @@ void CPRCTcpPeer::OnReceive(int nErrorCode)
 			break;
 		}else if(nRetVal == 0)
 		{
+			if (m_pNotify->m_pProtocol) m_pNotify->m_pProtocol->Eof(m_pProxyLayer ? 1 : 0);
 			m_bConnShutted = TRUE;
 			m_bReadClosed = TRUE;
 			AsyncSelect(FD_WRITE | FD_CLOSE);
@@ -289,6 +316,7 @@ void CPRCTcpPeer::OnReceive(int nErrorCode)
 			break;
 		}
 
+		if (m_pNotify->m_pProtocol) m_pNotify->m_pProtocol->Data(m_pProxyLayer ? 1 : 0, m_recvbuf + m_recvbufpos, nRetVal);
 		nRecvd += nRetVal;
 		m_recvbufpos += nRetVal;
 		m_DataLenRecvd += nRetVal;
@@ -379,7 +407,7 @@ int CPRCTcpPeer::TransferSend()
 		m_DataLenSent += nRetVal;
 		// Count only the portion accepted by the destination, once per hop.
 		m_pNotify->m_pTaskmgr->m_pPRC->RecordTraffic(
-			m_pNotify->m_ProxyInfo, m_pProxyLayer != NULL, nRetVal);
+			m_pProxyLayer != NULL, nRetVal);
 	}
 
 	//if(nBytesLeft > 0 && nBytesSent)
@@ -411,6 +439,12 @@ int CPRCTcpPeer::TransferSend()
 
 void CPRCTcpPeer::OnSend(int nErrorCode)
 {
+	if (m_pNotify->m_pMitm)
+	{
+		if (nErrorCode) OnClose(nErrorCode);
+		else m_pNotify->m_pMitm->OnWritable();
+		return;
+	}
 	if(nErrorCode != 0)
 	{
 		return;
@@ -453,9 +487,7 @@ void CPRCTcpPeer::OnSend(int nErrorCode)
 				m_pPartner->ClearBuffer();
 
 				TriggerEvent(FD_CLOSE);
-			}else if(nRetVal > 0 ||
-				(m_pPartner->m_pSecureLayer &&
-				 m_pPartner->m_pSecureLayer->HasPendingRead()))
+			}else if(nRetVal > 0 || m_pPartner->HasPendingSecureRead())
 			{
 				m_pPartner->TriggerEvent(FD_READ);
 				ATLTRACE("CPRCTcpPeer.OnSend(), m_pPartner->TriggerEvent(FD_READ)\r\n");
@@ -479,6 +511,9 @@ void CPRCTcpPeer::OnSend(int nErrorCode)
 
 void CPRCTcpPeer::OnConnect(int nErrorCode)
 {
+    if (nErrorCode && !m_bForwardingReady && m_pNotify->RetryDohAddress(this, nErrorCode)) return;
+    if (m_pNotify->m_pMitm) m_pNotify->m_pMitm->Connected(nErrorCode);
+    if (m_pNotify->m_pProtocol) m_pNotify->m_pProtocol->Connected(nErrorCode);
 	m_ppi.errcode = nErrorCode;
 	m_ppi.datafrom = 1;
 	m_ppi.pData = NULL;
@@ -495,6 +530,13 @@ void CPRCTcpPeer::OnConnect(int nErrorCode)
 	m_bForwardingReady = TRUE;
 	//代理已经建立，修改Client关注的event
 	m_pPartner->AsyncSelect(FD_READ | FD_WRITE | FD_CLOSE);
+	if (m_pNotify->m_pMitm)
+	{
+		m_pNotify->m_pMitm->OnWritable();
+		TriggerEvent(FD_READ);
+		m_pPartner->TriggerEvent(FD_READ);
+		return;
+	}
 	// The application may have written and half-closed while the proxy
 	// handshake was still in progress. Flush that buffered payload before
 	// propagating its FIN to the newly established upstream connection.
@@ -515,6 +557,12 @@ void CPRCTcpPeer::OnConnect(int nErrorCode)
 
 void CPRCTcpPeer::OnClose(int nErrorCode)
 {
+    if (!m_bForwardingReady && m_pNotify->RetryDohAddress(this, nErrorCode)) return;
+	if (m_pNotify->m_pMitm && nErrorCode == 0)
+	{
+		m_pNotify->m_pMitm->OnRead(this, 0);
+		return;
+	}
 	m_bConnShutted = TRUE;
 	if( nErrorCode == 0 )
 	{
@@ -540,6 +588,10 @@ void CPRCTcpPeer::OnClose(int nErrorCode)
 	}
 
 	ATLTRACE("OnClose! All.sent: %I64d/%I64d, recvd: %I64d/%I64d \r\n", m_DataLenSent, m_pPartner->m_DataLenSent, m_DataLenRecvd, m_pPartner->m_DataLenRecvd);
+	// Metadata only: keep the existing socket shutdown/drain behavior.
+	const unsigned side = m_pProxyLayer ? 1 : 0;
+	if (m_pNotify->m_pProtocol) m_pNotify->m_pProtocol->TransportClosed(side, nErrorCode);
+	if (m_pNotify->m_pMitm) m_pNotify->m_pMitm->TransportClosed(side, nErrorCode);
 
 	m_ppi.errcode = nErrorCode;
 	m_ppi.datafrom = m_pProxyLayer?1:0;;
@@ -602,6 +654,11 @@ void CPRCTcpPeer::TryFinishConnection()
 
 void CPRCTcpPeer::OnTimer()
 {
+	if (m_pNotify->m_pMitm && (m_bForwardingReady || !m_pProxyLayer))
+	{
+		m_pNotify->m_pMitm->OnWritable();
+		return;
+	}
 
 	switch(m_SocketStatus)
 	{
@@ -609,7 +666,8 @@ void CPRCTcpPeer::OnTimer()
 		{
 			if(m_TimeoutMonitor[TM_CONN].IsTimeout())
 			{
-				PrintText(_T("connect to the proxy is timeout.\r\n"));
+				LogProxyFailure(m_pNotify->m_pTaskmgr->m_pPRC, m_ppi.lpC,
+					TRUE, WSAETIMEDOUT, NULL);
 				ClearBuffer();
 				TriggerEvent(FD_CLOSE, WSAETIMEDOUT);
 				return;
@@ -668,16 +726,48 @@ PROXYERROR_CANTRESOLVEHOST 7
 	}
 	else if (nType == LAYERCALLBACK_LAYERSPECIFIC)
 	{
-		if (pLayer == m_pProxyLayer)
+		const int hop = m_pChain ? m_pChain->HopOf(pLayer) : -1;
+		if (hop >= 0)
+		{
+			// Only the first failing hop is logged: the layers above it merely
+			// report that their tunnel never opened.
+			if ((nCode == PROXYERROR_NOCONN || nCode == PROXYERROR_REQUESTFAILED ||
+				nCode == PROXYERROR_AUTHFAILED || nCode == PROXYERROR_AUTHREQUIRED ||
+				nCode == PROXYERROR_AUTHTYPEUNKNOWN || nCode == PROXYERROR_AUTHNOLOGON ||
+                nCode == PROXYERROR_SSH_UNAVAILABLE || nCode == PROXYERROR_SSH_HOSTKEY_UNKNOWN ||
+                nCode == PROXYERROR_SSH_HOSTKEY_CHANGED || nCode == PROXYERROR_SSH_KEY_AUTHFAILED || nCode == PROXYERROR_SSH_KEY_FILE) &&
+				!m_chainFailureLogged)
+			{
+				m_chainFailureLogged = TRUE;
+				CStringA detail;
+				const ProxyInfo& failed = m_pChain->Hop(hop);
+				detail.Format("hop %d of %d (%s:%d)", hop + 1, m_pChain->Count(),
+					failed.strProxyHost.szbuf, failed.nProxyPort);
+                if (nCode == PROXYERROR_SSH_HOSTKEY_UNKNOWN) detail += ": SSH host key is untrusted; test the profile to verify it";
+                else if (nCode == PROXYERROR_SSH_KEY_FILE) detail += ": SSH private key file unavailable or invalid";
+                else if (nCode == PROXYERROR_SSH_KEY_AUTHFAILED) detail += ": SSH private key authentication failed";
+                else if (nCode == PROXYERROR_SSH_HOSTKEY_CHANGED) detail += ": SSH host key changed; connection rejected";
+                else if (nCode == PROXYERROR_SSH_UNAVAILABLE) detail += ": SSH backend requires Windows 10+ x64 and ProxyLaneSsh64.dll";
+				else if ((nCode == PROXYERROR_REQUESTFAILED || (nCode == PROXYERROR_NOCONN && m_pChain->HasSsh())) && lParam)
+					detail += CStringA(": ") + CStringA((LPCSTR)lParam, (int)strnlen_s((LPCSTR)lParam, 200));
+				else if (nCode != PROXYERROR_NOCONN && nCode != PROXYERROR_REQUESTFAILED)
+					detail += ": authentication failed";
+				LogProxyFailure(m_pNotify->m_pTaskmgr->m_pPRC, m_ppi.lpC,
+					nCode == PROXYERROR_NOCONN, (int)wParam, detail);
+			}
+		}
+		else if (pLayer == m_pProxyLayer)
 		{
 			switch (nCode)
 			{
 			case PROXYERROR_NOCONN:
-				PrintText(_T("Connect to proxy failed.\r\n"));
+				LogProxyFailure(m_pNotify->m_pTaskmgr->m_pPRC, m_ppi.lpC,
+					TRUE, (int)wParam, NULL);
 				break;
 				/* fall through */
 			case PROXYERROR_REQUESTFAILED:
-				PrintText(_T("Proxy server failed to connect to the peer.\r\n"));
+				LogProxyFailure(m_pNotify->m_pTaskmgr->m_pPRC, m_ppi.lpC,
+					FALSE, (int)wParam, (LPCSTR)lParam);
 				break;
 			case PROXYERROR_AUTHREQUIRED:
 				PrintText(_T("Proxy Error: Authentication required.\r\n"));
@@ -685,6 +775,7 @@ PROXYERROR_CANTRESOLVEHOST 7
 			case PROXYERROR_AUTHTYPEUNKNOWN:
 				PrintText(_T("Proxy Error: Authentication type unknown or not supported.\r\n"));
 				break;
+			case PROXYERROR_SSH_KEY_AUTHFAILED:
 			case PROXYERROR_AUTHFAILED:
 				PrintText(_T("Proxy Error: Authentication failed.\r\n"));
 				break;

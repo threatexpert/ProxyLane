@@ -44,6 +44,32 @@ namespace
 		}
 		return endpoint;
 	}
+
+	CString HookResultProcessName(const HookWSockResult& result)
+	{
+		// Best effort for legacy result messages. The detailed diagnostic carries
+		// the sender's own name even if the process has already exited.
+		WCHAR path[MAX_PATH] = {};
+		typedef BOOL (WINAPI *QueryImageName)(HANDLE, DWORD, LPWSTR, PDWORD);
+		QueryImageName query = reinterpret_cast<QueryImageName>(GetProcAddress(
+			GetModuleHandleW(L"kernel32.dll"), "QueryFullProcessImageNameW"));
+		HANDLE process = query ? OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */,
+			FALSE, result.dwProcessId) : NULL;
+		if (process)
+		{
+			FILETIME created, exited, kernel, user;
+			if (GetProcessTimes(process, &created, &exited, &kernel, &user) &&
+				(!result.processCreateTime || result.processCreateTime ==
+				((static_cast<ULONGLONG>(created.dwHighDateTime) << 32) | created.dwLowDateTime)))
+			{
+				DWORD length = _countof(path);
+				if (!query(process, 0, path, &length)) path[0] = L'\0';
+			}
+			CloseHandle(process);
+		}
+		path[_countof(path) - 1] = L'\0';
+		return LogProcessName(CString(path));
+	}
 }
 
 
@@ -60,6 +86,7 @@ CPage2::CPage2(CWnd* pParent /*=NULL*/)
 
 CPage2::~CPage2()
 {
+	m_loaderCapture.Stop();
 }
 
 void CPage2::DoDataExchange(CDataExchange* pDX)
@@ -99,11 +126,14 @@ BOOL CPage2::OnInitDialog()
 
 BEGIN_MESSAGE_MAP(CPage2, CModernDialog)
 	ON_WM_SIZE()
+	ON_WM_TIMER()
+	ON_WM_DESTROY()
 	//ON_WM_ERASEBKGND()
 
 	ON_MESSAGE(WM_PRINTLOGTEXT, OnPrintLogText)
 	ON_BN_CLICKED(IDC_BTN_COPY_LOG, &CPage2::OnBnClickedCopy)
 	ON_BN_CLICKED(IDC_BTN_CLEAR_LOG, &CPage2::OnBnClickedClear)
+	ON_BN_CLICKED(IDC_CHECK_LOADER_CAPTURE, &CPage2::OnBnClickedLoaderCapture)
 END_MESSAGE_MAP()
 
 
@@ -130,7 +160,21 @@ void CPage2::OnSize(UINT nType, int cx, int cy)
 	int buttonWidth = UiTheme::ScaleForWindow(m_hWnd, 78);
 	int buttonHeight = UiTheme::ScaleForWindow(m_hWnd, 30);
 	int buttonTop = UiTheme::ScaleForWindow(m_hWnd, 8);
-	const int toolbarLeft = rcClient.right - margin - buttonWidth * 2 - gap;
+	const int copyLeft = rcClient.right - margin - buttonWidth * 2 - gap;
+	int toolbarLeft = copyLeft;
+	if (CWnd* capture = GetDlgItem(IDC_CHECK_LOADER_CAPTURE))
+	{
+		CString label;
+		capture->GetWindowText(label);
+		CClientDC dc(capture);
+		CFont* font = capture->GetFont();
+		CFont* oldFont = font ? dc.SelectObject(font) : NULL;
+		const int width = max(UiTheme::ScaleForWindow(m_hWnd, 110),
+			dc.GetTextExtent(label).cx + UiTheme::ScaleForWindow(m_hWnd, 46));
+		if (oldFont) dc.SelectObject(oldFont);
+		toolbarLeft = copyLeft - gap - width;
+		capture->MoveWindow(toolbarLeft, buttonTop, width, buttonHeight);
+	}
 	if (CWnd* title = GetDlgItem(IDC_STATIC_PAGE_TITLE))
 	{
 		CRect titleRect;
@@ -165,6 +209,50 @@ void CPage2::LogText(LPCWSTR lpText)
 
 LRESULT CPage2::OnPrintLogText(WPARAM wParam, LPARAM lParam)
 {
+	ScheduleLogFlush();
+	return 0;
+}
+
+void CPage2::ScheduleLogFlush()
+{
+	// One notification starts a bounded, low-priority timer. Continuations must
+	// not repost WM_PRINTLOGTEXT: a busy producer would starve input/painting.
+	if (!m_logTimer)
+	{
+		m_logTimer = SetTimer(1, LOG_REFRESH_MS, NULL);
+		if (!m_logTimer)
+		{
+			CSingleLock lock(&m_logLock, TRUE);
+			m_logQueue.OnNotificationPostFailed();
+		}
+	}
+}
+
+void CPage2::OnTimer(UINT_PTR timer)
+{
+	if (m_captureTimer && timer == m_captureTimer) { FlushLoaderDiagnostics(); return; }
+	if (m_logTimer && timer == m_logTimer)
+	{
+		KillTimer(m_logTimer);
+		m_logTimer = 0;
+		FlushLogText();
+		return;
+	}
+	CModernDialog::OnTimer(timer);
+}
+
+void CPage2::OnDestroy()
+{
+	if (m_captureTimer) KillTimer(m_captureTimer);
+	m_captureTimer = 0;
+	m_loaderCapture.Stop();
+	if (m_logTimer) KillTimer(m_logTimer);
+	m_logTimer = 0;
+	CModernDialog::OnDestroy();
+}
+
+void CPage2::FlushLogText()
+{
 	CBoundedLogQueue<LogEntry>::Batch batch;
 	{
 		CSingleLock lock(&m_logLock, TRUE);
@@ -172,7 +260,7 @@ LRESULT CPage2::OnPrintLogText(WPARAM wParam, LPARAM lParam)
 	}
 
 	if (batch.entries.empty() && batch.dropped == 0)
-		return 0;
+		return;
 
 	CString text;
 	const int baseOffset = m_Edit.GetWindowTextLength();
@@ -194,24 +282,42 @@ LRESULT CPage2::OnPrintLogText(WPARAM wParam, LPARAM lParam)
 		AppendLogEntry(*it, text, baseOffset);
 	}
 
-	m_Edit.SetRedraw(FALSE);
+	int selectionStart = 0, selectionEnd = 0;
+	m_Edit.GetSel(selectionStart, selectionEnd);
+	const int firstVisibleChar = m_Edit.LineIndex(m_Edit.GetFirstVisibleLine());
+	SCROLLINFO scroll = { sizeof(scroll), SIF_RANGE | SIF_PAGE | SIF_POS };
+	m_Edit.GetScrollInfo(SB_VERT, &scroll);
+	const bool follow = selectionStart == selectionEnd &&
+		scroll.nPos + static_cast<int>(scroll.nPage) >= scroll.nMax;
+	// WM_SETREDRAW(TRUE) adds WS_VISIBLE; don't accidentally reveal a hidden page.
+	const bool visible = m_Edit.IsWindowVisible() != FALSE;
+	if (visible) m_Edit.SetRedraw(FALSE);
 	int nLen = m_Edit.GetWindowTextLength();
 	m_Edit.SetSel(nLen, nLen);
 	m_Edit.ReplaceSel(text, FALSE);
-	TrimLogLines();
-	nLen = m_Edit.GetWindowTextLength();
-	m_Edit.SetSel(nLen, nLen);
-	m_Edit.LineScroll(m_Edit.GetLineCount());
-	m_Edit.SetRedraw(TRUE);
-	m_Edit.Invalidate(FALSE);
+	const int removed = TrimLogLines();
+	if (follow)
+	{
+		nLen = m_Edit.GetWindowTextLength();
+		m_Edit.SetSel(nLen, nLen);
+		m_Edit.LineScroll(m_Edit.GetLineCount());
+	}
+	else
+	{
+		m_Edit.SetSel(max(0, selectionStart - removed), max(0, selectionEnd - removed), TRUE);
+		const int firstLine = m_Edit.LineFromChar(max(0, firstVisibleChar - removed));
+		m_Edit.LineScroll(firstLine - m_Edit.GetFirstVisibleLine());
+	}
+	if (visible)
+	{
+		m_Edit.SetRedraw(TRUE);
+		m_Edit.Invalidate(FALSE);
+	}
 
 	if (batch.hasMore)
 	{
-		CSingleLock lock(&m_logLock, TRUE);
-		PostPrintLogMessageLocked();
+		ScheduleLogFlush();
 	}
-
-	return 0;
 }
 
 void CPage2::AddLogText(const CString &lpText)
@@ -233,6 +339,12 @@ void CPage2::CopyAll()
 
 void CPage2::ClearAll()
 {
+	{
+		CSingleLock lock(&m_logLock, TRUE);
+		m_logQueue.Clear();
+	}
+	if (m_logTimer) KillTimer(m_logTimer);
+	m_logTimer = 0;
 	m_Edit.SetWindowText(_T(""));
 	m_lastLogDate.Empty();
 	m_logDates.clear();
@@ -305,17 +417,26 @@ void CPage2::PostPrintLogMessageLocked()
 	m_logQueue.OnNotificationPostFailed();
 }
 
-void CPage2::TrimLogLines()
+int CPage2::TrimLogLines()
 {
 	int lineCount = m_Edit.GetLineCount();
-	if (lineCount <= MAX_LOG_LINES)
-		return;
+	const int chars = m_Edit.GetWindowTextLength();
+	if (lineCount <= MAX_LOG_LINES && chars <= MAX_LOG_CHARS)
+		return 0;
 
-	// Reserve one line for a date heading restored below.
-	int firstLineToKeep = lineCount - MAX_LOG_LINES + 1;
-	int firstCharToKeep = m_Edit.LineIndex(firstLineToKeep);
+	// Trim with headroom so small batches don't repeatedly relayout the entire
+	// edit control. A character bound also covers very long/wrapped log lines.
+	int firstCharToKeep = 0;
+	if (lineCount > MAX_LOG_LINES)
+		firstCharToKeep = m_Edit.LineIndex(lineCount - LOG_LINES_TO_KEEP + 1);
+	if (chars > MAX_LOG_CHARS)
+	{
+		const int cut = chars - LOG_CHARS_TO_KEEP;
+		const int nextLine = m_Edit.LineIndex(m_Edit.LineFromChar(cut) + 1);
+		firstCharToKeep = max(firstCharToKeep, nextLine >= 0 ? nextLine : cut);
+	}
 	if (firstCharToKeep <= 0)
-		return;
+		return 0;
 
 	// Keep the date of the first remaining entry even when its original
 	// heading was trimmed. Character offsets also work with wrapped lines.
@@ -339,6 +460,7 @@ void CPage2::TrimLogLines()
 	}
 	m_Edit.SetSel(0, firstCharToKeep);
 	m_Edit.ReplaceSel(header, FALSE);
+	return firstCharToKeep - header.GetLength();
 }
 
 void CPage2::OnHookWsock(LPHookWSockResult res)
@@ -348,7 +470,7 @@ void CPage2::OnHookWsock(LPHookWSockResult res)
 		CString str;
 
 		str = Localization::Format(_T("log.hook_failed"),
-			static_cast<LPCTSTR>(LogProcessName(NULL)), res->dwProcessId, res->err);
+			static_cast<LPCTSTR>(HookResultProcessName(*res)), res->dwProcessId, res->err);
 
 		AddLogText(str);
 	}
@@ -380,12 +502,15 @@ void CPage2::OnConnectionEvent(ConnectionEvent event, const LPPRCClient client,
 	case ROUTE_DIRECT: key = _T("log.connection_direct"); break;
 	case ROUTE_BLOCKED: key = _T("log.connection_blocked"); break;
 	case IPV6_BLOCKED: key = _T("log.connection_ipv6_blocked"); break;
+	case UDP_BLOCKED: key = _T("log.connection_udp_blocked"); break;
 	case TASK_FAILED: key = _T("log.connection_task_failed"); break;
 	case SETTINGS_FAILED: key = _T("log.connection_settings_failed"); break;
 	default: return;
 	}
 	CString name = LogProcessName(CString(processName ? processName : L""));
 	CString endpoint = LogEndpoint(*client);
+	if (event == UDP_BLOCKED && client->dstAddr.sa_family == AF_UNSPEC)
+		endpoint = Localization::Get(_T("common.unknown"));
 	AddLogText(Localization::Format(key, static_cast<LPCTSTR>(name), client->dwPid,
 		static_cast<LPCTSTR>(endpoint), client->sType == SOCK_DGRAM ? _T("UDP") :
 		client->sType == SOCK_STREAM ? _T("TCP") : _T("Socket")));
@@ -403,6 +528,7 @@ void CPage2::OnConnectionFailure(const LPPRCClient client, LPCWSTR processName,
 	case STAGE_SOCKET: stageKey = _T("log.stage_socket"); break;
 	case STAGE_CONNECT: stageKey = _T("log.stage_connect"); break;
 	case STAGE_ATTACH: stageKey = _T("log.stage_attach"); break;
+	case STAGE_IPV6_ROUTE: stageKey = _T("log.stage_ipv6_route"); break;
 	}
 	CString name = LogProcessName(CString(processName ? processName : L""));
 	CString endpoint = LogEndpoint(*client);
@@ -411,6 +537,26 @@ void CPage2::OnConnectionFailure(const LPPRCClient client, LPCWSTR processName,
 		static_cast<LPCTSTR>(name), client->dwPid, static_cast<LPCTSTR>(endpoint),
 		client->sType == SOCK_DGRAM ? _T("UDP") : _T("TCP"),
 		static_cast<LPCTSTR>(stageText), error));
+}
+
+void CPage2::OnProxyFailure(const LPPRCClient client, LPCWSTR processName,
+	LPCWSTR target, BOOL connectingProxy, DWORD error, LPCWSTR detail)
+{
+	if (!client) return;
+	CString name = LogProcessName(processName);
+	CString reason = Localization::Get(error == WSAETIMEDOUT ?
+		_T("log.connection_timeout") : connectingProxy ?
+		_T("log.proxy_connect_failed") : _T("log.proxy_request_failed"));
+	CString text = Localization::Format(_T("log.proxy_failure"),
+		(LPCTSTR)name, client->dwPid, target ? target : L"",
+		client->sType == SOCK_DGRAM ? _T("UDP") : _T("TCP"), (LPCTSTR)reason);
+	if (error)
+		text += Localization::Format(_T("log.error_code_suffix"), error);
+	if (detail && detail[0])
+		text += _T(" \x00b7 ") + CString(detail);
+	text.Replace(_T('\r'), _T(' '));
+	text.Replace(_T('\n'), _T(' '));
+	AddLogText(text + _T("\r\n"));
 }
 
 void CPage2::OnHookLogtext(LPHookLogtext log)
@@ -423,4 +569,54 @@ void CPage2::OnHookLogtext(LPHookLogtext log)
 	str.Format(_T("pid=%lu: %S\r\n"), log->dwProcessId, log->str);
 #endif
 	AddLogText(str);
+}
+
+void CPage2::OnBnClickedLoaderCapture()
+{
+    if (IsDlgButtonChecked(IDC_CHECK_LOADER_CAPTURE) != BST_CHECKED) {
+        if (m_captureTimer) KillTimer(m_captureTimer);
+        m_captureTimer = 0;
+        FlushLoaderDiagnostics();
+        m_loaderCapture.Stop();
+        LogText(Localization::Get(_T("page2.loader_capture_stopped")));
+        return;
+    }
+    DWORD error = m_loaderCapture.Start();
+    if (!error) {
+        m_captureTimer = SetTimer(2, LOG_REFRESH_MS, NULL);
+        if (!m_captureTimer) error = ERROR_NOT_ENOUGH_MEMORY;
+    }
+    if (error) {
+        m_loaderCapture.Stop();
+        CheckDlgButton(IDC_CHECK_LOADER_CAPTURE, BST_UNCHECKED);
+        LogText(error == ERROR_ALREADY_EXISTS ?
+            Localization::Get(_T("page2.loader_capture_busy")) :
+            Localization::Format(_T("page2.loader_capture_failed"), error));
+    } else {
+        LogText(Localization::Get(_T("page2.loader_capture_started")));
+    }
+}
+
+void CPage2::FlushLoaderDiagnostics()
+{
+    LoaderDiagnosticCapture::Record records[100];
+    unsigned dropped = 0;
+    unsigned count = m_loaderCapture.Drain(records, _countof(records), dropped);
+    for (unsigned i = 0; i < count; ++i) {
+        WCHAR description[512];
+        DWORD length = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+            NULL, records[i].error, 0, description, _countof(description), NULL);
+        CString detail = length ? CString(description) : Localization::Get(_T("page2.loader_error_unknown"));
+        detail.Trim();
+        if (records[i].hookFailure) {
+            CString stage(records[i].stage), module(records[i].module), api(records[i].api);
+            LogText(Localization::Format(_T("page2.hook_failure"), records[i].processId,
+                static_cast<LPCTSTR>(stage), static_cast<LPCTSTR>(module),
+                static_cast<LPCTSTR>(api), records[i].error, static_cast<LPCTSTR>(detail)));
+            continue;
+        }
+        LogText(Localization::Format(_T("page2.loader_failure"), records[i].processId,
+            records[i].error, static_cast<LPCTSTR>(detail)));
+    }
+    if (dropped) LogText(Localization::Format(_T("page2.loader_capture_dropped"), dropped));
 }

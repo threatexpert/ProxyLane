@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "afxwin.h"
 #include "afxmt.h"
 #include "..\ProxyLaneHook\ProcessArchitecture.h"
@@ -6,13 +6,20 @@
 #include "ListCtrlEx.h"
 #include "ModernUI.h"
 #include "RecentApplications.h"
+#include "BrowserLaunchWatch.h"
+#include "LaunchPanel.h"
+#include "AsyncSnapshot.h"
+#include <list>
 #include <map>
 #include <set>
 #include <vector>
+struct AutomationOptions;
 
 #define WM_WINDOW_FINDER_BEGIN    (WM_APP + 201)
 #define WM_WINDOW_FINDER_UPDATE   (WM_APP + 202)
 #define WM_WINDOW_FINDER_COMPLETE (WM_APP + 203)
+#define WM_PROCESS_LIST_REQUEST (WM_APP + 205)
+
 #define WM_WINDOW_FINDER_CANCEL   (WM_APP + 204)
 
 class CWindowFinderOverlay : public CWnd
@@ -84,7 +91,10 @@ enum AppLaunchResult
 	APP_LAUNCH_INJECTION_FAILED,
 	APP_LAUNCH_UAC_CANCELLED,
 	APP_LAUNCH_ELEVATED_HELPER_FAILED,
-	APP_LAUNCH_PACKAGED_INJECTION_FAILED
+	APP_LAUNCH_PACKAGED_INJECTION_FAILED,
+	APP_LAUNCH_CANCELLED,
+	APP_LAUNCH_SHORTCUT_INVALID,
+	APP_LAUNCH_FORWARDED
 };
 
 enum AppLaunchElevationMode
@@ -100,6 +110,10 @@ class CPage3 : public CModernDialog
 
 #define TIMER_PSLIST 0x100
 #define TIMER_LAUNCHED_PROCESS 0x101
+#define TIMER_PROCESS_REGISTRY 0x102
+#define TIMER_BROWSER_LAUNCH 0x103
+#define TIMER_LAUNCH_PANEL 0x104
+#define TIMER_PROCESS_RESULT 0x105
 
 public:
 	CPage3(CWnd* pParent = NULL);   // 标准构造函数
@@ -111,12 +125,10 @@ public:
 
 	CListCtrlEx m_ListCtrl;
 	CWindowFinderButton m_btnWindowFinder;
-	CModernButton m_btnRefresh;
 	CModernButton m_btnInject;
 	CModernButton m_btnSelectApp;
 	CModernButton m_btnTerminate;
 	CToolTipCtrl m_windowFinderToolTip;
-	CEvent m_evlock;
 	//CButton m_btnAuto;
 
 	// 自适应布局快照
@@ -134,10 +146,47 @@ private:
 		PROCESS_SORT_DESCENDING
 	};
 
+	AsyncSnapshot<std::list<_myPROCESSINFO>> m_processQuery;
+	std::map<DWORD, _myPROCESSINFO> m_pendingProcessRows;
+	BOOL m_applyingProcesses = FALSE;
+	BOOL m_pollingProcesses = FALSE;
+	BOOL m_processSlowShown = FALSE;
+	BOOL m_processStatusShown = FALSE;
+	int m_processApplyIndex = 0;
+	DWORD m_processQueryTick = 0;
+	HWND m_pendingFinderTarget = NULL;
+	DWORD m_pendingFinderPid = 0;
+	ULONGLONG m_pendingFinderTime = 0;
+	CSoftEdit m_processSearch;
+ CToggleButton m_onlyHooked;
+ CStatic m_filterEmpty;
+ CString m_filterText;
+ bool m_filterHooked = false;
+ afx_msg void OnProcessFilterChanged();
+ void BeginFilteredUpdate();
+ void PollProcessList();
+	void ApplyProcessBatch();
+	void CancelProcessRefresh();
+	void SortDisplayedProcesses();
+	void PublishProcessAccessibility(bool structureChanged);
+	afx_msg LRESULT OnProcessAccessibilityChanged(WPARAM force, LPARAM);
+	afx_msg LRESULT OnProcessAccessibilityRequest(WPARAM, LPARAM);
+	CString ProcessDisplayName(const _myPROCESSINFO& info) const;
+	LRESULT FinishWindowFinder(HWND targetWindow, DWORD expectedPid, ULONGLONG expectedTime);
+	afx_msg void OnShowWindow(BOOL show, UINT status);
+	afx_msg void OnDestroy();
+	afx_msg LRESULT OnProcessListRequest(WPARAM, LPARAM);
 	int m_sortColumn;
 	ProcessSortState m_sortState;
 	std::map<DWORD, _myPROCESSINFO> m_processSortData;
-	std::map<DWORD, ULONGLONG> m_displayedStartTimes;
+	struct DisplayedProcess {
+		DWORD pid;
+		ULONGLONG startTime;
+		CString columns[3];
+	};
+	// Mirrors native row order. Refresh comparisons must not send a message for
+	// every cell: UI Automation hooks can make even same-thread SendMessage slow.
+	std::vector<DisplayedProcess> m_displayedProcesses;
 	std::map<DWORD, CString> m_processTreePrefixes;
 	CString m_processNameSearchText;
 	DWORD m_processNameSearchTick;
@@ -147,6 +196,17 @@ private:
 	DWORD m_launchedProcessId;
 	ULONGLONG m_launchedProcessTime;
 	DWORD m_launchSelectionTick;
+	IProxyProcessRegistry* m_processRegistry;
+	std::vector<BrowserLaunchWatch::Observation> m_browserLaunches;
+	std::vector<BrowserLaunchWatch::Observation> m_browserNotifications;
+	BOOL m_browserNotificationActive = FALSE;
+	BOOL m_showingBrowserWarning = FALSE;
+	BOOL IsBrowserCandidateHooked(const BrowserLaunchWatch::Identity& identity) const;
+	BrowserLaunchWatch::Observation CaptureBrowserCandidates(LPCTSTR path);
+	void WatchBrowserLaunch(BrowserLaunchWatch::Observation observation, DWORD pid, ULONGLONG time, DWORD started);
+	void CheckBrowserLaunches();
+	void ApplyBrowserProcessAction(const CString& name,
+		const std::vector<BrowserLaunchWatch::Identity>& targets, BOOL terminate);
 
 	static int CALLBACK CompareProcessItems(LPARAM leftParam, LPARAM rightParam, LPARAM sortParam);
 	void BuildProcessTree();
@@ -174,13 +234,39 @@ private:
 	void CancelLaunchSelection();
 	void LayoutProcessPage();
 
+	// Launch area: one-click recent apps and the main launch action.
+	CLaunchPanel m_launchPanel;
+	CModernButton m_processToggle;
+	CModernButton m_btnStopProxy;
+	CModernButton m_btnTestProxy;
+	// Set by the test button: the launch header shows the test result in place
+	// of its explanation until the proxy starts or the test status resets.
+	BOOL m_showTestStatus = FALSE;
+	BOOL m_processesExpanded;
+	std::vector<RecentApplications::Entry> m_recentEntries;
+	RecentApplications::Load* m_recentLoad;
+	BOOL m_recentConsumed;
+	BOOL m_recentReadFailed;
+	BOOL m_recentLaunching;
+	CString m_recentProfileId;
+	void ReloadRecentApplications(BOOL force);
+	void RefreshLaunchPanel();
+	BOOL HasConfiguredProxy() const;
+	void SetProcessesExpanded(BOOL expanded);
+
 public:
 
 	void OnPageActivated();
 	int UpdatePslist(BOOL bRefresh);
 	BOOL ProxyProcess(DWORD dwPid);
+	BOOL GetRunningHookedProcesses(std::vector<_myPROCESSINFO>& processes);
+	BOOL HasBrowserNotification() const { return m_browserNotificationActive; }
+	void OpenBrowserNotification();
+	void DismissBrowserNotification();
+	void ClearBrowserNotifications();
 
 	void OnDropAppFile(TCHAR *pFileName);
+	AppLaunchResult LaunchAutomationApplication(const AutomationOptions& options);
 	AppLaunchResult LaunchAndProxyApp(
 		LPCTSTR fileName,
 		const std::vector<CString>& extraArguments,
@@ -188,7 +274,9 @@ public:
 		AppLaunchElevationMode elevationMode = APP_LAUNCH_ELEVATION_AUTO,
 		const CString& initialArguments = CString(),
 		const CString& initialWorkingDirectory = CString());
-	AppLaunchResult LaunchPackagedAppById(LPCTSTR aumid, const CString& arguments);
+	AppLaunchResult LaunchPackagedAppById(LPCTSTR aumid, const CString& arguments, AppLauncherResult* outcome = NULL);
+	BOOL GetAppLauncherHostInfo(AppLauncherHostInfo* info) override;
+	BOOL LaunchAppFromShell(const AppLauncherRequest& request, AppLauncherResult& result) override;
 	AppLaunchResult LaunchInteractiveApplication(const InstalledApplications::Application& app,
 		AppLaunchElevationMode elevationMode = APP_LAUNCH_ELEVATION_AUTO,
 		const RecentApplications::Entry* saved = NULL);
@@ -209,7 +297,7 @@ public:
 	void LogNewProxyTask(const LPPRCClient lpC);
 	BOOL ShouldInjectNewProcess(LPHookNewProcessInfo lphnpi);
 	void OnChildInjectionResult(LPHookNewProcessInfo lphnpi, BOOL succeeded) {};
-	void OnHookWsock(LPHookWSockResult res){};
+	void OnHookWsock(LPHookWSockResult res);
 	void OnHookLogtext(LPHookLogtext log) {};
 
 
@@ -227,12 +315,19 @@ public:
 
 	afx_msg void OnBnClickedOk();
 	afx_msg void OnBnClickedCancel();
-	afx_msg void OnBnClickedRefresh();
 	afx_msg void OnBnClickedInjectdll();
 	afx_msg void OnBnClickedSelectApp();
 	afx_msg void OnBnClickedTerminateProcess();
 	afx_msg void OnProcessSelectionChanged(NMHDR* header, LRESULT* result);
 	afx_msg void OnTimer(UINT_PTR nIDEvent);
+	afx_msg LRESULT OnLaunchPanelTile(WPARAM index, LPARAM);
+	afx_msg LRESULT OnLaunchPanelProfile(WPARAM, LPARAM);
+	afx_msg LRESULT OnLaunchPanelEdit(WPARAM, LPARAM);
+	afx_msg LRESULT OnLaunchPanelShortcut(WPARAM, LPARAM);
+	afx_msg void OnBnClickedProcessToggle();
+	afx_msg void OnBnClickedStopProxy();
+	afx_msg void OnBnClickedTestProxy();
+	afx_msg LRESULT OnRecentApplicationsChanged(WPARAM, LPARAM);
 	afx_msg void OnLvnColumnClickProcessList(NMHDR* notifyHeader, LRESULT* result);
 	afx_msg void OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result);
 	afx_msg LRESULT OnWindowFinderBegin(WPARAM, LPARAM);

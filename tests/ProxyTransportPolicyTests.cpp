@@ -13,6 +13,9 @@ int main()
 	assert(ProxyTransportPolicy::SupportsGoncTlsPsk(PROXYTYPE_HTTP11));
 
 	assert(ProxyTransportPolicy::SupportsUdpProxy(PROXYTYPE_SOCKS5));
+	assert(ProxyTransportPolicy::SupportsUdpProxy(PROXYTYPE_NOPROXY));
+	assert(!ProxyTransportPolicy::SupportsUdpProxy(PROXYTYPE_SOCKS4));
+	assert(!ProxyTransportPolicy::SupportsUdpProxy(PROXYTYPE_SOCKS4A));
 	assert(!ProxyTransportPolicy::SupportsUdpProxy(PROXYTYPE_HTTP10));
 	assert(!ProxyTransportPolicy::SupportsUdpProxy(PROXYTYPE_HTTP11));
 
@@ -21,6 +24,10 @@ int main()
 	profile.reserved = PROXY_TRANSPORT_GONC_TLS_PSK;
 	profile.strTransportPsk = TEXT("test-psk");
 	assert(ProxyTransportPolicy::UsesGoncTlsPsk(&profile));
+	profile.strProxyType = TEXT("HTTP");
+	assert(profile.GetProxyType() == PROXYTYPE_HTTP11);
+	assert(ProxyTransportPolicy::UsesGoncTlsPsk(&profile));
+	assert(!ProxyTransportPolicy::SupportsUdpProxy(profile.GetProxyType()));
 	ProxyInfo direct = profile;
 	ProxyTransportPolicy::UseDirectConnection(direct);
 	assert(direct.GetProxyType() == PROXYTYPE_NOPROXY);

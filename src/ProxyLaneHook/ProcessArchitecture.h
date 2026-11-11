@@ -151,6 +151,16 @@ namespace ProcessArchitecture
         }
     }
 
+    inline LPCTSTR MitmFileName(Architecture arch)
+    {
+        switch (arch)
+        {
+        case X64: return _T("ProxyLaneMitm64.dll");
+        case Arm64: return _T("ProxyLaneMitmARM64.dll");
+        default: return NULL;
+        }
+    }
+
     enum InjectionRoute { Unsupported, Direct, Helper };
     inline InjectionRoute Route(Architecture source, const ProcessInfo& target)
     {

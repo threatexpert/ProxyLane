@@ -2,6 +2,7 @@
 #include "../ProcessArchitecture.h"
 #include "AsyncSecureSocketLayer.h"
 #include "..\ProxyLog.h"
+#include "..\PlatformSupport.h"
 
 namespace
 {
@@ -71,6 +72,11 @@ CAsyncSecureSocketLayer::~CAsyncSecureSocketLayer()
 BOOL CAsyncSecureSocketLayer::Configure(const CStringA& psk,
 	const CStringA& serverName)
 {
+	if (!ProxySupportsOptionalModules())
+	{
+		WSASetLastError(WSAEOPNOTSUPP);
+		return FALSE;
+	}
 	if (psk.IsEmpty())
 	{
 		WSASetLastError(WSAEINVAL);
@@ -83,6 +89,11 @@ BOOL CAsyncSecureSocketLayer::Configure(const CStringA& psk,
 
 BOOL CAsyncSecureSocketLayer::LoadTransport()
 {
+	if (!ProxySupportsOptionalModules())
+	{
+		m_transportLoadError = ERROR_NOT_SUPPORTED;
+		return FALSE;
+	}
 	if (m_hTransport)
 		return TRUE;
 	m_transportLoadError = 0;
@@ -328,6 +339,7 @@ BOOL CAsyncSecureSocketLayer::FinishHandshake()
 	{
 		SecureTrace(_T("TLS ready, key=%d\r\n"), m_bUdpKeyReady);
 		m_bConnectNotified = TRUE;
+		ReportTestProgress(PTS_NEGOTIATING);
 		TriggerEvent(FD_CONNECT, 0, TRUE);
 	}
 	return TRUE;
@@ -369,6 +381,7 @@ void CAsyncSecureSocketLayer::OnConnect(int nErrorCode)
 		TriggerEvent(FD_CONNECT, nErrorCode, TRUE);
 		return;
 	}
+	ReportTestProgress(PTS_TLS);
 	if (!StartHandshake() || !FinishHandshake())
 		ReportFailure(_T("Secure transport handshake failed"));
 }

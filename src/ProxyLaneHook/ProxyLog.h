@@ -21,12 +21,20 @@ public:
 		ConnectionStage stage, DWORD error);
 	void OnConnectionEvent(ConnectionEvent event, const LPPRCClient client,
 		LPCWSTR processName);
+	BOOL GetAppLauncherHostInfo(AppLauncherHostInfo* info);
+	BOOL LaunchAppFromShell(const AppLauncherRequest& request, AppLauncherResult& result);
+	void OnProxyFailure(const LPPRCClient client, LPCWSTR processName,
+		LPCWSTR target, BOOL connectingProxy, DWORD error, LPCWSTR detail);
 
 private:
 
 };
 
 void PrintText(const TCHAR *fmt, ...);
+void LogDnsRelay(DWORD pid, LPCSTR name, LPCSTR type, LPCSTR result);
+void LogDnsRelayRoute(const PRCClient* client, LPCSTR result);
+void LogDohTargetSelection(CProxyReceptionCentre* receptionCentre,
+    const PRCClient* client, size_t attempt = 0, size_t total = 0);
 void LogNewProxyTask(const LPPRCClient lpC);
 void LogConnectionFailure(const LPPRCClient client, LPCWSTR processName,
 	IProxyLog::ConnectionStage stage, DWORD error);
@@ -34,4 +42,7 @@ void LogConnectionEvent(IProxyLog::ConnectionEvent event, const LPPRCClient clie
 	LPCWSTR processName);
 void LogUdpFirstDatagram(CProxyReceptionCentre *receptionCentre,
 	const LPPRCClient lpC, const LPProxyInfo lpPI);
-void LogDnsRedirect(const LPPRCClient lpC);
+void LogDnsRedirect(const LPPRCClient lpC, LPCWSTR processName,
+    CProxyReceptionCentre* receptionCentre = NULL);
+void LogProxyFailure(CProxyReceptionCentre* receptionCentre, const LPPRCClient client,
+	BOOL connectingProxy, int socketError, LPCSTR detail);

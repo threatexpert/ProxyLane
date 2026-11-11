@@ -137,6 +137,18 @@ def close_gui(owner):
         raise RuntimeError('Test GUI main dialog not found')
     for window in windows:
         USER.PostMessageW(window, 0x10, 0, 0)  # WM_CLOSE, only our GUI PID
+    # Explicitly accept the survivor warning in this test-owned GUI. Real users
+    # should see it even when the GUI was initially launched with --auto.
+    USER.GetDlgItem.argtypes = [wintypes.HWND, ctypes.c_int]
+    USER.GetDlgItem.restype = wintypes.HWND
+    deadline = time.monotonic() + 15
+    while owner.poll() is None and time.monotonic() < deadline:
+        windows.clear()
+        USER.EnumWindows(visit, 0)
+        for window in windows:
+            if USER.GetDlgItem(window, 1111):
+                USER.PostMessageW(window, 0x111, 1, 0)  # Exit anyway.
+        time.sleep(.05)
     owner.wait(timeout=15)
 
 
@@ -208,6 +220,7 @@ def main():
         target = direct.getsockname()
         for listener, proxied in ((direct, False), (socks, True)):
             threading.Thread(target=serve, args=(listener, proxied, observations, target), daemon=True).start()
+        (directory / 'portable.flag').touch()
         (directory / 'ProxyLane.ini').write_text('''[options]
 lastselected=Rebind
 language=en-US

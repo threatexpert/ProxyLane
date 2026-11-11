@@ -7,7 +7,12 @@
 #include "AppVersion.h"
 #include "Localization.h"
 #include "PackagedAppSupport.h"
+#include "ExitCleanupDialog.h"
+#include "ProcessActions.h"
+#include "ApplicationCatalogCache.h"
 #include <afxole.h>
+#include <propkey.h>
+#include <propsys.h>
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -22,6 +27,51 @@ UINT s_uTaskbarRestart = -1;
 
 namespace
 {
+	void SetTaskbarIdentity(HWND window, bool clear = false)
+	{
+		// A launcher link carries the target app's icon. Give our window its own
+		// identity so Explorer does not reuse that link for ProxyLane's taskbar group.
+		// Resolve dynamically to retain compatibility with pre-Windows 7 systems.
+		typedef HRESULT (WINAPI* GetWindowStore)(HWND, REFIID, void**);
+		HMODULE shell = GetModuleHandleW(L"shell32.dll");
+		GetWindowStore getStore = shell ? reinterpret_cast<GetWindowStore>(
+			GetProcAddress(shell, "SHGetPropertyStoreForWindow")) : NULL;
+		if (!getStore) return;
+		CComPtr<IPropertyStore> store;
+		if (FAILED(getStore(window, IID_PPV_ARGS(&store)))) return;
+
+		const PROPERTYKEY keys[] = { PKEY_AppUserModel_RelaunchCommand,
+			PKEY_AppUserModel_RelaunchDisplayNameResource,
+			PKEY_AppUserModel_RelaunchIconResource, PKEY_AppUserModel_ID };
+		CString values[4];
+		if (!clear)
+		{
+			WCHAR executable[32768] = {};
+			const DWORD length = GetModuleFileNameW(NULL, executable, _countof(executable));
+			if (!length || length >= _countof(executable)) return;
+			// Pinning the PL window should reopen PL, not repeat the app launch.
+			values[0].Format(L"\"%s\"", executable);
+			values[1] = L"ProxyLane";
+			values[2].Format(L"%s,-%d", executable, IDR_MAINFRAME);
+			values[3] = L"ThreatExpert.ProxyLane";
+		}
+		for (size_t index = 0; index < _countof(keys); ++index)
+		{
+			PROPVARIANT value = {};
+			if (!clear)
+			{
+				value.vt = VT_LPWSTR;
+				value.pwszVal = const_cast<LPWSTR>(static_cast<LPCWSTR>(values[index]));
+			}
+			// The window store copies the string; VT_EMPTY releases it at teardown.
+			if (FAILED(store->SetValue(keys[index], value)) && !clear)
+			{
+				SetTaskbarIdentity(window, true);
+				return;
+			}
+		}
+	}
+
 	enum TaskbarMenuCommand
 	{
 		TASKBAR_MENU_OPEN = 1,
@@ -104,6 +154,21 @@ namespace
 	{
 		OSVERSIONINFO versionInfo = { sizeof(versionInfo) };
 		return GetVersionEx(&versionInfo) && versionInfo.dwMajorVersion >= 6;
+	}
+
+	NOTIFYICONDATA TrayIconData()
+	{
+		NOTIFYICONDATA data = {};
+		// XP's Shell32 expects the V3 structure, without Vista's hBalloonIcon.
+		data.cbSize = IsVistaOrLater() ? sizeof(data) : NOTIFYICONDATA_V3_SIZE;
+		return data;
+	}
+
+	BOOL SupportsNotificationQuietTime()
+	{
+		OSVERSIONINFO versionInfo = { sizeof(versionInfo) };
+		return GetVersionEx(&versionInfo) && (versionInfo.dwMajorVersion > 6 ||
+			(versionInfo.dwMajorVersion == 6 && versionInfo.dwMinorVersion >= 1));
 	}
 }
 
@@ -419,7 +484,7 @@ ShellNotifyIcon_Add(
 	PCTSTR szTip,
 	UINT nFlags /*= NIF_MESSAGE|NIF_ICON|NIF_TIP*/)
 {
-	NOTIFYICONDATA tnid = { sizeof(tnid), 0 };
+	NOTIFYICONDATA tnid = TrayIconData();
 	tnid.hWnd = hWnd;
 	tnid.uID = nID;
 	tnid.uCallbackMessage = nCallbackMessage;
@@ -443,7 +508,7 @@ ShellNotifyIcon_Delete(
 	HWND hWnd,
 	UINT nID)
 {
-	NOTIFYICONDATA tnid = { sizeof(tnid), 0 };
+	NOTIFYICONDATA tnid = TrayIconData();
 	tnid.hWnd = hWnd;
 	tnid.uID = nID;
 	return Shell_NotifyIcon(
@@ -460,7 +525,7 @@ ShellNotifyIcon_Modify(
 	PCTSTR szTip,
 	UINT nFlags)
 {
-	NOTIFYICONDATA tnid = { sizeof(tnid), 0 };
+	NOTIFYICONDATA tnid = TrayIconData();
 	tnid.hWnd = hWnd;
 	tnid.uID = nID;
 	tnid.uCallbackMessage = nCallbackMessage;
@@ -476,34 +541,6 @@ ShellNotifyIcon_Modify(
 	}
 	return Shell_NotifyIcon(
 		NIM_MODIFY,
-		&tnid);
-}
-
-BOOL
-ShellNotifyIcon_AddInfo(
-						HWND hWnd, 
-						UINT nID, 
-						UINT nCallbackMessage, 
-						HICON hIcon, 
-						PCTSTR szInfo, 
-						UINT nFlags)
-{
-	NOTIFYICONDATA tnid = { sizeof(tnid), 0 };
-	tnid.hWnd = hWnd;
-	tnid.uID = nID;
-	tnid.uCallbackMessage = nCallbackMessage;
-	tnid.uFlags = nFlags;
-	tnid.hIcon = hIcon;
-	if(szInfo)
-	{
-		_tcsncpy(
-			tnid.szInfo,
-			szInfo,
-			_countof(tnid.szInfo)-1);
-		tnid.szInfo[_countof(tnid.szInfo)-1] = _T('\0');
-	}
-	return Shell_NotifyIcon(
-		NIM_ADD,
 		&tnid);
 }
 
@@ -535,8 +572,11 @@ BEGIN_MESSAGE_MAP(CProxyLaneDlg, CModernDialog)
 	ON_MESSAGE(WM_SHELLICON_NOTIFY, OnShellIconNotify)
 	ON_REGISTERED_MESSAGE(s_uTaskbarRestart, OnTaskbarRestartNotify)
 	ON_MESSAGE(WM_AUTOMATION_START, OnAutomationStart)
+	ON_WM_WINDOWPOSCHANGING()
+	ON_MESSAGE(WM_PRELOAD_APPLICATIONS, OnPreloadApplications)
 	ON_MESSAGE(WM_PROXY_STATUS_CHANGED, OnProxyStatusChanged)
 	ON_MESSAGE(WM_PROFILE_COMMAND_REQUEST, OnProfileCommandRequest)
+	ON_MESSAGE(WM_CONFIG_IMPORT_RESTART, OnConfigImportRestart)
 	ON_MESSAGE(WM_DEFERRED_FILE_DRAG_LEAVE, OnDeferredFileDragLeave)
 	//}}AFX_MSG_MAP
 	ON_WM_DESTROY()
@@ -548,8 +588,16 @@ END_MESSAGE_MAP()
 
 // CProxyLaneDlg 消息处理程序
 
+LRESULT CProxyLaneDlg::OnPreloadApplications(WPARAM, LPARAM)
+{
+	PreloadApplicationCatalog();
+	m_MainTab.GetPage1()->PreloadRecentApplications();
+	return 0;
+}
+
 BOOL CProxyLaneDlg::OnInitDialog()
 {
+	m_stayInTray = theApp.GetAutomationOptions().enabled;
 	CModernDialog::OnInitDialog();
 	// Do not expose a half-initialized child-dialog tree. On a busy machine
 	// Windows can otherwise compose individual controls before page creation,
@@ -559,6 +607,7 @@ BOOL CProxyLaneDlg::OnInitDialog()
 
 	SetIcon(m_hIcon, TRUE);			// 设置大图标
 	SetIcon(m_hIcon, FALSE);		// 设置小图标
+	SetTaskbarIdentity(m_hWnd);
 	m_hInactiveIcon = CreateGrayscaleIcon(GetIcon(FALSE));
 
 	// 启动时确保当前程序目录具备 ALL APPLICATION PACKAGES 读与执行权限，适配 UWP/AppContainer 进程注入
@@ -635,6 +684,20 @@ BOOL CProxyLaneDlg::OnInitDialog()
 	s_uTaskbarRestart = RegisterWindowMessage(TEXT("TaskbarCreated"));
 
 	AddTaskbarIcons();
+	// The dialog template is smaller than the pages need (Settings scrolled at
+	// the default size). Open roomier, but never beyond the monitor's work area.
+	{
+		CRect window;
+		GetWindowRect(&window);
+		MONITORINFO monitor = { sizeof(monitor) };
+		if (::GetMonitorInfo(::MonitorFromWindow(m_hWnd, MONITOR_DEFAULTTONEAREST), &monitor))
+		{
+			const CRect work(monitor.rcWork);
+			const int width = min(max(window.Width(), UiTheme::ScaleForWindow(m_hWnd, 900)), work.Width() * 9 / 10);
+			const int height = min(max(window.Height(), UiTheme::ScaleForWindow(m_hWnd, 620)), work.Height() * 9 / 10);
+			SetWindowPos(NULL, 0, 0, width, height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+		}
+	}
 	m_MainTab.FinalizeLayout(FALSE);
 	// The dialog is hidden while its child pages are initialized, so explicitly
 	// apply the normal dialog centering before its first visible frame.
@@ -651,6 +714,9 @@ BOOL CProxyLaneDlg::OnInitDialog()
 		ShowWindow(SW_SHOW);
 		RedrawWindow(NULL, NULL,
 			RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+		PostMessage(WM_PRELOAD_APPLICATIONS);
+		// Also acknowledge a normal GUI restart after a complete INI import.
+		theApp.SignalAutomationReady();
 	}
 
 	return TRUE;  // 除非将焦点设置到控件，否则返回 TRUE
@@ -658,13 +724,78 @@ BOOL CProxyLaneDlg::OnInitDialog()
 
 void CProxyLaneDlg::OnCancel()
 {
+	// Modal dialogs pump messages; ignore another close request while confirming.
+	if (m_confirmingExit) return;
+	m_confirmingExit = TRUE;
 	CPage1* page1 = m_MainTab.GetPage1();
 	if (page1 && !theApp.GetAutomationOptions().enabled
 		&& !page1->ConfirmDiscardUnsavedChanges())
 	{
+		m_confirmingExit = FALSE;
 		return;
 	}
+	// A user can close a GUI originally launched with --auto too. Explicit
+	// automation failures use EndDialog directly and remain non-interactive.
+	{
+		std::vector<_myPROCESSINFO> processes;
+		if (!m_MainTab.GetPage3()->GetRunningHookedProcesses(processes))
+		{
+			MessageBox(Localization::Format(_T("exit.cleanup_error"), ERROR_RETRY),
+				Localization::Get(_T("exit.processes_title")), MB_OK | MB_ICONWARNING);
+			m_confirmingExit = FALSE;
+			return;
+		}
+		if (!processes.empty())
+		{
+			CString details;
+			for (size_t i = 0; i < processes.size(); ++i)
+			{
+				CString line;
+				line.Format(_T("%s  (PID %lu)\r\n"), processes[i].proname, processes[i].pid);
+				details += line;
+			}
+			ShowAndActivate();
+			CExitCleanupDialog dialog(m_MainTab.GetPage3(), static_cast<UINT>(processes.size()), details, this);
+			const INT_PTR choice = dialog.DoModal();
+			if (choice == IDC_EXIT_HIDE_TRAY)
+			{
+				m_confirmingExit = FALSE;
+				ShowWindow(SW_HIDE);
+				return;
+			}
+			if (choice != IDOK)
+			{
+				if (choice != IDCANCEL)
+				{
+					CString failures;
+					UINT failed = 0;
+					for (size_t i = 0; i < dialog.result.errors.size(); ++i)
+					{
+						if (!dialog.result.errors[i]) continue;
+						if (++failed <= 10)
+							failures += Localization::Format(_T("page3.end_error"),
+								dialog.result.processes[i].proname,
+								dialog.result.processes[i].pid, dialog.result.errors[i]);
+					}
+					if (failed > 10) failures += _T("...\r\n");
+					const CString message = failed ?
+						Localization::Format(_T("exit.terminate_failed"), failed) + _T("\r\n\r\n") + failures :
+						Localization::Format(_T("exit.cleanup_error"),
+							dialog.workerError ? dialog.workerError : ERROR_GEN_FAILURE);
+					MessageBox(message, Localization::Get(_T("exit.processes_title")), MB_OK | MB_ICONWARNING);
+				}
+				m_confirmingExit = FALSE;
+				return;
+			}
+		}
+	}
 	CModernDialog::OnCancel();
+}
+
+LRESULT CProxyLaneDlg::OnConfigImportRestart(WPARAM, LPARAM)
+{
+	if (theApp.HasPendingConfigImport()) EndDialog(IDOK);
+	return 0;
 }
 
 void CProxyLaneDlg::FailAutomation(int exitCode)
@@ -707,10 +838,7 @@ LRESULT CProxyLaneDlg::OnAutomationStart(WPARAM wParam, LPARAM lParam)
 		return 0;
 	}
 
-	AppLaunchResult launchResult = page3->LaunchAndProxyApp(
-		options.targetPath,
-		options.targetArguments,
-		TRUE);
+	AppLaunchResult launchResult = page3->LaunchAutomationApplication(options);
 	if (launchResult != APP_LAUNCH_SUCCESS)
 	{
 		int exitCode = AUTOMATION_EXIT_TARGET_INVALID;
@@ -726,6 +854,7 @@ LRESULT CProxyLaneDlg::OnAutomationStart(WPARAM wParam, LPARAM lParam)
 		return 0;
 	}
 
+	if (options.shortcut) NotifyShortcutLaunch(options);
 	theApp.SignalAutomationReady();
 	return 0;
 }
@@ -788,6 +917,7 @@ void CProxyLaneDlg::UpdateTaskbarIcon()
 
 LRESULT CProxyLaneDlg::OnProxyStatusChanged(WPARAM, LPARAM)
 {
+	if (!m_MainTab.IsProxyRunning()) m_MainTab.GetPage3()->ClearBrowserNotifications();
 	RefreshProfileCommandServer();
 	UpdateTaskbarIcon();
 	return 0;
@@ -802,20 +932,18 @@ LRESULT CProxyLaneDlg::OnProfileCommandRequest(WPARAM, LPARAM lParam)
 	int exitCode = AUTOMATION_EXIT_COMMAND_FORWARD_FAILED;
 	if (!InterlockedCompareExchange(&request->cancelled, FALSE, FALSE) &&
 		m_MainTab.IsProxyRunning() &&
-		m_MainTab.GetRunningProfileName().CompareNoCase(request->profileName) == 0 &&
-		theApp.IsProfileCommandServerActive(request->profileName))
+		m_MainTab.GetRunningProfileName().CompareNoCase(request->options.profileName) == 0 &&
+		theApp.IsProfileCommandServerActive(request->options.profileName))
 	{
 		CPage3* page3 = m_MainTab.GetPage3();
 		if (page3)
 		{
-			AppLaunchResult result = page3->LaunchAndProxyApp(
-				request->targetPath,
-				request->targetArguments,
-				TRUE);
+			AppLaunchResult result = page3->LaunchAutomationApplication(request->options);
 			switch (result)
 			{
 			case APP_LAUNCH_SUCCESS:
 				exitCode = AUTOMATION_EXIT_SUCCESS;
+				if (request->options.shortcut) NotifyShortcutLaunch(request->options);
 				break;
 			case APP_LAUNCH_INVALID_TARGET:
 				exitCode = AUTOMATION_EXIT_TARGET_INVALID;
@@ -885,6 +1013,7 @@ HCURSOR CProxyLaneDlg::OnQueryDragIcon()
 
 void CProxyLaneDlg::OnDestroy()
 {
+	SetTaskbarIdentity(m_hWnd, true);
 	EndFileDrag();
 	for (size_t index = 0; index < m_fileDropTargets.size(); ++index)
 	{
@@ -927,7 +1056,11 @@ CProxyLaneDlg::OnTaskbarRestartNotify(
 							   LPARAM lParam
 							   )
 {
+	m_trayNoticeKind = TRAY_NOTICE_NONE;
+	m_pendingBrowserNotice.Empty();
+	m_MainTab.GetPage3()->ClearBrowserNotifications();
 	AddTaskbarIcons();
+	ShowNextTrayNotification();
 	return 0;
 }
 
@@ -941,6 +1074,32 @@ CProxyLaneDlg::OnShellIconNotify(
 	{
 		switch(lParam)
 		{
+		case NIN_BALLOONSHOW:
+			if (m_trayNoticeKind == TRAY_NOTICE_BROWSER && m_MainTab.GetPage3()->HasBrowserNotification())
+				m_MainTab.AddLogText(0, Localization::Get(_T("browser_reuse.log_shown")));
+			break;
+		case NIN_BALLOONUSERCLICK:
+			{
+				const TrayNoticeKind kind = m_trayNoticeKind;
+				m_trayNoticeKind = TRAY_NOTICE_NONE;
+				if (kind != TRAY_NOTICE_NONE && IsWindowEnabled()) ShowAndActivate();
+				if (kind == TRAY_NOTICE_BROWSER)
+				{
+					if (IsWindowEnabled()) m_MainTab.GetPage3()->OpenBrowserNotification();
+					else m_MainTab.GetPage3()->DismissBrowserNotification();
+				}
+				ShowNextTrayNotification();
+			}
+			break;
+		case NIN_BALLOONHIDE:
+		case NIN_BALLOONTIMEOUT:
+			{
+				const TrayNoticeKind kind = m_trayNoticeKind;
+				m_trayNoticeKind = TRAY_NOTICE_NONE;
+				if (kind == TRAY_NOTICE_BROWSER) m_MainTab.GetPage3()->DismissBrowserNotification();
+				ShowNextTrayNotification();
+			}
+			break;
 		case WM_LBUTTONDBLCLK:
 			ShowAndActivate();
 			break;
@@ -953,6 +1112,88 @@ CProxyLaneDlg::OnShellIconNotify(
 	}
 
 	return 1;
+}
+
+BOOL CProxyLaneDlg::ShowBrowserNotification(const CString& name)
+{
+	m_pendingBrowserNotice = Localization::Format(_T("browser_reuse.notification"), (LPCTSTR)name);
+	ShowNextTrayNotification();
+	return TRUE;
+}
+
+void CProxyLaneDlg::NotifyShortcutLaunch(const AutomationOptions& options)
+{
+	// Launching an application must not change the user's window visibility or focus.
+	UpdateTaskbarIcon();
+	CString name = options.applicationName;
+	if (name.IsEmpty()) name = options.packaged ? options.targetPath : CString(PathFindFileName(options.targetPath));
+	name.Replace(L'\r', L' '); name.Replace(L'\n', L' ');
+	CString profile = options.profileName;
+	profile.Replace(L'\r', L' '); profile.Replace(L'\n', L' ');
+	m_MainTab.AddLogText(0, Localization::Format(L"shortcut.started_log", (LPCTSTR)name, (LPCTSTR)profile));
+	if (IsWindowVisible())
+	{
+		m_MainTab.ShowTransientStatus(Localization::Format(L"dialog.started_proxy", (LPCTSTR)name), CStatusLabel::TONE_SUCCESS);
+		return;
+	}
+	// Leave room for both fields in the Shell's fixed-size balloon text.
+	const CString body = Localization::Format(L"shortcut.started_notification", (LPCTSTR)name.Left(100), (LPCTSTR)profile.Left(80));
+	if (m_pendingLaunchNotices.size() >= 16) m_pendingLaunchNotices.pop_front();
+	m_pendingLaunchNotices.push_back(body);
+	ShowNextTrayNotification();
+}
+
+void CProxyLaneDlg::ShowNextTrayNotification()
+{
+	// The tray callback has no per-balloon identity. Submit only one at a time
+	// so an informational launch click cannot act on a queued browser warning.
+	if (m_trayNoticeKind != TRAY_NOTICE_NONE) return;
+	CString body;
+	if (!m_pendingBrowserNotice.IsEmpty())
+	{
+		m_trayNoticeKind = TRAY_NOTICE_BROWSER; body = m_pendingBrowserNotice; m_pendingBrowserNotice.Empty();
+	}
+	else if (!m_pendingLaunchNotices.empty())
+	{
+		m_trayNoticeKind = TRAY_NOTICE_LAUNCH; body = m_pendingLaunchNotices.front(); m_pendingLaunchNotices.pop_front();
+	}
+	else return;
+	NOTIFYICONDATA data = TrayIconData();
+	data.hWnd = m_hWnd;
+	data.uID = IDD;
+	data.uFlags = NIF_INFO;
+	// NIIF_RESPECT_QUIET_TIME is Windows 7+, and hidden by the XP SDK headers.
+	const DWORD respectQuietTime = 0x80;
+	data.dwInfoFlags = m_trayNoticeKind == TRAY_NOTICE_BROWSER ? NIIF_WARNING : NIIF_INFO;
+	if (SupportsNotificationQuietTime()) data.dwInfoFlags |= respectQuietTime;
+	data.uTimeout = 15000; // XP uses this; Vista+ uses the system accessibility setting.
+	const CString title = m_trayNoticeKind == TRAY_NOTICE_BROWSER ? Localization::Get(_T("browser_reuse.title")) : CString(L"ProxyLane");
+	_tcsncpy_s(data.szInfoTitle, _countof(data.szInfoTitle), title, _TRUNCATE);
+	_tcsncpy_s(data.szInfo, _countof(data.szInfo), body, _TRUNCATE);
+	// Modify the existing icon; no attention badge, menu item or taskbar flash.
+	const BOOL sent = Shell_NotifyIcon(NIM_MODIFY, &data);
+	// Shell_NotifyIcon does not promise a meaningful GetLastError value.
+	// Acceptance is distinct from the later NIN_BALLOONSHOW callback.
+	if (m_trayNoticeKind == TRAY_NOTICE_BROWSER)
+		m_MainTab.AddLogText(0, Localization::Get(sent ? _T("browser_reuse.log_sent") : _T("browser_reuse.log_failed")));
+	if (!sent)
+	{
+		const TrayNoticeKind kind = m_trayNoticeKind; m_trayNoticeKind = TRAY_NOTICE_NONE;
+		if (kind == TRAY_NOTICE_BROWSER) m_MainTab.GetPage3()->DismissBrowserNotification();
+		else m_MainTab.AddLogText(0, Localization::Get(L"shortcut.notification_failed"));
+		ShowNextTrayNotification();
+	}
+}
+
+void CProxyLaneDlg::HideBrowserNotification()
+{
+	m_pendingBrowserNotice.Empty();
+	if (m_trayNoticeKind != TRAY_NOTICE_BROWSER) return;
+	NOTIFYICONDATA data = TrayIconData();
+	data.hWnd = m_hWnd;
+	data.uID = IDD;
+	data.uFlags = NIF_INFO; // Empty szInfo dismisses the outstanding balloon.
+	Shell_NotifyIcon(NIM_MODIFY, &data);
 }
 
 void CProxyLaneDlg::ShowTaskbarMenu()
@@ -1052,7 +1293,7 @@ void CProxyLaneDlg::StartProxyFromTaskbarProfile(LPCTSTR profileName)
 			return;
 	}
 
-	if (!page1->LoadProfileByName(profileName, TRUE))
+	if (!page1->LoadProfileByName(profileName))
 	{
 		ShowAndActivate();
 		MessageBox(
@@ -1062,12 +1303,16 @@ void CProxyLaneDlg::StartProxyFromTaskbarProfile(LPCTSTR profileName)
 		return;
 	}
 
-	if (!page1->StartProxy(TRUE))
+	if (!page1->StartProxyFromUi())
 		ShowAndActivate();
 }
 
 void CProxyLaneDlg::ShowAndActivate()
 {
+	m_stayInTray = FALSE;
+	// Background launch notices queued before the user opened the window are
+	// no longer useful as system popups. Browser warnings retain their own flow.
+	m_pendingLaunchNotices.clear();
 	ShowWindow(IsIconic() ? SW_RESTORE : SW_SHOW);
 
 	// Raise the window without leaving it permanently topmost.
@@ -1078,6 +1323,18 @@ void CProxyLaneDlg::ShowAndActivate()
 	BringWindowToTop();
 	SetForegroundWindow();
 	SetActiveWindow();
+}
+
+void CProxyLaneDlg::OnWindowPosChanging(WINDOWPOS* position)
+{
+	CModernDialog::OnWindowPosChanging(position);
+	// MFC's modal loop can show an initially hidden dialog again on its first
+	// idle cycle. Stay hidden until an explicit tray/notification Open action.
+	if (m_stayInTray && (position->flags & SWP_SHOWWINDOW))
+	{
+		position->flags &= ~SWP_SHOWWINDOW;
+		position->flags |= SWP_NOACTIVATE;
+	}
 }
 
 void CProxyLaneDlg::OnSize(UINT nType, int cx, int cy)
@@ -1097,7 +1354,9 @@ void CProxyLaneDlg::OnSize(UINT nType, int cx, int cy)
 void CProxyLaneDlg::OnGetMinMaxInfo(MINMAXINFO* minMaxInfo)
 {
 	CModernDialog::OnGetMinMaxInfo(minMaxInfo);
-	minMaxInfo->ptMinTrackSize.x = UiTheme::ScaleForWindow(m_hWnd, 640);
+	// English navigation is 34 logical pixels wider; keep the settings column visible.
+	const int minimumWidth = Localization::CurrentLanguage().CompareNoCase(_T("en-US")) == 0 ? 674 : 640;
+	minMaxInfo->ptMinTrackSize.x = UiTheme::ScaleForWindow(m_hWnd, minimumWidth);
 	minMaxInfo->ptMinTrackSize.y = UiTheme::ScaleForWindow(m_hWnd, 488);
 }
 
@@ -1290,6 +1549,7 @@ void CProxyLaneDlg::LaunchDroppedApplication(const InstalledApplications::Applic
 		return;
 	}
 	const AppLaunchResult result = page3->LaunchInteractiveApplication(app, elevationMode);
+	if (result == APP_LAUNCH_CANCELLED || result == APP_LAUNCH_FORWARDED) return;
 	if (result == APP_LAUNCH_SUCCESS)
 	{
 		m_MainTab.ShowTransientStatus(Localization::Format(
@@ -1301,6 +1561,8 @@ void CProxyLaneDlg::LaunchDroppedApplication(const InstalledApplications::Applic
 	CString message;
 	if (result == APP_LAUNCH_INVALID_TARGET)
 		message = Localization::Get(_T("dialog.drop_invalid"));
+	else if (result == APP_LAUNCH_SHORTCUT_INVALID)
+		message = Localization::Get(L"shortcut.recursive");
 	else if (result == APP_LAUNCH_UAC_CANCELLED)
 		message = Localization::Get(_T("dialog.drop_uac_cancelled"));
 	else if (result == APP_LAUNCH_INJECTION_FAILED)

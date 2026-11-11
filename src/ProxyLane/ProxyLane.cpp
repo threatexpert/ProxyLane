@@ -2,12 +2,15 @@
 //
 
 #include "stdafx.h"
+#include "ConfigStorage.h"
 #include "ProxyLane.h"
 #include "ProxyLaneDlg.h"
 #include "Page3.h"
 #include "AutomationOptions.h"
+#include "LaunchShortcut.h"
 #include "Localization.h"
 #include "AppVersion.h"
+#include "AppLauncher.h"
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -118,6 +121,12 @@ int CProxyLaneApp::ExitInstance()
 {
 	m_profileCommandBroker.StopServer();
 	m_profileCommandBroker.ReleaseLaunchGate();
+	if (m_configImport)
+	{
+		m_configImport->FinishAfterShutdown();
+		m_configImport.reset();
+	}
+	LaunchShortcut::ReportFailure(m_automationOptions, m_automationExitCode);
 	CWinApp::ExitInstance();
 	return m_automationExitCode;
 }
@@ -132,6 +141,13 @@ CProxyLaneApp theApp;
 
 BOOL CProxyLaneApp::InitInstance()
 {
+	// A real process for callers to wait/resume, without UI, configuration writes,
+	// profile forwarding, or the normal x86-to-x64 bootstrap.
+	DWORD launcherExitCode=0;
+	if (RunInternalAppLauncher(GetCommandLineW(),launcherExitCode)) {
+		m_automationExitCode=static_cast<int>(launcherExitCode);
+		return FALSE;
+	}
 	// 如果一个运行在 Windows XP 上的应用程序清单指定要
 	// 使用 ComCtl32.dll 版本 6 或更高版本来启用可视化方式，
 	//则需要 InitCommonControlsEx()。否则，将无法创建窗口。
@@ -143,18 +159,26 @@ BOOL CProxyLaneApp::InitInstance()
 	InitCommonControlsEx(&InitCtrls);
 
 	CWinApp::InitInstance();
+	ProcessArchitecture::ProcessInfo selfArchitecture;
+	if (!ProcessArchitecture::Query(GetCurrentProcess(), selfArchitecture))
+	{
+		m_automationExitCode = AUTOMATION_EXIT_ARCH_FORWARD_FAILED;
+		return FALSE;
+	}
+	// The native host initializes storage; a forwarding launcher must not hide
+	// first-run setup by creating the INI before that host starts.
+	const bool forwardsToNative = selfArchitecture.native != ProcessArchitecture::CurrentModule();
+	const bool storageReady = forwardsToNative || ConfigStorage::Initialize();
+	const DWORD storageError = GetLastError();
 	Localization::Initialize();
+	if (!storageReady)
+	{
+		CString error = ConfigStorage::ErrorText(storageError);
+		AfxMessageBox(Localization::Format(L"storage.save_failed", (LPCTSTR)error, (LPCTSTR)ConfigStorage::Path()), MB_ICONERROR);
+		return FALSE;
+	}
 
 	AfxEnableControlContainer();
-
-	// 标准初始化
-	// 如果未使用这些功能并希望减小
-	// 最终可执行文件的大小，则应移除下列
-	// 不需要的特定初始化例程
-	// 更改用于存储设置的注册表项
-	// TODO: 应适当修改该字符串，
-	// 例如修改为公司或组织名
-	SetRegistryKey(_T("ProxyLane"));
 
 	// OLE drag-and-drop requires the UI thread to remain in the STA selected by
 	// AfxOleInit.  A second MTA initialization only fails with
@@ -185,13 +209,7 @@ BOOL CProxyLaneApp::InitInstance()
 		return FALSE;
 	}
 
-	ProcessArchitecture::ProcessInfo selfArchitecture;
-	if (!ProcessArchitecture::Query(GetCurrentProcess(), selfArchitecture))
-	{
-		m_automationExitCode = AUTOMATION_EXIT_ARCH_FORWARD_FAILED;
-		return FALSE;
-	}
-	if (selfArchitecture.native != ProcessArchitecture::CurrentModule())
+	if (forwardsToNative)
 	{
 		if (m_automationOptions.enabled)
 		{
@@ -264,6 +282,8 @@ BOOL CProxyLaneApp::InitInstance()
 		ShExecInfo.hInstApp = NULL;
 		if (ShellExecuteEx(&ShExecInfo))
 		{
+			// The child reports shortcut failures; do not show the same error twice.
+			m_automationOptions.shortcut = FALSE;
 			if (m_automationOptions.enabled)
 			{
 				HANDLE handles[] = { bootstrapEvent, ShExecInfo.hProcess };

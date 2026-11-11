@@ -4,6 +4,7 @@
 
 #include "stdafx.h"
 #include "IniFile.h"
+#include "ConfigStorage.h"
 #include <vector>
 
 #ifdef _DEBUG
@@ -33,22 +34,7 @@ void CIniFile::SetIniFileName(CString FileName)
 		IniFileName = FileName;
 	}else
 	{
-		TCHAR szAppName[MAX_PATH] = { 0 };
-		size_t  len;
-
-		::GetModuleFileName(AfxGetApp()->m_hInstance, szAppName, _countof(szAppName));
-		szAppName[_countof(szAppName) - 1] = _T('\0');
-		len = _tcslen(szAppName);
-		for(size_t i=len; i>0; i--)
-		{
-			if(szAppName[i] == '.')
-			{
-				szAppName[i+1] = '\0';
-				break;
-			}
-		}
-		_tcscat(szAppName, _T("ini"));
-		IniFileName = szAppName;
+		IniFileName = ConfigStorage::Path();
 	}
 }
 
@@ -117,7 +103,8 @@ BOOL CIniFile::WriteSection(const CString& name, const Section& values)
 	if (values.empty()) buffer.push_back(0);
 	// Preserve the XP whole-section limit (65535 bytes).
 	if (buffer.size() * sizeof(TCHAR) > 65534) { SetLastError(ERROR_BUFFER_OVERFLOW); return FALSE; }
-	return WritePrivateProfileSection(name, &buffer[0], IniFileName);
+	if (staging) return WritePrivateProfileSection(name, &buffer[0], IniFileName);
+	return ConfigStorage::Update(IniFileName, [&](const CString& path) { return WritePrivateProfileSection(name, &buffer[0], path) != FALSE; });
 }
 
 int CIniFile::GetKeyList(LPCTSTR name, list<CString>& ls)
@@ -130,7 +117,7 @@ int CIniFile::GetKeyList(LPCTSTR name, list<CString>& ls)
 
 BOOL CIniFile::DeleteSection(CString AppName)
 {
-	return ::WritePrivateProfileString(AppName, 0, 0, IniFileName);
+	return staging ? ::WritePrivateProfileString(AppName, 0, 0, IniFileName) : ConfigStorage::WriteValue(AppName, 0, 0, IniFileName);
 }
 
 CString CIniFile::GetString(CString section, CString key, CString fallback)
@@ -155,31 +142,31 @@ unsigned long CIniFile::GetDWORD(CString AppName,CString KeyName,unsigned long D
 
 BOOL CIniFile::SetString(CString AppName,CString KeyName,CString Data)
 {
-	return ::WritePrivateProfileString(AppName, KeyName, Data, IniFileName);
+	return staging ? ::WritePrivateProfileString(AppName, KeyName, Data, IniFileName) : ConfigStorage::WriteValue(AppName, KeyName, Data, IniFileName);
 }
 
 BOOL CIniFile::SetInt(CString AppName,CString KeyName,int Data)
 {
 	CString temp;
 	temp.Format(_T("%d"), Data);
-	return ::WritePrivateProfileString(AppName, KeyName, temp, IniFileName);
+	return staging ? ::WritePrivateProfileString(AppName, KeyName, temp, IniFileName) : ConfigStorage::WriteValue(AppName, KeyName, temp, IniFileName);
 }
 
 BOOL CIniFile::SetDouble(CString AppName,CString KeyName,double Data)
 {
 	CString temp;
 	temp.Format(_T("%f"),Data);
-	return ::WritePrivateProfileString(AppName, KeyName, temp, IniFileName);
+	return staging ? ::WritePrivateProfileString(AppName, KeyName, temp, IniFileName) : ConfigStorage::WriteValue(AppName, KeyName, temp, IniFileName);
 }
 
 BOOL CIniFile::SetDWORD(CString AppName,CString KeyName,unsigned long Data)
 {
 	CString temp;
 	temp.Format(_T("%u"),Data);
-	return ::WritePrivateProfileString(AppName, KeyName, temp, IniFileName);
+	return staging ? ::WritePrivateProfileString(AppName, KeyName, temp, IniFileName) : ConfigStorage::WriteValue(AppName, KeyName, temp, IniFileName);
 }
 
 BOOL CIniFile::DeleteKeyName(LPCTSTR lpszAppName, LPCTSTR lpszKeyName)
 {
-	return ::WritePrivateProfileString(lpszAppName, lpszKeyName, NULL, IniFileName);
+	return staging ? ::WritePrivateProfileString(lpszAppName, lpszKeyName, NULL, IniFileName) : ConfigStorage::WriteValue(lpszAppName, lpszKeyName, NULL, IniFileName);
 }

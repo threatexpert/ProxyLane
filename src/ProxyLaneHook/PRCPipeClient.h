@@ -2,6 +2,8 @@
 
 #include "structinfo.h"
 
+namespace BrowserQuicPolicy { struct Report; }
+
 class CPRCPipeClient
 {
 public:
@@ -16,7 +18,8 @@ public:
 	BOOL WritePipe(LPCVOID lpBuf, int size);
 	BOOL ReadPipe(LPVOID lpBuf, int size);
 
-	BOOL GetPRCStartupInfo(LPPRCINFO lpStartupInfo);
+	BOOL GetPRCStartupInfo(LPPRCINFO lpStartupInfo, bool* quicPolicy = NULL, AppLauncherHostInfo* launcher = NULL);
+	BOOL PRCReportQuicStatus(const BrowserQuicPolicy::Report& report);
 
 	BOOL PRCRegisterClient(LPPRCClient lpClientInfo);
 
@@ -27,7 +30,7 @@ public:
 	BOOL PRCGetProxySettingsInfo(LPProxySettingsInfo lpPSI);
 	BOOL PRCGetProxyInfo(LPPRCClient lpClientInfo, LPProxyInfo lpPI);
 
-	BOOL PRCShouldInjectNewProcess(LPHookNewProcessInfo lphnpi);
+	BOOL PRCShouldInjectNewProcess(LPHookNewProcessInfo lphnpi, bool recordOnly = false);
 	BOOL PRCNotifyChildInjectionResult(LPHookNewProcessInfo lphnpi, BOOL succeeded);
 	BOOL PRCNotifyChildReleased(LPHookNewProcessInfo lphnpi);
 	BOOL PRCRegisterProcessIdentity(LPHookProcessIdentityInfo identity);
@@ -37,6 +40,7 @@ public:
 	BOOL PRCNotifyHookWSockResult(DWORD err, ULONGLONG processCreateTime);
 	BOOL PRCLogtext(LPCWSTR lpsz);
 	BOOL PRCLogBlockedIPv6(const HookBlockedIPv6Info& info);
+	BOOL PRCLogBlockedUDP(const HookBlockedUdpInfo& info);
 
 private:
 

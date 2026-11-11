@@ -1,6 +1,7 @@
 """Full PRC/Hook end-to-end test using a real gonc encrypted server."""
 
 import argparse
+import ctypes
 import os
 import shutil
 import socket
@@ -83,6 +84,11 @@ def udp_echo(sock, observation):
 
 
 def main():
+    # Detach only this test controller before it creates local server sockets.
+    kernel=ctypes.WinDLL('kernel32');kernel.GetModuleHandleW.argtypes=[ctypes.c_wchar_p];kernel.GetModuleHandleW.restype=ctypes.c_void_p
+    module=kernel.GetModuleHandleW('ProxyLaneHook64.dll')
+    if module:
+        assert ctypes.WinDLL('ProxyLaneHook64.dll',handle=module).gp_UnhookWinsock()
     parser = argparse.ArgumentParser()
     parser.add_argument("--bin", required=True)
     parser.add_argument("--gonc", required=True)
@@ -124,7 +130,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="ProxyLaneSecureE2E-",
                                      ignore_cleanup_errors=True) as temp:
         for name in (executable, "ProxyLaneHook32.dll", "ProxyLaneHook64.dll",
-                     "ProxyLaneSecureTransport32.dll", "ProxyLaneSecureTransport64.dll"):
+                     "ProxyLaneSecureTransport64.dll"):
             shutil.copy2(os.path.join(args.bin, name), os.path.join(temp, name))
         ini = f"""[options]
 lastselected=SecureTest
@@ -152,6 +158,8 @@ Pass=
 Transport={'PLAIN' if args.plain else 'GONC_TLS_PSK'}
 PSK={' ' if args.plain else '123'}
 """
+        with open(os.path.join(temp, "portable.flag"), "a"):
+            pass
         with open(os.path.join(temp, "ProxyLane.ini"), "w", encoding="utf-8") as profile:
             profile.write(ini)
         result_path = os.path.join(temp, "client-result.txt")

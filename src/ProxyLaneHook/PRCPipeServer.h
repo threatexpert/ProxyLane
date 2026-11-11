@@ -3,6 +3,8 @@
 #include "TSSTL.h"
 #include "PRCXServer.h"
 #include "structinfo.h"
+#include <map>
+#include <string>
 
 
 class CPRCPipeServer
@@ -39,6 +41,16 @@ public:
 
 
 private:
+	struct LaunchRecord { AppLauncherRequest request; AppLauncherResult result; };
+	struct LaunchHistory {
+		CRITICAL_SECTION lock;
+		std::map<std::wstring, LaunchRecord> requests;
+		LaunchHistory() { InitializeCriticalSection(&lock); }
+		~LaunchHistory() { DeleteCriticalSection(&lock); }
+	};
+	static LaunchHistory& GetLaunchHistory();
+	CRITICAL_SECTION m_launchExecutionLock;
+	AppLauncherResult HandleAppLaunch(const AppLauncherRequest& request, DWORD clientPid);
 
 	HANDLE m_hNoThreadEvent;
 	LONG m_dwThreadCount;

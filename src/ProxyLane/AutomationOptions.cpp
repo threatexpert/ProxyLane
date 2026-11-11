@@ -3,6 +3,80 @@
 
 #include <shellapi.h>
 
+// argumentIndex 是系统解析结果中真正的 "--" 的下标，不是字符位置。
+// 在空白处尝试截取前缀，由 CommandLineToArgvW 验证边界；不自行解释
+// 引号或反斜杠。成功返回原文中应用参数的起点，失败返回 NULL。
+static LPCWSTR RawTailAfterArgument(LPCWSTR commandLine, int argumentIndex)
+{
+	if (!commandLine || argumentIndex < 1) return NULL;
+	int argc = 0;
+	LPWSTR* argv = CommandLineToArgvW(commandLine, &argc);
+	if (!argv) return NULL;
+	if (argumentIndex >= argc || wcscmp(argv[argumentIndex], L"--") != 0)
+	{
+		LocalFree(argv);
+		return NULL;
+	}
+
+	const WCHAR marker[] = L"PL_RAW_TAIL_MARKER";
+	const int length = lstrlenW(commandLine);
+	for (int offset = 0; offset <= length; ++offset)
+	{
+		// 只枚举候选边界，不判断空白是否在引号内；连续空白仅检查一次。
+		if (offset < length && commandLine[offset] != L' ' && commandLine[offset] != L'\t') continue;
+		if (offset > 0 && (commandLine[offset - 1] == L' ' || commandLine[offset - 1] == L'\t')) continue;
+		CString probe(commandLine, offset);
+		probe += L" ";
+		probe += marker;
+		int probeArgc = 0;
+		LPWSTR* probeArgv = CommandLineToArgvW(probe, &probeArgc);
+		if (!probeArgv)
+		{
+			LocalFree(argv);
+			return NULL;
+		}
+
+		// 必须恰好是原来的 argv[0..argumentIndex] 加一个独立 marker。
+		// 同时校验数量、每项内容和位置，因此 marker 不需要全局唯一。
+		bool matched = probeArgc == argumentIndex + 2;
+		if (matched)
+		{
+			for (int i = 0; i <= argumentIndex; ++i)
+			{
+				if (wcscmp(probeArgv[i], argv[i]) != 0) { matched = false; break; }
+			}
+		}
+		if (matched) matched = wcscmp(probeArgv[argumentIndex + 1], marker) == 0;
+		LocalFree(probeArgv);
+		if (matched)
+		{
+			LocalFree(argv);
+			LPCWSTR tail = commandLine + offset;
+			while (*tail == L' ' || *tail == L'\t') ++tail;
+			return tail; // 后面的文本不再拆分、去引号或重新转义。
+		}
+	}
+	LocalFree(argv);
+	return NULL;
+}
+
+BOOL ExpandLaunchEnvironment(const CString& source, CString& expanded)
+{
+	// One Windows expansion pass: unknown variables remain literal. Do not
+	// expand while saving/decoding links, so they remain portable across users.
+	DWORD required = ExpandEnvironmentStringsW(source, NULL, 0);
+	while (required && required <= 32767)
+	{
+		std::vector<WCHAR> buffer(required);
+		const DWORD written = ExpandEnvironmentStringsW(source, buffer.data(), required);
+		if (!written) return FALSE;
+		if (written <= required) { expanded = buffer.data(); return TRUE; }
+		required = written;
+	}
+	if (required) SetLastError(ERROR_FILENAME_EXCED_RANGE);
+	return FALSE;
+}
+
 static BOOL ReadOptionValue(
 	int& index,
 	int argc,
@@ -44,6 +118,11 @@ BOOL ParseAutomationOptions(
 	for (int i = 1; i < argc; ++i)
 	{
 		CString argument(argv[i]);
+		argument.MakeLower();
+		if (argument == _T("--")) break;
+		// Values are opaque; an application's argument may itself be "--help".
+		if (argument == L"--profile" || argument == L"--run" || argument == L"--arguments" ||
+			argument == L"--working-directory" || argument == L"--app-name" || argument == L"--bootstrap-event") { ++i; continue; }
 		if (argument.CompareNoCase(_T("/?")) == 0 ||
 			argument.CompareNoCase(_T("-?")) == 0 ||
 			argument.CompareNoCase(_T("--help")) == 0)
@@ -57,21 +136,27 @@ BOOL ParseAutomationOptions(
 	BOOL seenProfile = FALSE;
 	BOOL seenRun = FALSE;
 	BOOL seenBootstrapEvent = FALSE;
-	BOOL targetArguments = FALSE;
+	BOOL seenArguments = FALSE, seenDirectory = FALSE, seenName = FALSE;
 	CString unknownOption;
 
 	for (int i = 1; i < argc; ++i)
 	{
 		CString argument(argv[i]);
-		if (targetArguments)
-		{
-			options.targetArguments.push_back(argument);
-			continue;
-		}
+		argument.MakeLower();
 
 		if (argument == _T("--"))
 		{
-			targetArguments = TRUE;
+			LPCWSTR rawTail = RawTailAfterArgument(commandLine, i);
+			if (!rawTail)
+			{
+				errorMessage = L"Cannot locate the application argument boundary";
+				LocalFree(argv);
+				return FALSE;
+			}
+			const CString tail(rawTail);
+			if (!options.initialArguments.IsEmpty() && !tail.IsEmpty()) options.initialArguments += L" ";
+			options.initialArguments += tail;
+			break;
 		}
 		else if (argument.CompareNoCase(_T("--auto")) == 0)
 		{
@@ -108,6 +193,24 @@ BOOL ParseAutomationOptions(
 				return FALSE;
 			}
 			seenRun = TRUE;
+		}
+		else if (argument == L"--elevated" || argument == L"--packaged" || argument == L"--shortcut")
+		{
+			BOOL& flag = argument == L"--elevated" ? options.elevated :
+				(argument == L"--packaged" ? options.packaged : options.shortcut);
+			if (flag) { errorMessage = L"Duplicate option: " + argument; LocalFree(argv); return FALSE; }
+			flag = TRUE;
+		}
+		else if (argument == L"--arguments" || argument == L"--working-directory" || argument == L"--app-name")
+		{
+			BOOL& seen = argument == L"--arguments" ? seenArguments : (argument == L"--app-name" ? seenName : seenDirectory);
+			CString& value = argument == L"--arguments" ? options.initialArguments : (argument == L"--app-name" ? options.applicationName : options.workingDirectory);
+			if (seen || !ReadOptionValue(i, argc, argv, value, errorMessage, argument))
+			{
+				if (seen) errorMessage = L"Duplicate option: " + argument;
+				LocalFree(argv); return FALSE;
+			}
+			seen = TRUE;
 		}
 		else if (argument.CompareNoCase(_T("--bootstrap-event")) == 0)
 		{
@@ -203,6 +306,11 @@ CString BuildAutomationCommandLine(
 	commandLine += QuoteCommandLineArgument(options.profileName);
 	commandLine += _T(" --run ");
 	commandLine += QuoteCommandLineArgument(options.targetPath);
+	if (!options.applicationName.IsEmpty()) commandLine += L" --app-name " + QuoteCommandLineArgument(options.applicationName);
+	if (!options.workingDirectory.IsEmpty()) commandLine += L" --working-directory " + QuoteCommandLineArgument(options.workingDirectory);
+	if (options.elevated) commandLine += L" --elevated";
+	if (options.packaged) commandLine += L" --packaged";
+	if (options.shortcut) commandLine += L" --shortcut";
 
 	if (bootstrapEventName && bootstrapEventName[0])
 	{
@@ -210,9 +318,10 @@ CString BuildAutomationCommandLine(
 		commandLine += QuoteCommandLineArgument(bootstrapEventName);
 	}
 
-	if (!options.targetArguments.empty())
+	if (!options.initialArguments.IsEmpty() || !options.targetArguments.empty())
 	{
 		commandLine += _T(" --");
+		if (!options.initialArguments.IsEmpty()) commandLine += L" " + options.initialArguments;
 		for (size_t i = 0; i < options.targetArguments.size(); ++i)
 		{
 			commandLine += _T(" ");

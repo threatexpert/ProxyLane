@@ -20,8 +20,8 @@ class CMainTab : public CWnd
 public:
 	enum PageIndex
 	{
-		PAGE_PROXY = 0,
-		PAGE_APPLICATIONS,
+		PAGE_APPLICATIONS = 0,
+		PAGE_PROXY,
 		PAGE_LOG,
 		PAGE_MONITOR,
 		PAGE_ABOUT,
@@ -37,7 +37,9 @@ public:
 	void SelectPage(int pageIndex);
 	void SetPageAttention(int pageIndex, BOOL attention);
 	void ShowTransientStatus(LPCTSTR text, CStatusLabel::Tone tone);
+	void HideTransientStatus();
 	void SetRunningProfile(LPCTSTR profileName, BOOL running);
+	void RefreshSidebarStatus();
 	BOOL IsProxyRunning() const { return m_proxyRunning; }
 	CString GetRunningProfileName() const { return m_runningProfileName; }
 	CString GetRunningRecentProfileId() const { return m_runningRecentProfileId; }
@@ -73,9 +75,9 @@ protected:
 	CDialog* m_pages[PAGE_COUNT];
 	CFont m_navigationFont;
 	CFont m_brandFont;
+	HICON m_brandIcon;
 	CStatusLabel m_sidebarStatus;
 	CStatusLabel m_transientStatus;
-	CToolTipCtrl m_sidebarTooltip;
 
 	afx_msg void OnPaint();
 	afx_msg BOOL OnEraseBkgnd(CDC* dc);

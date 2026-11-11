@@ -64,6 +64,7 @@ to tim.kosse@gmx.de
 
 */
 #pragma once
+#include "../ProxyTestProgress.h"
 #include "AsyncSocketEx.h"	// Hinzugef�gt von der Klassenansicht
 #include "..\structinfo.h"
 
@@ -76,6 +77,7 @@ class CAsyncSocketExLayer
 {
 	friend CAsyncSocketEx;
 	friend CAsyncSocketExHelperWindow;
+	friend class CAsyncSshSocketLayer;
 protected:
 	//Protected constructor so that CAsyncSocketExLayer can't be instantiated
 	CAsyncSocketExLayer();
@@ -240,9 +242,6 @@ private:
 
 public:
 
-	DWORD m_connMainFlag;
-	DWORD m_connSubFlag;
-
 	__connect m_pReal_connect;
 	__gethostbyname m_pReal_gethostbyname;
 	__WSAAsyncGetHostByName m_pReal_WSAAsyncGetHostByName;
@@ -251,6 +250,10 @@ public:
 	__WSASendTo m_pReal_WSASendTo;
 	__WSARecvFrom m_pReal_WSARecvFrom;
 
-	void SetConnectionFlag(DWORD main, DWORD sub);
 	void BypassHook(BOOL bBypass);
+	void EnableTestProgress(bool enabled) { m_testProgress = enabled; }
+	void ReportTestProgress(int stage, int hop = -1, DWORD tick = GetTickCount())
+	{ if (m_testProgress) DoLayerCallback(LAYERCALLBACK_TESTPROGRESS, stage, (WPARAM)hop, (LPARAM)tick); }
+private:
+	bool m_testProgress = false;
 };

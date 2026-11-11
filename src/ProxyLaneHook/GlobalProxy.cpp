@@ -10,6 +10,22 @@
 #include "ProxySettings.h"
 #include "ProxyLog.h"
 #include "ProxyTesterMgr.h"
+#include "MitmControl.h"
+#include "ProxyMonitor.h"
+#include "ProcessRegistry.h"
+#include "SshSessionManager.h"
+#include "DohResolver.h"
+
+// The GUI keeps this DLL loaded until process exit. Service stop/start only
+// recreates CGlobalProxy/PRC; all readers and writers retain this one registry.
+IProxyProcessRegistry* CGlobalProxy::GetProcessRegistry()
+{
+	static CProcessRegistry registry;
+	return &registry;
+}
+
+IProxyTlsControl* CGlobalProxy::GetTlsControl() { return &CMitmControl::Instance(); }
+IProxyMonitor* CGlobalProxy::GetMonitorInstance() { return &CProxyMonitor::Instance(); }
 
 CGlobalProxy::CGlobalProxy(void)
 {
@@ -31,9 +47,15 @@ CGlobalProxy::CGlobalProxy(void)
 
 CGlobalProxy::~CGlobalProxy(void)
 {
+	// GUI exits call DisableProxy first; release any remaining idle service.
+	CMitmControl::Instance().ShutdownProtocol();
 	delete m_pProxyLog;
 	delete m_pProxySettings;
 	delete m_pProxyTesterMgr;
+	// Tester queries/cache live on this caller's event thread, separately
+	// from the business cache cleared when the PRC thread exits.
+	CDohQuery::ClearCache();
+	SshSessionManager::ShutdownCurrentThread();
 
 	WSACleanup();
 }
@@ -105,6 +127,7 @@ BOOL CGlobalProxy::DisableProxy()
 	delete m_pProxyRC;
 	m_pProxyRC = NULL;
 	m_bProxyEnaled = FALSE;
+	CMitmControl::Instance().ShutdownProtocol();
 
 	return TRUE;
 }

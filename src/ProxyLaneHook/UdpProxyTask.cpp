@@ -10,6 +10,10 @@
 #include "ProxyLog.h"
 #include "UdpAssociationPolicy.h"
 #include "ProxyReceptionCentre.h"
+#include "MitmBridge.h"
+#include "QuicBridge.h"
+#include "DohPolicy.h"
+#include "GlobalProxy.h"
 
 static const DWORD UDP_ASSOCIATION_IDLE_TIMEOUT = 5 * 60 * 1000;
 
@@ -30,6 +34,7 @@ static UdpAssociationPolicy::Destination GetUdpDestination(PRCClient &client)
 CUdpProxyTask::CUdpProxyTask(CProxyUDPTaskMgr *pTaskmgr)
 {
 	m_pTaskmgr = pTaskmgr;
+    m_dohWake = std::make_shared<CDohWakeup>(GetHwnd(), [this] { m_dohNoticeFailed = true; });
 
 	m_pServer = NULL;
 	m_pendingBytes = 0;
@@ -71,6 +76,15 @@ BOOL CUdpProxyTask::SetTaskInfo(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo
 	{
 		m_PRCClient = *lpPRCClient;
 		m_ProxyInfo = *lpProxyInfo;
+        if (DohPolicy::Intercept(m_PRCClient, m_ProxyInfo)) {
+            IProxySettings* settings = m_pTaskmgr->m_pPRC->m_pGlobalProxy->GetSettingsInstance();
+            for (;;) {
+                const int count = settings->GetProxyChain(&m_PRCClient, m_dnsChain.empty() ? NULL : m_dnsChain.data(), (int)m_dnsChain.size());
+                if (count < 2) { m_dnsChain.clear(); break; }
+                const bool copied = count <= (int)m_dnsChain.size(); m_dnsChain.resize(count);
+                if (copied) break;
+            }
+        }
 		if (!AddRoute(lpPRCClient))
 			break;
 		// A connected UDP socket may never send a datagram (Go uses such
@@ -142,7 +156,10 @@ BOOL CUdpProxyTask::AddRoute(LPPRCClient lpPRCClient)
 			if (it->peer && it->peer->GetSocketHandle() != INVALID_SOCKET)
 			{
 				_SockAddr routeAddress = it->client.udpAddr;
+				const _SockAddr resolved = it->client.proxyDstAddr;
+				const DWORD resolvedFlag = it->client.routingFlags & PRC_CLIENT_FLAG_DOH_RESOLVED;
 				it->client = *lpPRCClient;
+				if (resolvedFlag) { it->client.proxyDstAddr = resolved; it->client.routingFlags |= resolvedFlag; }
 				it->client.udpAddr = routeAddress;
 				lpPRCClient->udpAddr = routeAddress;
 				ATLTRACE(_T("UDP route reused: PID %d, socket %Iu, route %s:%d.\r\n"),
@@ -225,6 +242,8 @@ BOOL CUdpProxyTask::HasRoute(const LPPRCClient lpPRCClient)
 
 BOOL CUdpProxyTask::CanAcceptRoute(const LPPRCClient lpPRCClient)
 {
+	// Keep resolved aliases on separate associations so reply identity is exact.
+	if (m_ProxyInfo.dohEnabled) return FALSE;
 	if (!lpPRCClient)
 		return FALSE;
 	UdpAssociationPolicy::Destination requested = GetUdpDestination(*lpPRCClient);
@@ -255,6 +274,10 @@ BOOL CUdpProxyTask::MatchesAssociation(const LPPRCClient lpPRCClient,
 		m_ProxyInfo.GetProxyType() == lpProxyInfo->GetProxyType() &&
 		m_ProxyInfo.nProxyPort == lpProxyInfo->nProxyPort &&
 		m_ProxyInfo.reserved == lpProxyInfo->reserved &&
+        m_ProxyInfo.dohEnabled == lpProxyInfo->dohEnabled &&
+        m_ProxyInfo.dohBlockIPv6 == lpProxyInfo->dohBlockIPv6 &&
+        strcmp(m_ProxyInfo.dohUrl.szbuf, lpProxyInfo->dohUrl.szbuf) == 0 &&
+        strcmp(m_ProxyInfo.dohBootstrap.szbuf, lpProxyInfo->dohBootstrap.szbuf) == 0 &&
 		strcmp(m_ProxyInfo.strTransportPsk.szbuf,
 			lpProxyInfo->strTransportPsk.szbuf) == 0 &&
 		_stricmp(m_ProxyInfo.strProxyHost.szbuf, lpProxyInfo->strProxyHost.szbuf) == 0;
@@ -301,7 +324,7 @@ VOID CUdpProxyTask::OnServerReady(CPRCUdpPeer *pPeer)
 	m_pTaskmgr->ReportUdpAssociationReady(&m_ProxyInfo);
 	m_serverReconnectDelay = 250;
 	m_lastServerError = 0;
-	PrintText(_T("UDP SOCKS5 association ready; local route %d.\r\n"),
+	ATLTRACE(_T("UDP SOCKS5 association ready; local route %d.\r\n"),
 		m_LocalProxyUdpPort);
 	OnServerWritable();
 }
@@ -412,15 +435,53 @@ VOID CUdpProxyTask::OnServerWritable()
 		}
 		m_pendingBytes -= (DWORD)packet.data.size();
 		m_pending.pop_front();
-		m_pTaskmgr->m_pPRC->RecordTraffic(m_ProxyInfo, false, sent);
+		m_pTaskmgr->m_pPRC->RecordTraffic(false, sent);
 	}
 
-	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
-	{
-		if (it->peer && it->peer->GetValidDataLen() > 0)
-			it->peer->TransferSend();
-	}
+	// ForwardClientDatagram owns each packet, including the first direct
+	// packet queued during synchronous activation. The peer's receive buffer
+	// is still populated on that call stack; resending it duplicates traffic.
 	FlushPendingReplies();
+    // Wake asynchronously: direct activation can call us from inside PumpQuic,
+    // before its current datagram is consumed. Never reenter that drain.
+    for(auto& route:m_routes) if(route.quic && route.peer)route.peer->TriggerEvent(FD_WRITE);
+}
+
+void CUdpProxyTask::OnMessage(UINT message, WPARAM low, LPARAM high, BOOL& handled) {
+    if (!m_dohWake->Accept(message, low, high)) return;
+    handled = TRUE;
+    if (m_upstreamState == UdpAssociationPolicy::UPSTREAM_CLOSING) return;
+    for (auto& route : m_routes) {
+        for (auto it = route.dnsRequests.begin(); it != route.dnsRequests.end();) {
+            std::vector<unsigned char> reply;
+            if (!it->TryBuildReply(true, reply)) { ++it; continue; }
+            if (route.capture) route.capture->Data(1, reply.data(), reply.size());
+            DeliverServerDatagram(route, (const char*)reply.data(), (int)reply.size());
+            it = route.dnsRequests.erase(it);
+        }
+    }
+    for (auto& route : m_routes) {
+        if (!route.doh || !route.doh->Done()) continue;
+        route.doh->LogAddressResult(route.client, route.dohLog);
+        if (!route.doh->Succeeded()) {
+            route.doh.reset(); CloseTask("DoH resolution failed"); return;
+        }
+        route.client.proxyDstAddr = route.doh->Addresses().front();
+        route.client.proxyDstAddr.SetPort(route.client.dstAddr.GetPort());
+        route.client.routingFlags |= PRC_CLIENT_FLAG_DOH_RESOLVED;
+        route.doh.reset();
+        CPRCUdpPeer::_CSAddrInfo target = {};
+        target.srcAddr = route.client.srcAddr;
+        target.dstAddr = route.client.proxyDstAddr;
+        route.peer->SetAddrInfo(&target);
+        LogDohTargetSelection(m_pTaskmgr->m_pPRC, &route.client);
+        auto pending = std::move(route.dohPending); route.dohPendingBytes = 0;
+        for (auto& bytes : pending) {
+            if (m_upstreamState == UdpAssociationPolicy::UPSTREAM_CLOSING) return;
+            ForwardClientDatagram(route.peer, target, route.applicationEndpoint,
+                bytes.empty() ? "" : bytes.data(), (int)bytes.size());
+        }
+    }
 }
 
 VOID CUdpProxyTask::OnMaintenanceTimer()
@@ -428,6 +489,7 @@ VOID CUdpProxyTask::OnMaintenanceTimer()
 	if (m_upstreamState == UdpAssociationPolicy::UPSTREAM_CLOSING)
 		return;
 	const DWORD now = GetTickCount();
+    if (m_dohNoticeFailed) { CloseTask("DoH completion notification failed"); return; }
 	ExpirePendingDatagrams(now);
 	FlushPendingReplies();
 
@@ -533,6 +595,25 @@ VOID CUdpProxyTask::WakeServerAssociation()
 VOID CUdpProxyTask::OnRouteWritable(CPRCUdpPeer *routePeer)
 {
 	FlushPendingReplies(routePeer);
+    for(auto& route:m_routes) if(route.peer==routePeer && route.quic) PumpQuic(route);
+}
+void CUdpProxyTask::PumpQuic(UdpRoute& route) {
+    char data[65536];
+    for(unsigned side=0;side<2;++side) for(unsigned n=0;n<64;++n) {
+        int length=route.quic->Peek(side,data,sizeof(data));if(length<=0)break;
+        BOOL ok=side ? ForwardUpstreamDatagram(route.quicTarget,data,length) : DeliverServerDatagram(route,data,length);
+        if(!ok)break;
+        if(route.quic->Passthrough() && CProtocolTap::Enabled()) {
+            if(!route.capture)route.capture=std::make_shared<CProtocolTap>(route.client,true);
+            route.capture->Data(0,data,length);
+        }
+        route.quic->Consume(side);m_lastActivity=GetTickCount();
+        if(n==63)route.peer->TriggerEvent(FD_WRITE);
+    }
+    if(route.quic->Drained()) {
+        route.quicRetired = route.quic->WasMitm();
+        route.quic.reset();
+    }
 }
 
 BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer *routePeer,
@@ -547,18 +628,85 @@ BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer *routePeer,
 	{
 		if (it->peer == routePeer)
 		{
+            // The listener is loopback-only. An application explicitly bound
+            // to a local NIC can retain that source IP when sending to it.
+            if (DohPolicy::Intercept(it->client, m_ProxyInfo) &&
+                application.GetPort() != it->client.srcAddr.GetPort()) {
+                if (!it->firstDatagramLogged) {
+                    LogDnsRelayRoute(&it->client, "rejected datagram: application source port differs from registered socket");
+                    it->firstDatagramLogged = TRUE;
+                }
+                return FALSE;
+            }
 			it->applicationEndpoint = application;
 			it->hasApplicationEndpoint = TRUE;
+            if (DohPolicy::Intercept(it->client, m_ProxyInfo)) {
+                if (CProtocolTap::Enabled() && !it->capture) it->capture = std::make_shared<CProtocolTap>(it->client, true);
+                if (it->capture) it->capture->Data(0, data, length);
+                m_pTaskmgr->m_pPRC->RecordTraffic(false, length);
+                if (it->dnsRequests.size() >= 32) {
+                    LogDnsRelayRoute(&it->client, "DNS request queue full");
+                    return FALSE;
+                }
+                CDnsDohRequest request;
+                if (!request.Begin(it->client, m_ProxyInfo, m_dnsChain.empty() ? NULL : &m_dnsChain, data, length)) return FALSE;
+                it->dnsRequests.push_back(std::move(request));
+                if (!it->dnsRequests.back().NotifyWhenReady(m_dohWake)) {
+                    CloseTask("DoH completion notification failed"); return FALSE;
+                }
+                return TRUE;
+            }
+            if (DohPolicy::Needed(it->client, m_ProxyInfo)) {
+                if (!(it->client.routingFlags & PRC_CLIENT_FLAG_DOH_RESOLVED)) {
+                    if (!it->doh) {
+                        it->doh = CDohQuery::Resolve(it->client, m_ProxyInfo, NULL, false, &it->dohLog);
+                        if (!it->doh->NotifyWhenReady(m_dohWake)) {
+                            CloseTask("DoH completion notification failed"); return FALSE;
+                        }
+                    }
+                    if (it->dohPending.size() >= 64 || it->dohPendingBytes + length > 65536) {
+                        CloseTask("DoH pending UDP queue limit exceeded"); return FALSE;
+                    }
+                    it->dohPending.emplace_back(data, data + length);
+                    it->dohPendingBytes += length;
+                    return TRUE;
+                }
+                target.dstAddr = it->client.proxyDstAddr;
+                target.szDomainName[0] = 0;
+            }
+            if(it->quic) PumpQuic(*it);
+            if(it->quicRetired) {
+                // Late packets belong to retired MITM keys, never forward them
+                // to the origin. A fresh v1/v2 Initial can reuse this route
+                // (v2 is currently admitted as ordinary passthrough).
+                const unsigned char* p=(const unsigned char*)data;
+                if(length<1200)return TRUE;
+                bool v1=(p[0]&0xf0)==0xc0 && !p[1] && !p[2] && !p[3] && p[4]==1;
+                bool v2=(p[0]&0xf0)==0xd0 && p[1]==0x6b && p[2]==0x33 && p[3]==0x43 && p[4]==0xcf;
+                if(!v1 && !v2)return TRUE;
+                it->quicRetired=false;
+                it->firstDatagramLogged=FALSE;
+            }
+            if(it->quic) {bool retained=it->quic->Feed(0,data,length);PumpQuic(*it);return retained?TRUE:ForwardUpstreamDatagram(target,data,length);}
 			if (!it->firstDatagramLogged)
 			{
 				it->firstDatagramLogged = TRUE;
 				LogUdpFirstDatagram(m_pTaskmgr->m_pPRC, &it->client,
 					&m_ProxyInfo);
+                it->quicTarget=target;
+                it->quic=CQuicBridge::Open(this,routePeer,it->client,data,length);
+                if(it->quic) {PumpQuic(*it);return TRUE;}
 			}
+            if (!CProtocolTap::Enabled()) it->capture.reset();
+            else if (!it->capture) it->capture = std::make_shared<CProtocolTap>(it->client, true);
+            if (it->capture) it->capture->Data(0, data, length);
 			break;
 		}
 	}
 
+    return ForwardUpstreamDatagram(target,data,length);
+}
+BOOL CUdpProxyTask::ForwardUpstreamDatagram(CPRCUdpPeer::_CSAddrInfo target,const char* data,int length) {
 	if (UdpAssociationPolicy::ShouldActivateUpstream(m_upstreamState))
 	{
 		BOOL queued = QueueDatagram(target, data, length);
@@ -583,7 +731,7 @@ BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer *routePeer,
 		}
 		if (sent != SOCKET_ERROR)
 		{
-			m_pTaskmgr->m_pPRC->RecordTraffic(m_ProxyInfo, false, sent);
+			m_pTaskmgr->m_pPRC->RecordTraffic(false, sent);
 			return TRUE;
 		}
 		if (WSAGetLastError() != WSAEWOULDBLOCK)
@@ -608,7 +756,7 @@ BOOL CUdpProxyTask::ForwardServerDatagram(_SockAddr source,
 		if (!it->peer || it->peer->GetSocketHandle() == INVALID_SOCKET ||
 			effectiveDestination.GetPort() != source.GetPort())
 			continue;
-		if (!it->client.IsDNValid() &&
+		if ((!it->client.IsDNValid() || (it->client.routingFlags & PRC_CLIENT_FLAG_DOH_RESOLVED)) &&
 			effectiveDestination.SameAddress(source))
 		{
 			selected = &*it;
@@ -616,7 +764,7 @@ BOOL CUdpProxyTask::ForwardServerDatagram(_SockAddr source,
 		}
 		// Domain replies normally carry their resolved IPv4 address. The
 		// destination port remains a stable discriminator.
-		if (it->client.IsDNValid())
+		if (it->client.IsDNValid() && !(it->client.routingFlags & PRC_CLIENT_FLAG_DOH_RESOLVED))
 		{
 			domainCandidate = &*it;
 			++domainCandidateCount;
@@ -624,14 +772,22 @@ BOOL CUdpProxyTask::ForwardServerDatagram(_SockAddr source,
 	}
 	if (!selected && domainCandidateCount == 1)
 		selected = domainCandidate;
-	if (!selected && domainCandidateCount == 0 && m_routes.size() == 1 &&
+	if (!selected && !m_ProxyInfo.dohEnabled && domainCandidateCount == 0 && m_routes.size() == 1 &&
 		m_routes.front().peer &&
 		m_routes.front().peer->GetSocketHandle() != INVALID_SOCKET)
 		selected = &m_routes.front();
 	if (!selected)
 		return FALSE;
 	m_lastActivity = GetTickCount();
+	if(selected->quic) {selected->quic->Feed(1,data,length);PumpQuic(*selected);return TRUE;}
+    if(selected->quicRetired)return TRUE;
 
+	if (!CProtocolTap::Enabled()) selected->capture.reset();
+	if (selected->capture) selected->capture->Data(1, data, length);
+    return DeliverServerDatagram(*selected,data,length);
+}
+BOOL CUdpProxyTask::DeliverServerDatagram(UdpRoute& route,const char* data,int length) {
+    UdpRoute* selected=&route;
 	_SockAddr application = selected->hasApplicationEndpoint ?
 		selected->applicationEndpoint : selected->client.srcAddr;
 	if (application.IsAny())
@@ -640,7 +796,7 @@ BOOL CUdpProxyTask::ForwardServerDatagram(_SockAddr source,
 		application.Size());
 	if (sent == length)
 	{
-		m_pTaskmgr->m_pPRC->RecordTraffic(m_ProxyInfo, true, sent);
+		m_pTaskmgr->m_pPRC->RecordTraffic(true, sent);
 		return TRUE;
 	}
 	return QueueReply(selected->peer, application, data, length);
@@ -700,7 +856,7 @@ VOID CUdpProxyTask::FlushPendingReplies(CPRCUdpPeer *routePeer)
 		}
 		m_pendingReplyBytes -= (DWORD)it->data.size();
 		it = m_pendingReplies.erase(it);
-		m_pTaskmgr->m_pPRC->RecordTraffic(m_ProxyInfo, true, sent);
+		m_pTaskmgr->m_pPRC->RecordTraffic(true, sent);
 	}
 }
 
@@ -729,9 +885,11 @@ BOOL CUdpProxyTask::QueueDatagram(CPRCUdpPeer::_CSAddrInfo target,
 
 VOID CUdpProxyTask::EndTask()
 {
+    m_dohWake->Cancel();
 	m_upstreamState = UdpAssociationPolicy::UPSTREAM_CLOSING;
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
 	{
+		it->capture.reset();
 		if (it->peer)
 		{
 			it->peer->Close();
@@ -752,14 +910,20 @@ VOID CUdpProxyTask::EndTask()
 	}
 }
 
-VOID CUdpProxyTask::CloseTask()
+VOID CUdpProxyTask::CloseTask(const char* reason)
 {
+    m_dohWake->Cancel();
 	m_upstreamState = UdpAssociationPolicy::UPSTREAM_CLOSING;
 	m_pendingReplies.clear();
 	m_pendingReplyBytes = 0;
 	for (UdpRouteList::iterator it = m_routes.begin(); it != m_routes.end(); ++it)
-		if (it->peer)
-			it->peer->Close();
+	{
+        it->doh.reset(); it->dohPending.clear(); it->dohPendingBytes = 0;
+        it->dnsRequests.clear();
+		if(it->capture) it->capture->CloseReason(reason);
+		it->capture.reset();
+		if (it->peer) it->peer->Close();
+	}
 	if(m_pServer)
 	{
 		m_pServer->Close();

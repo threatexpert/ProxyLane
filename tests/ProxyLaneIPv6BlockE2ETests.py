@@ -89,6 +89,8 @@ Pass=
 Transport=PLAIN
 PSK=
 """
+        with open(os.path.join(temp, "portable.flag"), "a"):
+            pass
         with open(os.path.join(temp, "ProxyLane.ini"), "w",
                   encoding="utf-8") as profile:
             profile.write(profile_text)

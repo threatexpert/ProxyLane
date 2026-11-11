@@ -120,6 +120,16 @@ static void TestConcurrentProducersDuringUiStall()
 
 int main()
 {
+	{
+		CBoundedLogQueue<int> queue(2, 1);
+		queue.Push(1); queue.Push(2); queue.Push(3);
+		queue.Clear();
+		assert(queue.Size() == 0);
+		assert(queue.Push(4));
+		auto batch = queue.TakeBatch();
+		assert(batch.entries.size() == 1 && batch.entries.front() == 4);
+		assert(batch.dropped == 0 && !batch.hasMore);
+	}
 	TestSingleNotificationAndResetAfterDrain();
 	TestDropOldestAndDrainInFifoBatches();
 	TestPostFailureAllowsAnotherNotification();

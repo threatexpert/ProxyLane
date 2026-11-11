@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <string.h>
 #include "DnsRedirectPolicy.h"
+#include "DohPolicy.h"
 
 static _SockAddr Address(const char *text, WORD port = 53)
 {
@@ -32,6 +33,35 @@ static ProxySettingsInfo RemoteSettings()
 
 int main()
 {
+    for (const char* ip : {"192.168.1.1", "8.8.8.8", "fd00::53", "2001:4860:4860::8888"}) {
+        assert(DohPolicy::DnsDestination(Address(ip)));
+        assert(!DohPolicy::DnsDestination(Address(ip, 853)));
+    }
+    for (const char* ip : {"127.0.0.1", "::1", "0.0.0.0", "::", "224.0.0.251", "ff02::fb"})
+        assert(!DohPolicy::DnsDestination(Address(ip)));
+    PRCClient dnsClient = {}; dnsClient.dstAddr = Address("8.8.8.8");
+    ProxyInfo dnsProxy = Socks5Proxy();
+    assert(!DohPolicy::Intercept(dnsClient, dnsProxy));
+    dnsProxy.dohEnabled = 1;
+    assert(DohPolicy::Intercept(dnsClient, dnsProxy));
+    dnsClient.dstAddr = Address("127.255.0.1"); strcpy_s(dnsClient.szDomainName, "resolver.example");
+    assert(DohPolicy::Intercept(dnsClient, dnsProxy));
+    dnsProxy.strProxyType = TEXT("NOPROXY");
+    assert(!DohPolicy::Intercept(dnsClient, dnsProxy));
+    std::vector<_SockAddr> bootstrap;
+    assert(DohPolicy::Parse("https://resolver.example:8443/dns-query", "1.1.1.1, 2001:4860:4860::8888", false, bootstrap));
+    assert(bootstrap.size() == 2 && bootstrap[0].GetPort() == 8443 && bootstrap[1].IsIPv6());
+    assert(!DohPolicy::Parse("http://resolver.example/dns-query", "1.1.1.1", false, bootstrap));
+    assert(!DohPolicy::Parse("https://resolver.example/dns-query", "", false, bootstrap));
+    assert(!DohPolicy::Parse("https://resolver.example/dns-query", "resolver.example", false, bootstrap));
+    assert(!DohPolicy::Parse("https://user:pass@resolver.example/dns-query", "1.1.1.1", false, bootstrap));
+    assert(!DohPolicy::Parse("https://resolver.example:65536/dns-query", "1.1.1.1", false, bootstrap));
+    assert(!DohPolicy::Parse("https://resolver.example/dns-query#fragment", "1.1.1.1", false, bootstrap));
+    assert(!DohPolicy::Parse("https://resolver.example/dns-query", "::1", true, bootstrap));
+    assert(!DohPolicy::Parse("https://resolver.example/dns-query", "0.0.0.0", false, bootstrap));
+    assert(!DohPolicy::Parse("https://resolver.example/dns-query", "224.0.0.1", false, bootstrap));
+    assert(!DohPolicy::Parse("https://resolver.example/dns-query", "::ffff:1.1.1.1", false, bootstrap));
+
 	assert(DnsRedirectPolicy::IsPrivateDnsAddress(Address("10.1.2.3")));
 	assert(DnsRedirectPolicy::IsPrivateDnsAddress(Address("172.16.0.1")));
 	assert(DnsRedirectPolicy::IsPrivateDnsAddress(Address("172.31.255.254")));

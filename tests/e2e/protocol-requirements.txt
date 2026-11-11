@@ -1,0 +1,6 @@
+# Independent test oracle only; not runtime dependencies of ProxyLane.
+h2==4.1.0
+hpack==4.0.0
+hyperframe==6.0.1
+brotli==1.1.0
+zstandard==0.22.0

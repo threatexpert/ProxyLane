@@ -1,0 +1,14 @@
+Source: crates.io h3-quinn 0.0.10, https://github.com/hyperium/h3
+License: MIT; original LICENSE retained.
+
+ProxyLane local patch:
+RecvStream keeps ownership of quinn::RecvStream while poll_data is Pending.
+Poll a stack-pinned, borrowing read_chunk future (Quinn documents this operation
+as cancel-safe), instead of moving the stream into a stored owning future.
+This preserves zero-copy reads and makes stop_sending/recv_id safe when h3
+cancels a pending read. Upstream 0.0.10 unwrapped None in this situation,
+panicking and closing unrelated HTTP/3 streams on the same connection.
+
+Regression: tests/e2e/quic_analysis_isolation.py exercises partial upload
+cancellation followed by a successful request on the same connection, plus
+concurrent transfers and stopping monitoring during a large response.

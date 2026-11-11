@@ -5,8 +5,16 @@
 
 
 #pragma once
+#include "ProxyTestProgress.h"
 
 #include "structinfo.h"
+#include <vector>
+
+// A strict chain of upstream proxies, first hop first: [0] is the server the
+// socket connects to and the ProxyInfo every other component still sees. The
+// host and this DLL link separate C runtimes, so each keeps its own copy and
+// the interfaces pass plain ProxyInfo arrays. No hop limit.
+typedef std::vector<ProxyInfo> ProxyChain;
 
 #define CLSID_PROXYMODULE L"{FAB59DC1-C950-4699-9647-085143BCD67C}"
 
@@ -18,6 +26,8 @@ class IProxyLog;
 class IProxyTaskMgr;
 class IProxyDataHandle;
 class IProxyTester;
+class IProxyTlsControl;
+class IProxyMonitor;
 
 class IGlobalProxy
 {
@@ -39,6 +49,53 @@ public:
 
 	virtual INT AddRef() = 0;
 	virtual INT Release() = 0;
+
+	// Append only: preserve existing virtual slots. Borrowed services live for
+	// the loaded module lifetime, including proxy stop/start and async CA jobs.
+	// Do not delete/release them. New callers need the matching Hook DLL.
+	virtual IProxyTlsControl* GetTlsControl() = 0;
+	virtual IProxyMonitor* GetMonitorInstance() = 0;
+	virtual IProxyProcessRegistry* GetProcessRegistry() = 0;
+};
+
+class IProxyTlsControl
+{
+public:
+	enum CaAction { QueryCA, InitializeCA, TrustCA, RemoveCATrust, PrepareCA };
+	// UTF-8 output; negative on failure, otherwise flags: 1 initialized, 2 trusted.
+	// PrepareCA checks trust and prepares the local CRL listener.
+	virtual int ManageCA(CaAction action, char* output, size_t capacity) = 0;
+	virtual BOOL SetEnabled(BOOL enabled, char* error, size_t capacity) = 0;
+	virtual BOOL IsEnabled() = 0;
+	// Protocol reconstruction/cache, gated by monitor_start/monitor_stop. UTF-8
+	// JSON request/reply. Consumer thread only: may wait for analysis/disk work.
+	// Returns required capacity INCLUDING NUL (undersized buffer untouched),
+	// or -1 with error text. Non-destructive polls use a sequence cursor.
+	virtual int QueryProtocol(const char* request, char* output, size_t capacity) = 0;
+protected:
+	virtual ~IProxyTlsControl() {}
+};
+
+struct ProxyMonitorEvent
+{
+	ULONGLONG connection;
+	PRCClient client;
+	DWORD kind; // 0 TLS error (UTF-8), 1/2 plaintext request/response, 3/4 non-decrypted data, 5 connection status
+	DWORD length;
+	BYTE data[8192];
+};
+
+class IProxyMonitor
+{
+public:
+	// One consumer per host; producers belong to the forwarding core.
+	// Disabling clears pending events; Poll copies into caller-owned storage.
+	virtual void SetEnabled(BOOL enabled) = 0;
+	virtual BOOL Poll(ProxyMonitorEvent* event) = 0;
+	virtual DWORD TakeDroppedCount() = 0;
+	virtual void Clear() = 0;
+protected:
+	virtual ~IProxyMonitor() {}
 };
 
 class IProxyReceptionCentre
@@ -123,6 +180,17 @@ public:
 	virtual BOOL GetProxySettings(LPProxySettingsInfo lpPSI) = 0;
 	virtual BOOL GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI) = 0;
 
+	// Append only. The number of hops when this connection goes through a chain
+	// of two or more proxies, 0 for a single upstream. The hops are copied to
+	// lpHops only when nCapacity holds them all; otherwise call again with room
+	// for the returned count. hops[0] matches GetProxyInfo.
+	virtual INT GetProxyChain(const LPPRCClient pPRCC, LPProxyInfo lpHops, INT nCapacity)
+	{
+		UNREFERENCED_PARAMETER(pPRCC);
+		UNREFERENCED_PARAMETER(lpHops);
+		UNREFERENCED_PARAMETER(nCapacity);
+		return 0;
+	}
 };
 
 
@@ -143,7 +211,8 @@ public:
 		ROUTE_BLOCKED,
 		TASK_FAILED,
 		SETTINGS_FAILED,
-		IPV6_BLOCKED
+		IPV6_BLOCKED,
+		UDP_BLOCKED
 	};
 	enum ConnectionStage
 	{
@@ -151,7 +220,8 @@ public:
 		STAGE_TRANSPORT,
 		STAGE_SOCKET,
 		STAGE_CONNECT,
-		STAGE_ATTACH
+		STAGE_ATTACH,
+		STAGE_IPV6_ROUTE
 	};
 	virtual ~IProxyLog(void){}
 
@@ -170,6 +240,15 @@ public:
 		ConnectionStage stage, DWORD error)
 	{
 		OnConnectionEvent(TASK_FAILED, client, processName);
+	}
+	// Optional GUI host capabilities; non-GUI/older hosts do not advertise them.
+	virtual BOOL GetAppLauncherHostInfo(AppLauncherHostInfo*) { return FALSE; }
+	virtual BOOL LaunchAppFromShell(const AppLauncherRequest&, AppLauncherResult&) { return FALSE; }
+	// Strings are borrowed for the duration of this callback, as above.
+	virtual void OnProxyFailure(const LPPRCClient client, LPCWSTR processName,
+		LPCWSTR target, BOOL connectingProxy, DWORD error, LPCWSTR detail)
+	{
+		OnConnectionFailure(client, processName, STAGE_CONNECT, error);
 	}
 };
 
@@ -190,6 +269,9 @@ public:
 	virtual void EnumTask(IProxyTaskMgr *pCallBack) = 0;
 	virtual void OnEachTask(const LPPRCClient lpC, const LPProxyInfo lpPI) = 0;
 	virtual BOOL GetTaskCount(DWORD *pCount) = 0;
+    // Snapshot only this manager's existing tasks; commit is consumed by its network-thread timer.
+    virtual DWORD PrepareReconnect(BOOL decrypt) { return 0; }
+    virtual void CompleteReconnect(BOOL disconnect) {}
 };
 
 
@@ -258,6 +340,12 @@ protected:
 #define PROXYERROR_SECURE_HANDSHAKE	21
 #define PROXYERROR_UDP_UNSUPPORTED	22
 #define PROXYERROR_UDP_RELAY_FAILED	23
+#define PROXYERROR_SSH_UNAVAILABLE 24
+#define PROXYERROR_SSH_HOSTKEY_UNKNOWN 25
+#define PROXYERROR_SSH_HOSTKEY_CHANGED 26
+#define PROXYERROR_SSH_KEY_AUTHFAILED 27
+#define PROXYERROR_SSH_KEY_FILE 28
+#define PROXYERROR_DOH_FAILED 29
 
 public:
 	virtual ~IProxyTesterCallback(void){}
@@ -276,6 +364,12 @@ public:
 	virtual BOOL Start(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient, const LPProxyInfo lpPI) = 0;
 	virtual void Stop() = 0;
 
+	// Append only. Tests a TCP connection through nHops (two or more) proxies
+	// in order; the tester keeps its own copy of the hops.
+	virtual BOOL StartChain(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient,
+		const ProxyInfo *lpHops, INT nHops) = 0;
+	// Index into the chain of the hop a failure belongs to, or -1.
+	virtual int GetFailedHop() = 0;
 };
 
 

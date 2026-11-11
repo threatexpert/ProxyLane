@@ -3,6 +3,7 @@
 #include "ElevatedLaunchProtocol.h"
 #include "ProxyModule.h"
 #include "ProcessArchitecture.h"
+#include "PRCPipeClient.h"
 
 #include <strsafe.h>
 #include <vector>
@@ -439,6 +440,20 @@ void CALLBACK ElevatedLaunch(HWND, HINSTANCE, LPSTR commandLine, int)
 	{
 		ExitProcess(PROXYLANE_ELEVATED_CREATE_FAILED);
 	}
+
+    // The elevated sender snapshots itself before forwarding the notification.
+    // Record-only notification does not apply the child proxy filter again.
+    {
+        HookNewProcessInfo child = {};
+        child.dwProcessId = processInfo.dwProcessId;
+        child.dwThreadId = processInfo.dwThreadId;
+        FILETIME c = {}, e = {}, k = {}, u = {};
+        if (GetProcessTimes(processInfo.hProcess, &c, &e, &k, &u))
+            child.processCreateTime = (ULONGLONG(c.dwHighDateTime) << 32) | c.dwLowDateTime;
+        wcsncpy_s(child.szAppPath, &targetPath[0], _TRUNCATE);
+        CPRCPipeClient pipe;
+        if (pipe.Connect(CA2W(&pipeName[0]))) pipe.PRCShouldInjectNewProcess(&child, true);
+    }
 
 	if (!ProxyLaneInjectSuspendedProcess(
 		processInfo.hProcess,

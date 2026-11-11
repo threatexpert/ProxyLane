@@ -1,6 +1,7 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "ProxyTesterMgr.h"
 #include "ProxyTransportPolicy.h"
+#include "DohPolicy.h"
 
 
 
@@ -17,11 +18,26 @@ CProxyTester::CProxyTester(CProxyTesterMgr *pNotify)
 	m_pCallback = NULL;
 	m_completed = FALSE;
 	m_dnsTransactionId = 0;
+	m_failedHop = -1;
+	m_pChain = NULL;
 }
 
 CProxyTester::~CProxyTester(void)
 {
+    if (m_dohWake) m_dohWake->Cancel();
+    if (m_doh) m_doh->CancelTestProgress();
+    m_doh.reset();
 	Close();
+	if (m_pChain)
+	{
+		// The chain owns every layer, including the one m_pProxyLayer names.
+		m_pChain->Free();
+		delete m_pChain;
+		m_pChain = NULL;
+		m_pProxyLayer = NULL;
+		m_pSecureLayer = NULL;
+		return;
+	}
 	delete m_pProxyLayer;
 	delete m_pSecureLayer;
 	m_pProxyLayer = NULL;
@@ -40,31 +56,28 @@ BOOL CProxyTester::Start(IProxyTesterCallback *pCallback, const LPPRCClient lpPR
 	m_client = *lpPRCClient;
 	m_proxyinfo = *lpPI;
 	m_completed = FALSE;
+	m_failedHop = -1;
+	m_progress.assign(1, ProxyTestHopProgress());
+	Progress(0, PTS_CONNECTING, GetTickCount());
 
 	if (!AddProxyLayer(lpPI))
-		return FALSE;
+		return FailedToStart();
 
-	if (!Create(0, lpPRCClient->sType))
+	// For direct literal destinations the transport must use that address
+	// family. Remote proxy connections still use the proxy transport family.
+	const bool direct = !lpPI || lpPI->GetProxyType() == PROXYTYPE_NOPROXY;
+	const int transportFamily = direct && !lpPRCClient->IsDNValid() &&
+		lpPRCClient->dstAddr.IsIPv6() ? AF_INET6 : AF_INET;
+	if (!Create(0, lpPRCClient->sType,
+		FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE,
+		NULL, FALSE, transportFamily))
 	{
-		return FALSE;
+		return FailedToStart();
 	}
 
 	if (lpPRCClient->sType == SOCK_STREAM)
 	{
-		BOOL bConnect = FALSE;
-
-		if(lpPRCClient->IsDNValid())
-			bConnect = CAsyncSocketEx::Connect(lpPRCClient->szDomainName, lpPRCClient->dstAddr.GetPort());
-		else
-			bConnect = CAsyncSocketEx::Connect(&lpPRCClient->dstAddr, sizeof(lpPRCClient->dstAddr));
-
-		if(!bConnect)
-		{
-			if(WSAGetLastError() != WSAEWOULDBLOCK)
-				return FALSE;
-		}
-
-		return TRUE;
+		return ConnectTcp(lpPRCClient);
 	}else if (lpPRCClient->sType == SOCK_DGRAM)
 	{
 		if (m_pProxyLayer)
@@ -97,8 +110,106 @@ BOOL CProxyTester::Start(IProxyTesterCallback *pCallback, const LPPRCClient lpPR
 }
 
 
+BOOL CProxyTester::ConnectTcp(const LPPRCClient lpPRCClient)
+{
+    if (DohPolicy::Needed(*lpPRCClient, m_proxyinfo) && !lpPRCClient->HasProxyDestination()) {
+        m_dohNoticeFailed = false;
+        m_dohWake = std::make_shared<CDohWakeup>(GetHwnd(), [this] { m_dohNoticeFailed = true; });
+        m_doh = CDohQuery::Resolve(*lpPRCClient, m_proxyinfo, m_dohRoute.empty() ? NULL : &m_dohRoute, true, NULL,
+            [this](int type, int code, WPARAM param, LPARAM detail) {
+                if (m_completed || !m_pCallback) return;
+                if (type == LAYERCALLBACK_TESTPROGRESS) { Progress((int)param, code, (DWORD)detail); return; }
+                if (code == DTS_CONNECTING) {
+                    m_progress.assign(m_progress.size(), ProxyTestHopProgress()); m_failedHop = -1;
+                }
+                m_pCallback->OnProxyTesterCallback(this, MAKEWPARAM(code, type), param, detail);
+                if (code == DTS_CONNECTING) Progress(0, PTS_CONNECTING, (DWORD)detail);
+            });
+        m_pNotify->ArmTester(this, 65000);
+        if (!m_doh->NotifyWhenReady(m_dohWake)) { WSASetLastError(WSAENOBUFS); return FailedToStart(); }
+        return TRUE;
+    }
+	BOOL bConnect = FALSE;
+
+	if(lpPRCClient->IsDNValid() && !lpPRCClient->HasProxyDestination())
+		bConnect = CAsyncSocketEx::Connect(lpPRCClient->szDomainName, lpPRCClient->dstAddr.GetPort());
+	else
+		bConnect = CAsyncSocketEx::Connect(&lpPRCClient->GetProxyDestination(), lpPRCClient->GetProxyDestination().Size());
+
+	if(!bConnect)
+	{
+		if(WSAGetLastError() != WSAEWOULDBLOCK)
+		{
+			return FailedToStart();
+		}
+	}
+
+	return TRUE;
+}
+
+BOOL CProxyTester::StartChain(IProxyTesterCallback *pCallback, const LPPRCClient lpPRCClient,
+	const ProxyInfo *lpHops, INT nHops)
+{
+	m_pCallback = pCallback;
+	m_client = *lpPRCClient;
+	m_completed = FALSE;
+	m_failedHop = -1;
+
+	// A chain carries TCP only; UDP never goes through one.
+	if (!lpHops || nHops < 2 || m_pChain || lpPRCClient->sType != SOCK_STREAM)
+	{
+		WSASetLastError(WSAEINVAL);
+		return FALSE;
+	}
+	m_proxyinfo = lpHops[0];
+    m_dohRoute.assign(lpHops, lpHops + nHops);
+	m_progress.assign(nHops, ProxyTestHopProgress());
+	Progress(0, PTS_CONNECTING, GetTickCount());
+
+	// Each hop adds a handshake; allow a little more than a single upstream.
+	m_pNotify->ArmTester(this, 10000 + 2500 * (nHops - 1));
+	m_pChain = new CProxyChainLayers;
+	if (!m_pChain->Add(*this, lpHops, nHops, SshSessionUse::Test))
+		return FailedToStart();
+	m_pProxyLayer = m_pChain->Top();
+	if (m_pChain->HasSsh()) m_pNotify->ArmTester(this, 60000);
+
+	if (!Create(0, SOCK_STREAM,
+		FD_READ | FD_WRITE | FD_OOB | FD_ACCEPT | FD_CONNECT | FD_CLOSE,
+		NULL, FALSE, AF_INET))
+		return FailedToStart();
+	return ConnectTcp(lpPRCClient);
+}
+
+BOOL CProxyTester::FailedToStart()
+{
+	const int error = WSAGetLastError();
+	if (m_failedHop < 0)
+		for (size_t i = 0; i < m_progress.size(); ++i)
+			if (m_progress[i].Active()) { m_failedHop = (int)i; break; }
+	FinishProgress(error ? error : WSAECONNABORTED);
+	m_completed = TRUE;
+	m_pNotify->DisarmTester(this);
+	WSASetLastError(error);
+	return FALSE;
+}
+
+int CProxyTester::GetFailedHop()
+{
+	return m_failedHop;
+}
+
 BOOL CProxyTester::AddProxyLayer(LPProxyInfo lpProxyInfo)
 {
+	if (lpProxyInfo && lpProxyInfo->GetProxyType() == PROXYTYPE_SSH)
+	{
+		if (m_client.sType != SOCK_STREAM) { WSASetLastError(WSAEOPNOTSUPP); return FALSE; }
+		m_pChain = new CProxyChainLayers;
+		if (!m_pChain->Add(*this, lpProxyInfo, 1, SshSessionUse::Test)) return FALSE;
+		m_pProxyLayer = m_pChain->Top();
+		m_pNotify->ArmTester(this, 60000);
+		return TRUE;
+	}
 	if (lpProxyInfo &&
 		lpProxyInfo->reserved == PROXY_TRANSPORT_GONC_TLS_PSK &&
 		(!ProxyTransportPolicy::SupportsGoncTlsPsk(
@@ -140,6 +251,7 @@ BOOL CProxyTester::AddProxyLayer(LPProxyInfo lpProxyInfo)
 	}
 
 	m_pProxyLayer = pNewLayer;
+	m_pProxyLayer->EnableTestProgress(true);
 	if (!AddLayer(m_pProxyLayer))
 		return FALSE;
 	if (lpProxyInfo && lpProxyInfo->reserved == PROXY_TRANSPORT_GONC_TLS_PSK)
@@ -148,6 +260,7 @@ BOOL CProxyTester::AddProxyLayer(LPProxyInfo lpProxyInfo)
 			return m_pProxyLayer->SetSecureTransport(
 				lpProxyInfo->strTransportPsk.szbuf);
 		m_pSecureLayer = new CAsyncSecureSocketLayer;
+		m_pSecureLayer->EnableTestProgress(true);
 		if (!m_pSecureLayer ||
 			!m_pSecureLayer->Configure(lpProxyInfo->strTransportPsk.szbuf,
 				lpProxyInfo->strProxyHost.szbuf) ||
@@ -164,15 +277,56 @@ void CProxyTester::RemoveAllLayers()
 
 void CProxyTester::Stop()
 {
+    if (m_dohWake) m_dohWake->Cancel();
+    if (m_doh) m_doh->CancelTestProgress();
+    m_doh.reset();
+	if (!m_completed)
+	{
+		FinishProgress(0, true);
+		m_completed = TRUE;
+	}
 	m_pNotify->DisarmTester(this);
 	Close();
+}
+
+void CProxyTester::Progress(int hop, int stage, DWORD tick)
+{
+    if (m_completed || hop < 0 || hop >= (int)m_progress.size() || !m_pCallback) return;
+    if (m_progress[hop].Apply(stage, tick))
+        m_pCallback->OnProxyTesterCallback(this, MAKEWPARAM(stage, LAYERCALLBACK_TESTPROGRESS), hop, tick);
+}
+
+void CProxyTester::FinishProgress(int error, bool cancelled)
+{
+    const DWORD now = GetTickCount();
+    for (int i = 0; i < (int)m_progress.size(); ++i)
+    {
+        if (m_progress[i].Terminal()) continue;
+        if (cancelled) Progress(i, m_progress[i].Active() ? PTS_CANCELLED : PTS_SKIPPED, now);
+        else if (!error) Progress(i, m_progress[i].Active() ? PTS_PASSED : PTS_SKIPPED, now);
+        else if (i == m_failedHop || (m_failedHop < 0 && m_progress[i].Active()))
+            Progress(i, error == WSAETIMEDOUT ? PTS_TIMED_OUT : PTS_FAILED, now);
+        else Progress(i, PTS_SKIPPED, now);
+    }
 }
 
 void CProxyTester::Complete(int nCode, WPARAM wParam, LPARAM lParam)
 {
 	if (m_completed || !m_pCallback)
 		return;
+	// A failure no hop reported itself (a timeout, a socket error) belongs to
+	// the first hop that never finished its handshake.
+	if (nCode != 0 && m_failedHop < 0 && m_pChain && !m_doh)
+	{
+		for (size_t i = 0; i < m_progress.size(); ++i)
+			if (m_progress[i].Active()) { m_failedHop = (int)i; break; }
+		if (m_failedHop < 0) m_failedHop = m_pChain->StalledHop();
+	}
+	FinishProgress(wParam == WSAETIMEDOUT ? WSAETIMEDOUT : nCode);
 	m_completed = TRUE;
+    if (m_dohWake) m_dohWake->Cancel();
+    if (m_doh) m_doh->CancelTestProgress();
+    m_doh.reset();
 	m_pNotify->DisarmTester(this);
 	m_pCallback->OnProxyTesterCallback(this,
 		MAKEWPARAM(nCode, LAYERCALLBACK_LAYERSPECIFIC), wParam, lParam);
@@ -254,19 +408,32 @@ void CProxyTester::OnSend(int nErrorCode)
 
 int CProxyTester::OnLayerCallback(const CAsyncSocketExLayer *pLayer, int nType, int nCode, WPARAM wParam, LPARAM lParam)
 {
-	if (m_pProxyLayer != pLayer)
+	const int hop = m_pChain ? m_pChain->HopOf(pLayer) : -1;
+	if (m_pProxyLayer != pLayer && hop < 0)
 	{
 		return 0;
+	}
+
+	if (nType == LAYERCALLBACK_TESTPROGRESS)
+	{
+		Progress((int)wParam >= 0 ? (int)wParam : hop >= 0 ? hop : 0, nCode, (DWORD)lParam);
+		return 1;
 	}
 
 	//nType: LAYERCALLBACK_STATECHANGE | LAYERCALLBACK_LAYERSPECIFIC
 	if (nType == LAYERCALLBACK_LAYERSPECIFIC && nCode != 0 &&
 		nCode != PROXYSTATUS_LISTENSOCKETCREATED)
+	{
+		// The first hop to report explains the failure; the layers above it
+		// only learn afterwards that their tunnel never opened.
+		if (hop >= 0 && m_failedHop < 0)
+			m_failedHop = hop;
 		Complete(m_client.sType == SOCK_DGRAM &&
 			nCode == PROXYERROR_REQUESTFAILED
 				? PROXYERROR_UDP_RELAY_FAILED : nCode,
 			wParam, lParam);
-	else if (!m_completed)
+	}
+	else if (!m_completed && pLayer == m_pProxyLayer)
 		m_pCallback->OnProxyTesterCallback(this, MAKEWPARAM(nCode, nType),
 			wParam, lParam);
 
@@ -275,8 +442,32 @@ int CProxyTester::OnLayerCallback(const CAsyncSocketExLayer *pLayer, int nType, 
 
 void CProxyTester::OnTimeout()
 {
+    if (m_dohNoticeFailed) {
+        Complete(PROXYERROR_DOH_FAILED, 0, (LPARAM)"DoH completion notification failed"); return;
+    }
 	Complete(m_client.sType == SOCK_DGRAM
-		? PROXYERROR_UDP_RELAY_FAILED : PROXYERROR_NOCONN);
+		? PROXYERROR_UDP_RELAY_FAILED : WSAETIMEDOUT);
+}
+
+void CProxyTester::OnMessage(UINT message, WPARAM low, LPARAM high, BOOL& handled) {
+    if (!m_dohWake || !m_dohWake->Accept(message, low, high)) return;
+    handled = TRUE;
+    if (m_completed || !m_doh || !m_doh->Done()) return;
+    if (!m_doh->Succeeded()) {
+        m_failedHop = m_doh->FailedHop();
+        const int code = m_doh->FailureCode();
+        // An SSH adapter owns preceding hops too. On a tunnel timeout, its
+        // layer index can be later than the hop whose handshake is pending.
+        if (code == PROXYERROR_DOH_FAILED && m_failedHop >= 0)
+            for (size_t i = 0; i < m_progress.size(); ++i)
+                if (m_progress[i].Active()) { m_failedHop = (int)i; break; }
+        CStringA error = (code == PROXYERROR_SSH_HOSTKEY_UNKNOWN || code == PROXYERROR_SSH_HOSTKEY_CHANGED)
+            ? m_doh->FailureDetail() : m_doh->Error();
+        Complete(code, 0, (LPARAM)(LPCSTR)error); return;
+    }
+    // The authenticated DoH response already proves this route is reachable.
+    // Do not open a second tunnel to an address in the DNS answer.
+    Complete(0);
 }
 
 //////////////////////////////////////////////////////////////////////////

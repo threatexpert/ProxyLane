@@ -9,6 +9,16 @@ or launch/inject user applications. It covers:
 - Persistence of Unicode arguments, working directory, elevation and AUMID.
 - Target deduplication, case-sensitive arguments, pinning, unpinning, removal
   and the 20-unpinned-entry limit.
+- One tile per launch target, with the last successful ordinary/administrator
+  preference; fresh drops and existing-tile launches update the same record.
+- Legacy ordinary/administrator duplicates merge on read using the latest
+  launch preference, retaining a stable ID, pin and display position. The next
+  history write removes duplicate sections; deleting a merged tile removes both.
+- Stable home-screen positions across launches/restarts, legacy-order migration,
+  append/pin/unpin/remove behavior, and independent MRU eviction.
+- Shared picker/Home display order on cold load, ready-cache updates, reload,
+  catalog/recent launches and explicit manual moves/pins; consumers do not sort.
+- Swipe thresholds, edge resistance, page counts and snap easing.
 - Shortcut origin extraction and re-resolution after the shortcut changes.
 - Missing targets, oversized writes and corrupt history protection.
 - Two independent processes updating the same/different profiles in one INI,
@@ -19,32 +29,55 @@ or launch/inject user applications. It covers:
 - Recent/catalog identity matching and background validity checking without
   permanently deleting temporarily inaccessible targets.
 
-Manual UI acceptance (computer-use runtime unavailable in the implementation session):
+Manual UI acceptance (window capture timed out in the implementation session):
 
-1. Start a profile, drop an ordinary app or select an app to launch; verify it
-   appears in the right-hand Recent Apps card. Single-click must not launch;
-   double-click (or Enter on a selected item) launches it again.
-2. Restart ProxyLane: before starting the proxy, no profile's history is shown.
-   Start A: only A's history appears. Merely selecting B without applying it
-   must not change that. Start/apply B: B's history replaces A's. Stop: history
-   disappears. Repeat with two instances running A and B concurrently.
-3. Open the original app picker: recent entries appear first with Recent Apps
-   as their source, then the installed catalog loads behind them without duplicate
-   targets. Search and recent-app launching work while the catalog loads.
-   Select a recent entry: Remove from recent appears in the right-aligned button
-   group, leaving the bottom-left loading/count label unobscured. Also check
-   right-click pin/unpin/remove. Removal updates the sidebar and restores the
-   ordinary catalog row (if installed), without deleting the application.
-4. Check BAT/CMD shortcuts, Store apps, long names/arguments and hover details.
-   Unavailable recent targets remain gray with source "Recent Apps (unavailable)".
-   Selection enables removal but not launching (including double-click/Enter).
-   Removing the record also updates the sidebar; no app files are deleted.
-   Restore an unavailable target and refresh: it should become launchable again.
-   An unavailable shortcut must not hide a usable installed catalog target.
-5. Check both languages, narrow windows and 100%/150% DPI for overlapping controls.
+1. Before starting the proxy, the applications page shows the selected profile's
+   history. The bottom-left status shows the selected profile in smaller muted
+   text; hover reveals its full name and any unsaved-edit notice. The launch card
+   has no profile row or profile-settings button. While running A, selecting B
+   must leave the sidebar/history on A until B is actually started/applied.
+2. Click a recent app while stopped: the confirmation names both the profile and
+   app, defaults to No, and explains unsaved edits when present. No/Escape must
+   start neither the proxy nor the app. Yes starts the selected proxy and then the
+   app; invalid targets or failed proxy startup must not launch an app. Changing
+   profiles during confirmation must never silently launch using another profile.
+   Right-click offers Start normally and Start as administrator, even for a
+   shield tile (Store apps omit administrator). The saved default is bold.
+   A successful explicit launch/drop changes the default and shield without
+   adding or moving a tile; failure or UAC cancellation leaves it unchanged.
+   Left-click/Enter uses that default. Normal retains AUTO elevation behavior.
+3. With at least seven recent apps and a narrow window, drag horizontally across
+   tiles or gaps. Check smooth snap, small-drag snap-back, boundary resistance,
+   no looping, and no accidental launch after a swipe/capture loss/Escape.
+   Check horizontal touch gestures, vertical/horizontal wheel or touchpad input,
+   arrow/Home/End keys and Enter/Space. Resize while on a later page and while
+   dragging. Only subtle page dots appear; a single page has no dots or arrows.
+4. Hover each tile on every page: show full app name/target and relevant launch
+   details, without a profile line. No tooltip should hang over a moving page.
+   Launch a tile: its position/page remains stable, including after restarting
+   ProxyLane. New apps append; pinning deliberately moves an app to the front.
+5. Expand the process list for the first time: it must appear in its final place
+   without a white template-sized rectangle covering recent apps. Collapse it:
+   timer refresh, activation and event callbacks must not enumerate its rows.
+6. In the app picker, select a recent item: More actions and the right-click menu
+   offer Move up/down, Pin/unpin and Remove. Boundary moves are disabled; fixed
+   and ordinary groups remain separate. Moves retain selection, survive reopening
+   and launching, and sync to Home. Check recent/catalog merging and searching,
+   BAT/CMD shortcuts, Store apps and unavailable targets. Restoring a target and
+   refreshing makes it usable again. Removing history must not delete app files.
+7. Check both languages, narrow/maximized windows, 100%/150% DPI, and Windows'
+   reduced-animation preference for clipping, overlap and misplaced tooltips.
 
 History is stored in the existing `ProxyLane.ini`, shared by both architectures.
 `[proxy_<name>] RecentAppsId` identifies the profile's history generation.
+The optional `DisplayOrder` field preserves home-screen placement independently
+of `LastUsed`; older records inherit their previous initial order and are migrated
+on the next history write. The picker shares the home-screen display order; eviction still uses recency.
+`Elevated` is a saved launch preference, not part of target identity. Legacy
+duplicates retain the first tile in display order (a pinned tile takes priority),
+with launch data and preference taken from the record with the latest `LastUsed`.
+Arguments and working directories still distinguish different launch targets;
+existing shortcut-origin matching is retained. The INI schema remains version 1.
 Each `[recent_app_<profile-id>_<record-id>]` section stores a complete record,
 written with one `WritePrivateProfileSection` call. Text fields with the
 `Utf8Base64` suffix use standard UTF-8 + Base64 (not encryption), avoiding ANSI

@@ -1,0 +1,44 @@
+[package]
+name = "proxylane_mitm"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "proxylane-mitm-ca"
+path = "src/main.rs"
+
+[dependencies]
+proxylane_protocol = { path = "../ProxyLaneProtocol" }
+base64 = "0.22"
+fs2 = "0.4"
+getrandom = "0.2"
+rcgen = { version = "=0.13.2", features = ["x509-parser"] }
+rustls = { version = "=0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "=0.7.1"
+webpki-root-certs = "=1.0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+time = "=0.3.36"
+zeroize = "=1.8.1"
+iced-x86 = { version = "1.21", default-features = false, features = ["std", "decoder", "instr_info"] }
+quinn = { version = "=0.11.9", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+# Match RemoteClosing explicitly to reject undispatched requests safely on GOAWAY.
+h3 = { version = "=0.0.8", features = ["i-implement-a-third-party-backend-and-opt-into-breaking-changes"] }
+h3-quinn = { version = "=0.0.10", path = "../../third_party/h3-quinn" }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
+bytes = "1"
+memchr = "2"
+ring = "0.17"
+http = "1"
+httparse = "=1.10.1"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Threading"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

@@ -5,6 +5,8 @@
 
 #include "stdafx.h"
 #include "PRCPipeServer.h"
+#include "BrowserQuicPolicy.h"
+#include "ProcessCreationRecording.h"
 #include "GlobalProxy.h"
 #include "ProxyReceptionCentre.h"
 #include "token.h"
@@ -89,11 +91,14 @@ CPRCPipeServer::CPRCPipeServer(CProxyReceptionCentre *pPRC)
 	m_hMainThread = NULL;
 	m_dwThreadCount = 0;
 	m_hNoThreadEvent = NULL;
+	InitializeCriticalSection(&m_launchExecutionLock);
 }
 
 CPRCPipeServer::~CPRCPipeServer(void)
 {
 	ShutdownServer();
+    BrowserQuicPolicy::Forget(m_pPRC);
+    DeleteCriticalSection(&m_launchExecutionLock);
 }
 
 
@@ -391,8 +396,21 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 
 		switch(hdr.action)
 		{
+        case PRCPD_QUIC_STATUS:
+        {
+            BrowserQuicPolicy::Report r={};
+            if(!pipeClientPid||hdr.flag!=1||hdr.dataSize!=sizeof(r)||!ReadPipe(hPipe,&r,sizeof(r)))goto SEC_ERROR;
+            BrowserQuicPolicy::Observe(m_pPRC,pipeClientPid,r);
+            hdr.action=PRCPD_REPLY;hdr.flag=1;hdr.dataSize=0;
+            if(!WritePipe(hPipe,&hdr,sizeof(hdr)))goto SEC_ERROR;
+            break;
+        }
 		case PRCPD_GETSTARTUPINFO:
 			{
+				const bool launcherExtended=hdr.flag==3;
+				const bool extended=hdr.flag==2 || launcherExtended;
+				AppLauncherHostInfo launcher = {};
+				if(launcherExtended) m_pPRC->m_pGlobalProxy->GetLogInstance()->GetAppLauncherHostInfo(&launcher);
 				PRCINFO info;
 				if (!m_pPRC->GetStartupInfo(&info))
 					goto SEC_ERROR;
@@ -400,12 +418,18 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 				//先写协议头
 				hdr.action = PRCPD_REPLY;
 				hdr.flag = 1;// means true
-				hdr.dataSize = sizeof(info); //协议头后面的数据长度
+				hdr.dataSize = sizeof(info)+(extended?sizeof(DWORD):0)+(launcherExtended?sizeof(launcher):0);
 				if (! WritePipe(hPipe, &hdr, sizeof(hdr)))
 					goto SEC_ERROR;
 				//写数据
 				if (! WritePipe(hPipe, &info, sizeof(info)))
 					goto SEC_ERROR;
+                if(extended) {
+                    ProxySettingsInfo settings={};m_pPRC->GetProxySettingsInfo(&settings);
+                    DWORD policy=BrowserQuicPolicy::Preference()&&settings.bHookUDP&&!settings.bBlockUDP?1:0;
+                    if(!WritePipe(hPipe,&policy,sizeof(policy)))goto SEC_ERROR;
+                }
+                if(launcherExtended && !WritePipe(hPipe,&launcher,sizeof(launcher)))goto SEC_ERROR;
 
 			}
 			break;
@@ -423,7 +447,11 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 				if (pipeClientPid && client.dwPid != pipeClientPid)
 					goto SEC_ERROR;
 
-				//将数据注册到PRC
+				if(client.sType==SOCK_DGRAM && pipeClientPid) {
+                    BrowserQuicPolicy::Report r={client.processCreateTime,client.reserved,0};
+                    BrowserQuicPolicy::Observe(m_pPRC,pipeClientPid,r);
+                }
+                //将数据注册到PRC
 				if (! m_pPRC->RegisterClient(&client))
 				{
 					DWORD registrationError = WSAGetLastError();
@@ -541,23 +569,40 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 			}
 			break;
 
+		case PRCPD_LAUNCH_PACKAGED_APP:
+            {
+                AppLauncherRequest request = {};
+                if(hdr.dataSize!=sizeof(request) || !ReadPipe(hPipe,&request,sizeof(request)))goto SEC_ERROR;
+                AppLauncherResult result = HandleAppLaunch(request,pipeClientPid);
+                hdr.action=PRCPD_REPLY; hdr.flag=1; hdr.dataSize=sizeof(result);
+                if(!WritePipe(hPipe,&hdr,sizeof(hdr)) || !WritePipe(hPipe,&result,sizeof(result)))goto SEC_ERROR;
+            }
+            break;
 		case PRCPD_SHOULD_INJECT_NEW_PROCESS:
 			{
-				HookNewProcessInfo hnpi;
+				HookProcessCreationNotice notice;
 
-				if (hdr.dataSize != sizeof(hnpi))
+				if (hdr.dataSize != sizeof(notice))
 					goto SEC_ERROR;
 
-				if(! ReadPipe(hPipe, &hnpi, hdr.dataSize))
+				if(! ReadPipe(hPipe, &notice, hdr.dataSize))
 					goto SEC_ERROR;
 
+                const bool recordOnly = hdr.flag == 1;
+                HookNewProcessInfo& hnpi = notice.child;
+                hnpi.szAppPath[_countof(hnpi.szAppPath)-1] = L'\0';
+                hnpi.szCommandLine[_countof(hnpi.szCommandLine)-1] = L'\0';
+                notice.parent.szAppPath[_countof(notice.parent.szAppPath)-1] = L'\0';
+                // Record successful creation before injection/filter decisions.
+                RecordProcessCreation(m_pPRC->m_pGlobalProxy->GetTlsControl(),
+                    notice, recordOnly ? "launcher" : "hook");
 				//先写协议头
 				hdr.action = PRCPD_REPLY;
 				hdr.flag = false;
 				hdr.dataSize = 0;
 
-				hdr.flag = (BYTE)m_pPRC->m_pGlobalProxy->GetLogInstance()->ShouldInjectNewProcess(&hnpi);
-				if (hdr.flag && !AuthorizeAppContainerChild(
+				hdr.flag = recordOnly || (BYTE)m_pPRC->m_pGlobalProxy->GetLogInstance()->ShouldInjectNewProcess(&hnpi);
+				if (!recordOnly && hdr.flag && !AuthorizeAppContainerChild(
 					m_pPRC->m_pGlobalProxy, hnpi, pipeClientPid))
 				{
 					const DWORD error = GetLastError();
@@ -665,10 +710,11 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 					// PSK inside the PRC process even though it is stored in the INI.
 					SecureZeroMemory(pi.strTransportPsk.szbuf,
 						sizeof(pi.strTransportPsk.szbuf));
-					hdr.dataSize = sizeof(pi);
+					if (pi.sshAuth) SecureZeroMemory(pi.strProxyPass.szbuf, sizeof(pi.strProxyPass.szbuf));
+					hdr.dataSize = PROXYINFO_PIPE_SIZE;
 					if (! WritePipe(hPipe, &hdr, sizeof(hdr)))
 						goto SEC_ERROR;
-					if (! WritePipe(hPipe, &pi, sizeof(pi)))
+					if (! WritePipe(hPipe, &pi, PROXYINFO_PIPE_SIZE))
 						goto SEC_ERROR;
 				}else
 				{
@@ -697,13 +743,17 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 			break;
 
 		case PRCPD_BLOCKED_IPV6:
+		case PRCPD_BLOCKED_UDP:
 		{
 			HookBlockedIPv6Info info;
 			if (hdr.dataSize != sizeof(info) ||
 				!ReadPipeExactly(hPipe, &info, sizeof(info)))
 				goto SEC_ERROR;
 			if ((pipeClientPid && info.processId != pipeClientPid) ||
-				!info.destination.IsIPv6() ||
+				(hdr.action == PRCPD_BLOCKED_IPV6 && !info.destination.IsIPv6()) ||
+				(hdr.action == PRCPD_BLOCKED_UDP && (info.socketType != SOCK_DGRAM ||
+					(!info.destination.IsIPv4() && !info.destination.IsIPv6() &&
+						info.destination.sa_family != AF_UNSPEC))) ||
 				!memchr(info.domain, 0, sizeof(info.domain)) ||
 				!wmemchr(info.processName, 0, _countof(info.processName)))
 				goto SEC_ERROR;
@@ -715,7 +765,8 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 			client.dstAddr = info.destination;
 			strcpy_s(client.szDomainName, info.domain);
 			m_pPRC->m_pGlobalProxy->GetLogInstance()->OnConnectionEvent(
-				IProxyLog::IPV6_BLOCKED, &client, info.processName);
+				hdr.action == PRCPD_BLOCKED_UDP ? IProxyLog::UDP_BLOCKED : IProxyLog::IPV6_BLOCKED,
+				&client, info.processName);
 		}
 		break;
 
@@ -753,6 +804,12 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 
 			m_pPRC->m_pGlobalProxy->GetLogInstance()->OnHookLogtext(textinfo);
 			free(textinfo);
+            // Optional acknowledgment for short-lived diagnostic clients.
+            // Existing flag=0 clients keep the original one-way log protocol.
+            if(hdr.flag==1) {
+                hdr.action=PRCPD_REPLY;hdr.dataSize=0;
+                if(!WritePipe(hPipe,&hdr,sizeof(hdr)))goto SEC_ERROR;
+            }
 
 		}
 		break;
@@ -788,6 +845,67 @@ BOOL CPRCPipeServer::WritePipe(HANDLE hPipe, LPVOID lpBuf, int size)
 		return FALSE;
 
 	return nWritten == (DWORD)size;
+}
+
+static bool SameLaunchUser(DWORD clientPid)
+{
+    DWORD clientSession=0, ownSession=0;
+    if(!clientPid || !ProcessIdToSessionId(clientPid,&clientSession) ||
+        !ProcessIdToSessionId(GetCurrentProcessId(),&ownSession) || clientSession!=ownSession) return false;
+    HANDLE process=OpenProcess(0x1000,FALSE,clientPid);
+    if(!process) process=OpenProcess(PROCESS_QUERY_INFORMATION,FALSE,clientPid);
+    HANDLE client=NULL, own=NULL; bool same=false;
+    if(process && OpenProcessToken(process,TOKEN_QUERY,&client) && OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&own)) {
+        BYTE a[1024]={},b[1024]={}; DWORD needed=0;
+        if(GetTokenInformation(client,TokenUser,a,sizeof(a),&needed) && GetTokenInformation(own,TokenUser,b,sizeof(b),&needed))
+            same=EqualSid(((TOKEN_USER*)a)->User.Sid,((TOKEN_USER*)b)->User.Sid)!=FALSE;
+    }
+    if(client)CloseHandle(client); if(own)CloseHandle(own); if(process)CloseHandle(process);
+    return same;
+}
+
+CPRCPipeServer::LaunchHistory& CPRCPipeServer::GetLaunchHistory()
+{
+    static LaunchHistory history;
+    return history;
+}
+
+AppLauncherResult CPRCPipeServer::HandleAppLaunch(const AppLauncherRequest& request, DWORD clientPid)
+{
+    // PRC may restart with the same pipe name inside this PL process. Retain
+    // completed IDs across that restart so an uncertain retry cannot activate twice.
+    LaunchHistory& history=GetLaunchHistory();
+    AppLauncherResult result = {ERROR_INVALID_PARAMETER,0,0};
+    const ULONGLONG now=AppLauncherProtocol::Now();
+    // Win8+ only: the actual pipe client PID is available on all supported activation hosts.
+    if(!AppLauncherProtocol::ValidId(request.id) || !AppLauncherProtocol::ValidAumid(request.aumid) ||
+        request.hostPid!=GetCurrentProcessId() || request.hostCreationTime!=AppLauncherProtocol::ProcessTime(GetCurrentProcess()) ||
+        request.submittedTime>now || now-request.submittedTime>120ULL*10000000 || !SameLaunchUser(clientPid)) return result;
+    EnterCriticalSection(&history.lock);
+    for(auto it=history.requests.begin();it!=history.requests.end();) {
+        if(it->second.result.error!=ERROR_IO_PENDING && now-it->second.request.submittedTime>300ULL*10000000)
+            it=history.requests.erase(it); else ++it;
+    }
+    auto found=history.requests.find(request.id);
+    if(found!=history.requests.end()) {
+        if(memcmp(&found->second.request,&request,sizeof(request))==0) result=found->second.result;
+        LeaveCriticalSection(&history.lock); return result;
+    }
+    if(history.requests.size()>=128) { LeaveCriticalSection(&history.lock); result.error=ERROR_BUSY; return result; }
+    LaunchRecord record={}; record.request=request; record.result.error=ERROR_IO_PENDING;
+    history.requests[request.id]=record;
+    LeaveCriticalSection(&history.lock);
+    // This pipe instance already runs on its own worker. Other pipe instances,
+    // including Hook initialization reports and retry queries, remain responsive.
+    EnterCriticalSection(&m_launchExecutionLock);
+    result.error=ERROR_NOT_SUPPORTED;
+    try {
+        if(!m_bExitThread) m_pPRC->m_pGlobalProxy->GetLogInstance()->LaunchAppFromShell(request,result);
+        else result.error=ERROR_OPERATION_ABORTED;
+    } catch(...) { result.error=ERROR_UNHANDLED_EXCEPTION; }
+    LeaveCriticalSection(&m_launchExecutionLock);
+    EnterCriticalSection(&history.lock); history.requests[request.id].result=result; LeaveCriticalSection(&history.lock);
+    return result;
 }
 
 BOOL CPRCPipeServer::ReadPipe(HANDLE hPipe, LPVOID lpBuf, int size)

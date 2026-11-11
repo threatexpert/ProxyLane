@@ -175,8 +175,8 @@ fn create_connection(psk: &[u8], server_name: &str) -> Result<ClientConnection, 
         expected_public_key,
         algorithms: provider.signature_verification_algorithms,
     });
-    let config = ClientConfig::builder_with_provider(Arc::new(provider))
-        .with_protocol_versions(&[&rustls::version::TLS12])
+    let mut config = ClientConfig::builder_with_provider(Arc::new(provider))
+        .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
         .map_err(|e| e.to_string())?
         .dangerous()
         .with_custom_certificate_verifier(verifier)
@@ -185,6 +185,9 @@ fn create_connection(psk: &[u8], server_name: &str) -> Result<ClientConnection, 
             PrivateKeyDer::Pkcs8(private_der.clone_key()),
         )
         .map_err(|e| e.to_string())?;
+    // gonc authenticates the PSK-derived key, not the host name. Keep domain
+    // names out of ClientHello even when the proxy address is a DNS name.
+    config.enable_sni = false;
     let name = ServerName::try_from(certificate_name.to_owned()).map_err(|e| e.to_string())?;
     ClientConnection::new(Arc::new(config), name).map_err(|e| e.to_string())
 }
@@ -510,6 +513,13 @@ mod tests {
     use rustls::{ServerConfig, ServerConnection};
 
     fn create_test_server(psk: &[u8]) -> ServerConnection {
+        create_test_server_with_versions(psk, &[&rustls::version::TLS12])
+    }
+
+    fn create_test_server_with_versions(
+        psk: &[u8],
+        versions: &[&'static rustls::SupportedProtocolVersion],
+    ) -> ServerConnection {
         let secret = derive_secret(psk).unwrap();
         let pkcs8 = secret.to_pkcs8_der().unwrap();
         let private_der = PrivatePkcs8KeyDer::from(pkcs8.as_bytes().to_vec());
@@ -525,7 +535,7 @@ mod tests {
         let certificate = params.self_signed(&key_pair).unwrap();
         let provider = rustls::crypto::ring::default_provider();
         let config = ServerConfig::builder_with_provider(Arc::new(provider))
-            .with_protocol_versions(&[&rustls::version::TLS12])
+            .with_protocol_versions(versions)
             .unwrap()
             .with_no_client_auth()
             .with_single_cert(
@@ -573,6 +583,89 @@ mod tests {
             assert!(server.write_tls(&mut result).unwrap() > 0);
         }
         result
+    }
+
+    #[test]
+    fn domain_connections_omit_sni_and_export_matching_keys_in_tls12_and_tls13() {
+        for versions in [
+            vec![&rustls::version::TLS13],
+            vec![&rustls::version::TLS12],
+            vec![&rustls::version::TLS13, &rustls::version::TLS12],
+        ] {
+            unsafe {
+                let psk = b"protocol-and-sni-test";
+                let mut session = ptr::null_mut();
+                assert_eq!(
+                    plst_session_create(
+                        psk.as_ptr(),
+                        psk.len(),
+                        b"proxy.example.com\0".as_ptr().cast(),
+                        &mut session,
+                    ),
+                    OK
+                );
+                let mut server = create_test_server_with_versions(psk, &versions);
+                for _ in 0..16 {
+                    let client_tls = drain_client_tls(session);
+                    if !client_tls.is_empty() {
+                        feed_server_tls(&mut server, &client_tls);
+                    }
+                    let server_tls = drain_server_tls(&mut server);
+                    if !server_tls.is_empty() {
+                        feed_client_tls(session, &server_tls);
+                    }
+                    if plst_session_is_ready(session) == 1 && !server.is_handshaking() {
+                        break;
+                    }
+                }
+                assert_eq!(plst_session_is_ready(session), 1);
+                assert!(!server.is_handshaking());
+                assert_eq!(server.protocol_version(), Some(versions[0].version));
+                assert_eq!(server.server_name(), None);
+
+                let mut client_key = [0u8; 32];
+                assert_eq!(
+                    plst_session_export_key(session, client_key.as_mut_ptr(), client_key.len()),
+                    OK
+                );
+                let server_key = server
+                    .export_keying_material([0u8; 32], EXPORTER_LABEL, None)
+                    .unwrap();
+                assert_eq!(client_key, server_key);
+
+                let payload = b"TLS application data";
+                let mut written = 0usize;
+                assert_eq!(
+                    plst_session_write_plain(
+                        session,
+                        payload.as_ptr(),
+                        payload.len(),
+                        &mut written
+                    ),
+                    OK
+                );
+                assert_eq!(written, payload.len());
+                feed_server_tls(&mut server, &drain_client_tls(session));
+                let mut received = [0u8; 20];
+                server.reader().read_exact(&mut received).unwrap();
+                assert_eq!(&received, payload);
+                server.writer().write_all(payload).unwrap();
+                feed_client_tls(session, &drain_server_tls(&mut server));
+                let mut read = 0usize;
+                assert_eq!(
+                    plst_session_read_plain(
+                        session,
+                        received.as_mut_ptr(),
+                        received.len(),
+                        &mut read
+                    ),
+                    OK
+                );
+                assert_eq!(read, payload.len());
+                assert_eq!(&received, payload);
+                plst_session_free(session);
+            }
+        }
     }
 
     #[test]

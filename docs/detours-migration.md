@@ -56,6 +56,29 @@ Detours 源码位于 `third_party/detours`，固定到 Microsoft 上游提交
 
 ## 验证
 
+### Hook 安装失败诊断
+
+安装失败时，Hook DLL 通过既有 `PRCPD_Logtext` 上报一条 `[ProxyLane.Hook.v1]`
+详情，并通过既有 `PRCPD_HOOKWSOCK_RESULT` 上报原始错误码。没有改变管道结构，
+旧主程序也能显示详情；旧 Hook DLL 不会因此自动获得详细诊断。
+
+详情包含目标进程自己采集的名称/PID、`stage`、`module`、`API`、十进制及
+十六进制错误码、系统错误说明。覆盖模块固定、控制管道连接、配置/启动信息读取、
+TLS 分配、模块加载、导出解析和 Detours 安装。Detours 会区分参数校验、事务开始、
+单个 API 挂接和事务提交，失败目标可识别时附带模块/API；事务级错误没有具体目标时
+显示 `n/a`。错误在现场保存，不再被后续清理、重连或通知操作覆盖。
+
+若失败操作没有提供非零错误码，详情明确显示这一点；为保持旧状态协议中的
+“0 表示成功”，此时状态消息使用 `ERROR_GEN_FAILURE`，不将它冒充原始错误。
+配置交换失败后使用新管道连接发送诊断，避免残余响应破坏协议。管道完全不可用时
+只能通过 `OutputDebugStringW` 采集详情，PL 窗口无法接收。常规失败摘要仍然保留；
+新主程序按 PID 和创建时间尝试查询名称，进程退出后仍可从详情获得其名称。
+
+编译 Win32/x64 Release 后，运行 `tests/run-hook-failure-diagnostics.ps1`，在独立
+测试进程中加载实际 DLL，验证配置响应异常、启动信息异常和管道断开后的诊断文本、
+状态码及调用方错误码。`tests/run-tests.ps1` 还覆盖真实 Detours 挂接/卸载失败的
+目标索引、失败阶段和错误码保存。
+
 当前 Release 回归覆盖：
 
 - Win32/x64 完整解决方案编译与现有单元测试。
@@ -93,8 +116,8 @@ Release 回归，日志位于 `build/qa/hook-lifecycle/regression.log`。未进�
 日志保存在 `build/qa/detours-merge`。运行中的另一套 ProxyLane 曾向测试服务和探针
 注入第二份 Hook DLL，导致 UDP 超时；流量测试现与托管启动测试一样，仅解除一次性
 Python 测试进程继承的 hook，再创建受控子进程，不修改用户正在运行的代理。
-上述为原迁移时的验证记录。当前发行包只在根目录携带 `LICENSE-Detours.txt`，
-不附带来源说明，也不创建 `third_party` 目录。
+上述为原迁移时的验证记录。当前发行包将 Detours 许可证全文收录在根目录的
+`LICENSE` 中，位于 `Third-Party Software Licenses` 下，不创建 `third_party` 目录。
 迁移 worktree 的构建产物及日志另存于 `build/detours-migration-archive`。
 
 ## 2026-10-16：同一宿主跨服务退出重开的重绑定修复

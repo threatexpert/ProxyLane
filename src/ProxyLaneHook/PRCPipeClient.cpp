@@ -6,7 +6,9 @@
 
 #include "stdafx.h"
 #include "PRCPipeClient.h"
+#include "BrowserQuicPolicy.h"
 #include "AppContainerPipeAccess.h"
+#include "ProcessCreationSnapshot.h"
 
 CPRCPipeClient::CPRCPipeClient(void)
 {
@@ -89,7 +91,8 @@ BOOL CPRCPipeClient::WritePipe(LPCVOID lpBuf, int size)
 	if(!WriteFile(m_hPipe, lpBuf, size, &nWritten, NULL))
 		return FALSE;
 
-	return nWritten == (DWORD)size;
+	if (nWritten != (DWORD)size) { ::SetLastError(ERROR_WRITE_FAULT); return FALSE; }
+	return TRUE;
 }
 
 BOOL CPRCPipeClient::ReadPipe(LPVOID lpBuf, int size)
@@ -100,33 +103,40 @@ BOOL CPRCPipeClient::ReadPipe(LPVOID lpBuf, int size)
 	if(!ReadFile(m_hPipe, lpBuf, size, &nRead, NULL))
 		return FALSE;
 
-	return nRead == (DWORD)size;
-}
-
-
-BOOL CPRCPipeClient::GetPRCStartupInfo(LPPRCINFO lpStartupInfo)
-{
-	PRCPipeDataHead hdr;
-
-	hdr.action = PRCPD_GETSTARTUPINFO;
-	hdr.flag = 0;
-	hdr.dataSize = 0;
-
-	if(!WritePipe(&hdr, sizeof(hdr)))
-		return FALSE;
-
-	if(!ReadPipe(&hdr, sizeof(hdr)))
-		return FALSE;
-
-	if(hdr.action != PRCPD_REPLY || hdr.flag != 1 || hdr.dataSize != sizeof(*lpStartupInfo))
-		return FALSE;
-
-	if(!ReadPipe(lpStartupInfo, hdr.dataSize))
-		return FALSE;
-
+	if (nRead != (DWORD)size) { ::SetLastError(ERROR_INVALID_DATA); return FALSE; }
 	return TRUE;
 }
 
+
+BOOL CPRCPipeClient::GetPRCStartupInfo(LPPRCINFO lpStartupInfo, bool* quicPolicy, AppLauncherHostInfo* launcher)
+{
+    PRCPipeDataHead hdr={};hdr.action=PRCPD_GETSTARTUPINFO;
+    // Opt-in extension: old hosts ignore the flag and return the original size;
+    // old clients receive the original layout from new hosts.
+    hdr.flag=launcher?3:(quicPolicy?2:0);if(quicPolicy)*quicPolicy=false;
+    if(launcher) ZeroMemory(launcher,sizeof(*launcher));
+    if(!WritePipe(&hdr,sizeof(hdr))||!ReadPipe(&hdr,sizeof(hdr)))return FALSE;
+    if(hdr.action!=PRCPD_REPLY||hdr.flag!=1 ||
+        (hdr.dataSize!=sizeof(*lpStartupInfo)&&
+        (!(quicPolicy||launcher)||hdr.dataSize!=sizeof(*lpStartupInfo)+sizeof(DWORD))&&
+        (!launcher||hdr.dataSize!=sizeof(*lpStartupInfo)+sizeof(DWORD)+sizeof(*launcher)))) {
+        ::SetLastError(ERROR_INVALID_DATA); return FALSE;
+    }
+    if(!ReadPipe(lpStartupInfo,sizeof(*lpStartupInfo)))return FALSE;
+    if(hdr.dataSize>sizeof(*lpStartupInfo)) {DWORD flags=0;if(!ReadPipe(&flags,sizeof(flags)))return FALSE;if(quicPolicy)*quicPolicy=(flags&1)!=0;}
+    if(launcher && hdr.dataSize==sizeof(*lpStartupInfo)+sizeof(DWORD)+sizeof(*launcher)) {
+        if(!ReadPipe(launcher,sizeof(*launcher)))return FALSE;
+        if(launcher->version!=1 || !launcher->processId || !launcher->creationTime ||
+            !launcher->executable[0] || launcher->executable[MAX_PATH-1]) ZeroMemory(launcher,sizeof(*launcher));
+    }
+    return TRUE;
+}
+BOOL CPRCPipeClient::PRCReportQuicStatus(const BrowserQuicPolicy::Report& report)
+{
+    PRCPipeDataHead hdr={};hdr.action=PRCPD_QUIC_STATUS;hdr.flag=1;hdr.dataSize=sizeof(report);
+    return WritePipe(&hdr,sizeof(hdr))&&WritePipe(&report,sizeof(report))&&ReadPipe(&hdr,sizeof(hdr))
+        &&hdr.action==PRCPD_REPLY&&hdr.flag==1&&hdr.dataSize==0;
+}
 
 BOOL CPRCPipeClient::PRCRegisterClient(LPPRCClient lpClientInfo)
 {
@@ -240,7 +250,7 @@ BOOL CPRCPipeClient::PRCGetProxySettingsInfo(LPProxySettingsInfo lpPSI)
 		return FALSE;
 
 	if(hdr.action != PRCPD_REPLY || hdr.flag != 1 || hdr.dataSize != sizeof(*lpPSI))
-		return FALSE;
+	{ ::SetLastError(ERROR_INVALID_DATA); return FALSE; }
 
 	if(!ReadPipe(lpPSI, sizeof(*lpPSI)))
 		return FALSE;
@@ -249,18 +259,19 @@ BOOL CPRCPipeClient::PRCGetProxySettingsInfo(LPProxySettingsInfo lpPSI)
 }
 
 
-BOOL CPRCPipeClient::PRCShouldInjectNewProcess(LPHookNewProcessInfo lphnpi)
+BOOL CPRCPipeClient::PRCShouldInjectNewProcess(LPHookNewProcessInfo lphnpi, bool recordOnly)
 {
 	PRCPipeDataHead hdr;
+    const HookProcessCreationNotice notice = MakeProcessCreationNotice(*lphnpi);
 
 	hdr.action = PRCPD_SHOULD_INJECT_NEW_PROCESS;
-	hdr.flag = 0;
-	hdr.dataSize = sizeof(*lphnpi);
+	hdr.flag = recordOnly ? 1 : 0;
+	hdr.dataSize = sizeof(notice);
 
 	if(!WritePipe(&hdr, sizeof(hdr)))
 		return FALSE;
 
-	if(!WritePipe(lphnpi, sizeof(*lphnpi)))
+	if(!WritePipe(&notice, sizeof(notice)))
 		return FALSE;
 
 	if(!ReadPipe(&hdr, sizeof(hdr)))
@@ -359,10 +370,11 @@ BOOL CPRCPipeClient::PRCGetProxyInfo(LPPRCClient lpClientInfo, LPProxyInfo lpPI)
 	if(!ReadPipe(&hdr, sizeof(hdr)))
 		return FALSE;
 
-	if(hdr.action != PRCPD_REPLY || !hdr.flag || hdr.dataSize != sizeof(*lpPI))
+	if(hdr.action != PRCPD_REPLY || !hdr.flag || hdr.dataSize != PROXYINFO_PIPE_SIZE)
 		return FALSE;
 
-	if(!ReadPipe(lpPI, sizeof(*lpPI)))
+	ZeroMemory(lpPI, sizeof(*lpPI));
+	if(!ReadPipe(lpPI, PROXYINFO_PIPE_SIZE))
 		return FALSE;
 
 	return TRUE;
@@ -396,6 +408,14 @@ BOOL CPRCPipeClient::PRCLogBlockedIPv6(const HookBlockedIPv6Info& info)
 {
 	PRCPipeDataHead header = { 0 };
 	header.action = PRCPD_BLOCKED_IPV6;
+	header.dataSize = sizeof(info);
+	return WritePipe(&header, sizeof(header)) && WritePipe(&info, sizeof(info));
+}
+
+BOOL CPRCPipeClient::PRCLogBlockedUDP(const HookBlockedUdpInfo& info)
+{
+	PRCPipeDataHead header = { 0 };
+	header.action = PRCPD_BLOCKED_UDP;
 	header.dataSize = sizeof(info);
 	return WritePipe(&header, sizeof(header)) && WritePipe(&info, sizeof(info));
 }

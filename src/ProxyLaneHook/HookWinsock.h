@@ -2,11 +2,14 @@
 
 
 #include "structinfo.h"
+#include "HookFailureDiagnostics.h"
 #include "TSSTL.h"
 #include "PRCPipeClient.h"
 #include "DnsRedirectPolicy.h"
+#include "DohPolicy.h"
 #include "HookDispatch.h"
 #include "DetourHooks.h"
+#include "UdpBlockLogLimiter.h"
 
 using namespace std;
 
@@ -38,6 +41,9 @@ typedef enum
 	HOOKAPI_CreateProcessInternalW,
 	HOOKAPI_CreateProcessWithLogonW,
 
+	HOOKAPI_LoadLibraryExW,
+	HOOKAPI_send,
+	HOOKAPI_WSASend,
 	HOOKAPI_COUNT
 }eHOOKFUN; 
 
@@ -52,6 +58,9 @@ enum HookDecision
 class CGlobalProxy;
 
 class CAsyncSocketExLayer;
+
+// GetHostent is inline below and must bypass our DNS hook as well.
+hostent* WSAAPI Bypass_gethostbyname(const char* name);
 
 class CHookWinsock
 {
@@ -209,7 +218,7 @@ class CHookWinsock
 
 		hostent *GetHostent(DWORD nIP)
 		{
-			hostent *p = gethostbyname("127.0.0.1");
+			hostent *p = Bypass_gethostbyname("127.0.0.1");
 			//????
 			if (p)
 			{
@@ -443,6 +452,10 @@ class CHookWinsock
 				return HOOK_FAILED;
 			if (proxyInfo)
 				*proxyInfo = pi;
+            if (m_pHW->IsDohDnsDestination(pCI->dstAddr)) {
+                if (pi.GetProxyType() != PROXYTYPE_NOPROXY) return HOOK_REDIRECTED;
+                return HOOK_BYPASS;
+            }
 
 			// Remote-DNS mode intentionally overrides the general LAN bypass for
 			// private :53 endpoints.  PRC keeps the original address for identity
@@ -652,6 +665,8 @@ public:
 	BOOL HookWinsock();
 
 	BOOL ApplyHooks(bool attach);
+	BOOL SetHookFailure(DWORD error, const char* stage, const char* module, const char* api);
+	BOOL ReportHookFailure(CPRCPipeClient* client);
 	BOOL HookAPI(eHOOKMODUDLE ehm, eHOOKFUN ehf, char *exportfunc, LPVOID myfuncaddr, PVOID* original);
 
 	BOOL IsHostNameReserved(const char *name);
@@ -680,6 +695,8 @@ public:
 
 	int WSAAPI inhook_sendto(SOCKET s, const char* buf, int len, int flags, const struct sockaddr* to, int tolen);
 
+	void NotifyQuicUdp();
+	void NotifyConnectedQuicUdp(SOCKET s);
 	int WSAAPI inhook_WSASendTo(
 		SOCKET s,
 		LPWSABUF lpBuffers,
@@ -767,6 +784,13 @@ public:
 private:
 	ProxySettingsInfo m_psi;
 	DWORD m_ProcessCreationTls;
+	// True means the helper creation was attempted; created and GetLastError
+	// are its API result. False means continue with the original process path.
+	bool TryCreateAppLauncher(HANDLE token, LPCWSTR applicationName, LPCWSTR commandLine,
+		LPSECURITY_ATTRIBUTES processAttributes, LPSECURITY_ATTRIBUTES threadAttributes,
+		BOOL inheritHandles, DWORD creationFlags, LPVOID environment,
+		LPCWSTR currentDirectory, LPSTARTUPINFOW startup,
+		LPPROCESS_INFORMATION process, PHANDLE newToken, BOOL& created);
 	void FinishChildCreation(LPPROCESS_INFORMATION process, BOOL ownsSuspension,
 		LPCWSTR applicationName, LPCWSTR commandLine);
 
@@ -777,11 +801,16 @@ private:
 
 	MODULENAME   m_ModuleName[HOOKMODULE_COUNT];
 	HOOKSTRUCT m_HookedInfo[HOOKAPI_COUNT];
+	const char* m_HookModules[HOOKAPI_COUNT];
+	const char* m_HookApis[HOOKAPI_COUNT];
+	HookFailureDiagnostics m_hookFailure;
+	DWORD m_tlsError;
 
 
 
 	CString m_szLastError;
 	CString m_szPRCPipeName;
+	AppLauncherHostInfo m_appLauncherHost;
 	// Protect name snapshots separately from potentially blocking pipe I/O.
 	CRITICAL_SECTION m_PRCPipeNameLock;
 	CHAR m_LocalDnsHostName[256];
@@ -791,12 +820,31 @@ private:
 	CRITICAL_SECTION m_RequestPipeLock;
 	BOOL EnsureRequestPipe();
 	void LogBlockedIPv6(SOCKET socketHandle, const _SockAddr& destination);
+	void LogBlockedUDP(SOCKET socketHandle, const SOCKADDR* destination, int length);
+	BOOL IsUdpAllowedLoopback(const _SockAddr& address);
+    BOOL IsDohDnsDestination(const _SockAddr& address) {
+        if (m_psi.nDNSOption != PSI_DNSOPT_DOH || address.GetPort() != 53) return FALSE;
+        return DohPolicy::DnsDestination(address) ||
+            (address.IsIPv4() && m_DummyDNS.IsDummyIP(address.GetdwIP())) ||
+            (address.IsIPv6() && m_DummyDNS.IsDummyIPv6(address.GetAddr6()));
+    }
+    BOOL IsDohDnsRequest(const SOCKADDR* destination, int length);
+	BOOL IsUdpLoopbackDestination(SOCKET socketHandle, const SOCKADDR* destination, int length);
+	struct UdpSendTarget {
+		_SockAddr address;
+		SOCKADDR_STORAGE storage;
+		const SOCKADDR* destination;
+		int length;
+	};
+	BOOL PrepareUdpSend(SOCKET socketHandle, const SOCKADDR* destination, int length,
+		LPWSABUF buffers, DWORD count, UdpSendTarget& target,
+		BOOL validPayloadLength = TRUE);
+	CUdpBlockLogLimiter m_udpBlockLogLimiter;
 
 };
 
 // Stable bypass entry points; callers must not cache Detours trampoline addresses.
 int WSAAPI Bypass_connect(SOCKET s, const sockaddr* name, int length);
-hostent* WSAAPI Bypass_gethostbyname(const char* name);
 HANDLE WSAAPI Bypass_WSAAsyncGetHostByName(HWND window, unsigned int message,
 	const char* name, char* buffer, int length);
 int WSAAPI Bypass_sendto(SOCKET s, const char* buffer, int length, int flags,

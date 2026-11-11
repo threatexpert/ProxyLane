@@ -9,6 +9,10 @@ namespace ProxyTransportPolicy
 	{
 		info.strProxyType = TEXT("");
 		info.reserved = PROXY_TRANSPORT_PLAIN;
+        info.dohEnabled = 0;
+        info.sshAuth = 0;
+        info.strSshKeyDigest.szbuf[0] = 0;
+        SecureZeroMemory(info.strSshKeyFile.szbuf, sizeof(info.strSshKeyFile.szbuf));
 		SecureZeroMemory(info.strTransportPsk.szbuf, sizeof(info.strTransportPsk.szbuf));
 	}
 
@@ -27,6 +31,7 @@ namespace ProxyTransportPolicy
 
 	inline bool SupportsUdpProxy(int proxyType)
 	{
-		return proxyType == PROXYTYPE_SOCKS5;
+		// Direct routes still pass through the local UDP relay and monitor.
+		return proxyType == PROXYTYPE_NOPROXY || proxyType == PROXYTYPE_SOCKS5;
 	}
 }

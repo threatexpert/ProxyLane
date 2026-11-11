@@ -2,6 +2,7 @@
 #include "RecentApplications.h"
 #include "Localization.h"
 #include "IniFile.h"
+#include "ConfigStorage.h"
 #include "Base64.h"
 #include <errno.h>
 #include <shlwapi.h>
@@ -120,6 +121,7 @@ namespace
 		fields[L"Pinned"] = entry.pinned ? L"1" : L"0";
 		fields[L"Elevated"] = entry.elevated ? L"1" : L"0";
 		fields[L"LastUsed"].Format(L"%I64u", entry.lastUsed);
+		fields[L"DisplayOrder"].Format(L"%I64u", entry.displayOrder);
 		const LPCWSTR keys[] = {L"NameUtf8Base64", L"PathUtf8Base64", L"AumidUtf8Base64", L"ArgumentsUtf8Base64", L"WorkingDirectoryUtf8Base64", L"ShortcutUtf8Base64"};
 		const CString* values[] = {&entry.app.name, &entry.app.path, &entry.app.aumid, &entry.app.arguments, &entry.app.workingDirectory, &entry.shortcut};
 		size_t characters = 1;
@@ -143,6 +145,15 @@ namespace
 		errno = 0;
 		entry.lastUsed = _wcstoui64(timestamp, NULL, 10);
 		if (errno == ERANGE || entry.lastUsed == ~0ULL) return FALSE;
+		const CString order = fields[L"DisplayOrder"];
+		if (!order.IsEmpty())
+		{
+			if (order.GetLength() > 20) return FALSE;
+			for (int i = 0; i < order.GetLength(); ++i) if (order[i] < L'0' || order[i] > L'9') return FALSE;
+			errno = 0;
+			entry.displayOrder = _wcstoui64(order, NULL, 10);
+			if (errno == ERANGE || entry.displayOrder == ~0ULL) return FALSE;
+		}
 		entry.pinned = fields[L"Pinned"] == L"1";
 		entry.elevated = fields[L"Elevated"] == L"1";
 		return DecodeText(fields[L"NameUtf8Base64"], entry.app.name) &&
@@ -155,7 +166,7 @@ namespace
 	}
 	BOOL SameLaunch(const RecentApplications::Entry& a, const RecentApplications::Entry& b)
 	{
-		if (a.elevated != b.elevated) return FALSE;
+		// Elevation is the default launch preference of a target, not its identity.
 		if (!a.shortcut.IsEmpty() && a.shortcut.CompareNoCase(b.shortcut) == 0) return TRUE;
 		return a.app.path.CompareNoCase(b.app.path) == 0 && a.app.aumid.CompareNoCase(b.app.aumid) == 0 &&
 			a.app.arguments == b.app.arguments && a.app.workingDirectory.CompareNoCase(b.app.workingDirectory) == 0;
@@ -166,16 +177,37 @@ namespace
 			return a.pinned != b.pinned ? a.pinned > b.pinned : a.lastUsed > b.lastUsed;
 		});
 	}
+	void MergeLaunchModes(std::vector<RecentApplications::Entry>& entries)
+	{
+		// Old versions stored ordinary/elevated launches separately. Choose the
+		// first displayed tile as the stable anchor (pinned tiles come first),
+		// but take the launch data and preference from the most recently used one.
+		RecentApplications::SortForDisplay(entries);
+		for (size_t i = 0; i < entries.size(); ++i)
+		{
+			for (size_t j = i + 1; j < entries.size();)
+			{
+				if (!SameLaunch(entries[i], entries[j])) { ++j; continue; }
+				if (entries[j].lastUsed > entries[i].lastUsed)
+				{
+					const CString id = entries[i].id;
+					const BOOL pinned = entries[i].pinned;
+					const ULONGLONG order = entries[i].displayOrder;
+					entries[i] = entries[j];
+					entries[i].id = id;
+					entries[i].pinned = pinned;
+					entries[i].displayOrder = order;
+				}
+				entries.erase(entries.begin() + j);
+			}
+		}
+		Sort(entries);
+	}
 }
 
 CString RecentApplications::DefaultPath()
 {
-	CIniFile ini; ini.SetIniFileName(L"");
-	CString path = ini.GetIniFileName();
-#ifdef _WIN64
-	if (path.Right(6).CompareNoCase(L"64.ini") == 0) path = path.Left(path.GetLength() - 6) + L".ini";
-#endif
-	return path;
+	return Localization::SettingsPath();
 }
 
 RecentApplications::Entry RecentApplications::FromApplication(const InstalledApplications::Application& app, BOOL elevated)
@@ -213,26 +245,24 @@ HICON RecentApplications::LoadIcon(const Entry& entry)
 		LPITEMIDLIST item = NULL;
 		if (SUCCEEDED(SHParseDisplayName(L"shell:AppsFolder\\" + entry.app.aumid, NULL, &item, 0, NULL)))
 		{
-			SHGetFileInfo(reinterpret_cast<LPCTSTR>(item), 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_ICON | SHGFI_SMALLICON);
+			SHGetFileInfo(reinterpret_cast<LPCTSTR>(item), 0, &info, sizeof(info), SHGFI_PIDL | SHGFI_ICON | SHGFI_LARGEICON);
 			CoTaskMemFree(item);
 		}
 	}
 	else if (entry.available && !PathIsUNC(entry.app.path))
-		SHGetFileInfo(entry.app.path, 0, &info, sizeof(info), SHGFI_ICON | SHGFI_SMALLICON);
+		SHGetFileInfo(entry.app.path, 0, &info, sizeof(info), SHGFI_ICON | SHGFI_LARGEICON);
 	if (!info.hIcon) SHGetFileInfo(L"app.exe", FILE_ATTRIBUTE_NORMAL, &info, sizeof(info),
-		SHGFI_USEFILEATTRIBUTES | SHGFI_ICON | SHGFI_SMALLICON);
+		SHGFI_USEFILEATTRIBUTES | SHGFI_ICON | SHGFI_LARGEICON);
 	return info.hIcon;
 }
 
-CString RecentApplications::Description(const Entry& entry, const CString& profile)
+CString RecentApplications::Description(const Entry& entry)
 {
 	CString text = entry.app.name + L"\r\n" + InstalledApplications::LaunchTargetAndArguments(entry.app);
 	if (!entry.available) text += L"\r\n" + Localization::Get(L"recent.unavailable_hint");
 	if (!entry.shortcut.IsEmpty()) text += L"\r\n" + entry.shortcut;
 	if (!entry.app.workingDirectory.IsEmpty()) text += L"\r\n" + Localization::Get(L"apps.working_directory") + L": " + entry.app.workingDirectory;
 	if (entry.elevated) text += L"\r\n" + Localization::Get(L"recent.elevated");
-	text += L"\r\n" + (profile.IsEmpty() ? Localization::Get(L"page3.start_proxy_first") :
-		Localization::Format(L"recent.profile", static_cast<LPCTSTR>(profile)));
 	return text;
 }
 
@@ -246,20 +276,21 @@ BOOL RecentApplications::EnsureProfileId(const CString& profile, CString& id, co
 
 BOOL RecentApplications::DeleteProfile(const CString& profile, const CString& path)
 {
-	HistoryLock lock(path);
-	if (!lock.Valid()) return FALSE;
-	CIniFile ini; ini.SetIniFileName(path);
-	CString id;
-	if (!BindProfile(ini, profile, id, FALSE)) return FALSE;
-	if (!id.IsEmpty())
-	{
-		std::list<CString> sections;
-		if (ini.GetSectionList(sections) < 0) return FALSE;
-		const CString prefix = Prefix(id);
-		for (std::list<CString>::const_iterator i = sections.begin(); i != sections.end(); ++i)
-			if (i->Left(prefix.GetLength()).CompareNoCase(prefix) == 0 && !ini.DeleteSection(*i)) return FALSE;
-	}
-	return ini.DeleteSection(L"proxy_" + profile);
+ HistoryLock lock(path); if (!lock.Valid()) return FALSE;
+ CString id;
+ bool saved = ConfigStorage::Update(path, [&](const CString& stage) {
+  CIniFile ini; ini.SetIniFileName(stage); ini.staging = true;
+  if (!BindProfile(ini, profile, id, FALSE)) return false;
+  if (!id.IsEmpty()) {
+   std::list<CString> sections; if (ini.GetSectionList(sections) < 0) return false;
+   const CString prefix = Prefix(id);
+   for (const auto& section : sections)
+    if (section.Left(prefix.GetLength()).CompareNoCase(prefix) == 0 && !ini.DeleteSection(section)) return false;
+  }
+  return ini.DeleteSection(L"proxy_" + profile) != FALSE;
+ });
+ if (saved) InvalidateCache(path, id, TRUE);
+ return saved;
 }
 
 BOOL RecentApplications::Store::ReadBound(std::vector<Entry>& entries, CString& identity, BOOL create) const
@@ -288,7 +319,26 @@ BOOL RecentApplications::Store::ReadBound(std::vector<Entry>& entries, CString& 
 		// after writing but before trimming the oldest entry.
 		if (loaded.size() > kMaxEntries + 1) { SetLastError(ERROR_BUFFER_OVERFLOW); return FALSE; }
 	}
-	Sort(loaded); entries.swap(loaded);
+	Sort(loaded);
+	// Legacy histories acquire the order in which they were previously displayed.
+	ULONGLONG order = 0;
+	for (size_t i = 0; i < loaded.size(); ++i) order = max(order, loaded[i].displayOrder);
+	if (order > ~0ULL - 512)
+	{
+		// Rebase unusually large counters before assigning legacy/new positions.
+		std::stable_sort(loaded.begin(), loaded.end(), [](const Entry& a, const Entry& b) {
+			if (!a.displayOrder || !b.displayOrder) return a.displayOrder > b.displayOrder;
+			return a.displayOrder < b.displayOrder;
+		});
+		order = 0;
+		for (size_t i = 0; i < loaded.size(); ++i) loaded[i].displayOrder = ++order;
+		Sort(loaded);
+	}
+	for (size_t i = 0; i < loaded.size(); ++i) if (!loaded[i].displayOrder) loaded[i].displayOrder = ++order;
+	// Read-only migration also keeps old duplicates out of both UI consumers.
+	// The next history mutation writes the merged records and removes old sections.
+	MergeLaunchModes(loaded);
+	entries.swap(loaded);
 	return TRUE;
 }
 
@@ -324,6 +374,7 @@ BOOL RecentApplications::Store::Write(const std::vector<Entry>& entries, const C
 		for (size_t j = 0; j < entries.size() && !retain; ++j) retain = i->CompareNoCase(prefix + entries[j].id) == 0;
 		if (!retain && !ini.DeleteSection(*i)) return FALSE;
 	}
+	InvalidateCache(m_path, identity, FALSE, &entries);
 	return TRUE;
 }
 
@@ -338,6 +389,9 @@ BOOL RecentApplications::Store::Remember(Entry entry) const
 	if (!entry.profileId.IsEmpty() && entry.profileId != identity)
 	{ SetLastError(ERROR_INVALID_DATA); return FALSE; }
 	entry.profileId = identity;
+	entry.displayOrder = 0;
+	ULONGLONG nextOrder = 1;
+	for (size_t i = 0; i < entries.size(); ++i) nextOrder = max(nextOrder, entries[i].displayOrder + 1);
 	FILETIME now; GetSystemTimeAsFileTime(&now);
 	entry.lastUsed = (static_cast<ULONGLONG>(now.dwHighDateTime) << 32) | now.dwLowDateTime;
 	for (size_t i = 0; i < entries.size();)
@@ -346,12 +400,14 @@ BOOL RecentApplications::Store::Remember(Entry entry) const
 		if ((!entry.id.IsEmpty() && entry.id == entries[i].id) || SameLaunch(entry, entries[i]))
 		{
 			entry.id = entries[i].id; entry.pinned = entries[i].pinned;
+			entry.displayOrder = entries[i].displayOrder;
 			entries.erase(entries.begin() + i);
 		}
 		else ++i;
 	}
 	if (entry.id.IsEmpty()) entry.id = NewId();
 	if (!ValidId(entry.id)) { SetLastError(ERROR_INVALID_DATA); return FALSE; }
+	if (!entry.displayOrder) entry.displayOrder = nextOrder;
 	entries.push_back(entry); Sort(entries);
 	int recent = 0;
 	for (size_t i = 0; i < entries.size();)
@@ -378,7 +434,51 @@ BOOL RecentApplications::Store::Change(const CString& id, BOOL remove, BOOL pinn
 		}
 	SetLastError(ERROR_NOT_FOUND); return FALSE;
 }
+BOOL RecentApplications::Store::Move(const CString& id, int direction) const
+{
+	if (direction != -1 && direction != 1) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+	HistoryLock lock(m_path);
+	if (!lock.Valid()) return FALSE;
+	std::vector<Entry> entries; CString identity;
+	if (!ReadBound(entries, identity, FALSE)) return FALSE;
+	SortForDisplay(entries);
+	for (size_t i = 0; i < entries.size(); ++i)
+	{
+		if (entries[i].id != id) continue;
+		const int next = static_cast<int>(i) + direction;
+		// Fixed items stay ahead of ordinary items. Moves are within each group.
+		if (next < 0 || next >= static_cast<int>(entries.size()) || entries[i].pinned != entries[next].pinned) return TRUE;
+		std::swap(entries[i], entries[next]);
+		for (size_t j = 0; j < entries.size(); ++j) entries[j].displayOrder = j + 1;
+		Sort(entries); // Preserve MRU/eviction behavior independently of presentation.
+		return Write(entries, identity);
+	}
+	SetLastError(ERROR_NOT_FOUND); return FALSE;
+}
+
 BOOL RecentApplications::Store::SetPinned(const CString& id, BOOL pinned) const { return Change(id, FALSE, pinned); }
+BOOL RecentApplications::Store::MoveTo(const CString& id, const CString& targetId) const
+{
+	HistoryLock lock(m_path);
+	if (!lock.Valid()) return FALSE;
+	std::vector<Entry> entries; CString identity;
+	if (!ReadBound(entries, identity, FALSE)) return FALSE;
+	SortForDisplay(entries);
+	size_t from = entries.size(), to = entries.size();
+	for (size_t i = 0; i < entries.size(); ++i) {
+		if (entries[i].id == id) from = i;
+		if (entries[i].id == targetId) to = i;
+	}
+	if (from == entries.size() || to == entries.size()) { SetLastError(ERROR_NOT_FOUND); return FALSE; }
+	if (entries[from].pinned != entries[to].pinned) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+	if (from == to) return TRUE;
+	const Entry moving = entries[from];
+	entries.erase(entries.begin() + from);
+	entries.insert(entries.begin() + to, moving);
+	for (size_t i = 0; i < entries.size(); ++i) entries[i].displayOrder = i + 1;
+	Sort(entries);
+	return Write(entries, identity);
+}
 BOOL RecentApplications::Store::Remove(const CString& id) const { return Change(id, TRUE, FALSE); }
 
 BOOL RecentApplications::MatchesCatalog(const Entry& entry, const InstalledApplications::Application& app)
@@ -404,6 +504,16 @@ void RecentApplications::ReleaseIcons(std::vector<Entry>& entries)
 		if (entries[i].app.icon) { DestroyIcon(entries[i].app.icon); entries[i].app.icon = NULL; }
 }
 
+void RecentApplications::Clone(const std::vector<Entry>& source, std::vector<Entry>& destination, size_t limit)
+{
+	std::vector<Entry> copy(source.begin(), source.begin() + min(source.size(), limit));
+	for (size_t i = 0; i < copy.size(); ++i) copy[i].app.icon = NULL;
+	for (size_t i = 0; i < copy.size(); ++i)
+		if (source[i].app.icon) copy[i].app.icon = CopyIcon(source[i].app.icon);
+	ReleaseIcons(destination);
+	destination.swap(copy);
+}
+
 RecentApplications::Load::Load(const CString& profileName, const CString& filePath, const CString& identity)
 	: path(filePath), profile(profileName), profileId(identity), references(1), cancel(CreateEvent(NULL, TRUE, FALSE, NULL)), done(FALSE), succeeded(FALSE)
 { InitializeCriticalSection(&lock); }
@@ -426,6 +536,7 @@ static UINT ValidateRecentApplications(LPVOID parameter)
 	{
 		std::vector<RecentApplications::Entry> saved;
 		success = SUCCEEDED(initialized) && RecentApplications::Store(load->profile, load->path, load->profileId).Read(saved);
+		RecentApplications::SortForDisplay(saved);
 		for (size_t i = 0; success && i < saved.size() && WaitForSingleObject(load->cancel, 0) != WAIT_OBJECT_0; ++i)
 		{
 			InstalledApplications::Application resolved;
@@ -466,4 +577,12 @@ RecentApplications::Load* RecentApplications::BeginLoad(const CString& profile, 
 		load->Release(); load->done = TRUE;
 	}
 	return load;
+}
+
+void RecentApplications::SortForDisplay(std::vector<Entry>& entries)
+{
+	std::stable_sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
+		if (a.pinned != b.pinned) return a.pinned > b.pinned;
+		return a.displayOrder != b.displayOrder ? a.displayOrder < b.displayOrder : a.id < b.id;
+	});
 }

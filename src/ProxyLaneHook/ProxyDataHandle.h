@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ProxyModule.h"
+#include "ProxyMonitor.h"
 
 class CProxyDataHandle
 	: public IProxyDataHandle
@@ -17,6 +18,7 @@ public:
 
 	void OnConnect(LPProxyPacketInfo lpppi)
 	{
+		CProxyMonitor::Instance().RecordPacket(lpppi, 5, lpppi->errcode ? "Connection failed" : "Connected");
 		IProxyDataHandle *p = IProxyDataHandle::m_pNext;
 		while(p)
 		{
@@ -27,6 +29,14 @@ public:
 
 	void OnEachPacket(LPProxyPacketInfo lpppi)
 	{
+		DispatchPacket(lpppi, true);
+	}
+
+	// A MITM session supplies classified plaintext/passthrough monitor events.
+	// Other observers still receive the original network packets unchanged.
+	void DispatchPacket(LPProxyPacketInfo lpppi, bool monitor)
+	{
+		if (monitor) CProxyMonitor::Instance().RecordPacket(lpppi, lpppi->datafrom ? 4 : 3);
 		IProxyDataHandle *p = IProxyDataHandle::m_pNext;
 		while(p)
 		{
@@ -37,6 +47,7 @@ public:
 
 	void OnClose(LPProxyPacketInfo lpppi)
 	{
+		CProxyMonitor::Instance().RecordPacket(lpppi, 5, "Closed");
 		IProxyDataHandle *p = IProxyDataHandle::m_pNext;
 		while(p)
 		{

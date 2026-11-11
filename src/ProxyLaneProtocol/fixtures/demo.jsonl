@@ -1,0 +1,33 @@
+{"type": "open", "protocol": "http1", "connection": {"id": "fixture-http1", "pid": 1234, "process_start": 987654321, "socket": 1680, "generation": 18, "destination": "example.test:8443"}}
+{"type": "data", "connection_id": "fixture-http1", "direction": "client", "offset": 0, "data_base64": "UE9TVCAvZWNobyBIVFRQLzEuMQ0KSG9zdDogZXhhbXBsZS50ZXN0DQpDb250ZW50LUVuY29kaW5nOiBnemlwDQpDb250ZW50LUxlbmd0aDogOTINCg0KH4sIAAAAAAACCqtWyk0tLk5MT1WyUgooyq+o9EnMS1V42tv/Yt26F/tnPO2b/3JVz4v1jUo6SpklqbnFSlbRhjpGOsaxtVzVo1pHtY5qHdVKK60AXCxGzZwEAAA="}
+{"type": "data", "connection_id": "fixture-http1", "direction": "server", "offset": 0, "data_base64": "SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IGFwcGxpY2F0aW9uL2pzb24NCkNvbnRlbnQtRW5jb2Rpbmc6IGd6aXANClRyYW5zZmVyLUVuY29kaW5nOiBjaHVua2VkDQoNCg=="}
+{"type": "data", "connection_id": "fixture-http1", "direction": "server", "offset": 103, "data_base64": "Yjt0ZXN0PTENCh+LCAAAAAAAAgqrDQo="}
+{"type": "data", "connection_id": "fixture-http1", "direction": "server", "offset": 126, "data_base64": "Yjt0ZXN0PTENClbKTS0uTkxPVbJSDQo="}
+{"type": "data", "connection_id": "fixture-http1", "direction": "server", "offset": 149, "data_base64": "Yjt0ZXN0PTENCgooyq+o9EnMS1V4DQo="}
+{"type": "data", "connection_id": "fixture-http1", "direction": "server", "offset": 172, "data_base64": "Yjt0ZXN0PTENCtrb/2Lduhf7ZzztDQo="}
+{"type": "data", "connection_id": "fixture-http1", "direction": "server", "offset": 195, "data_base64": "Yjt0ZXN0PTENCpv/clXPi/WNSjpKDQo="}
+{"type": "data", "connection_id": "fixture-http1", "direction": "server", "offset": 218, "data_base64": "Yjt0ZXN0PTENCpklqbnFSlbRhjpGDQo="}
+{"type": "data", "connection_id": "fixture-http1", "direction": "server", "offset": 241, "data_base64": "Yjt0ZXN0PTENCjrGsbVc1aNaR7WODQo="}
+{"type": "data", "connection_id": "fixture-http1", "direction": "server", "offset": 264, "data_base64": "Yjt0ZXN0PTENCmod1UorrQBcLEbNDQo="}
+{"type": "data", "connection_id": "fixture-http1", "direction": "server", "offset": 287, "data_base64": "NDt0ZXN0PTENCpwEAAANCg=="}
+{"type": "data", "connection_id": "fixture-http1", "direction": "server", "offset": 303, "data_base64": "MA0KWC1DaGVja3N1bTogZml4dHVyZQ0KDQo="}
+{"type": "eof", "connection_id": "fixture-http1", "direction": "client", "clean": true}
+{"type": "eof", "connection_id": "fixture-http1", "direction": "server", "clean": true}
+{"type": "close", "connection_id": "fixture-http1"}
+{"type": "open", "protocol": "h2", "connection": {"id": "fixture-h2", "pid": 1234, "process_start": 987654321, "socket": 1680, "generation": 18, "destination": "example.test:8443"}}
+{"type": "data", "connection_id": "fixture-h2", "direction": "client", "offset": 0, "data_base64": "UFJJICogSFRUUC8yLjANCg0KU00NCg0KAAAqBAAAAAAAAAEAABAAAAIAAAABAAQAAP//AAUAAEAAAAgAAAAAAAMAAABkAAYAAQAA"}
+{"type": "data", "connection_id": "fixture-h2", "direction": "server", "offset": 0, "data_base64": "AAAqBAAAAAAAAAEAABAAAAIAAAAAAAQAAP//AAUAAEAAAAgAAAAAAAMAAABkAAYAAQAAAAAABAEAAAAA"}
+{"type": "data", "connection_id": "fixture-h2", "direction": "client", "offset": 75, "data_base64": "AAAABAEAAAAA"}
+{"type": "data", "connection_id": "fixture-h2", "direction": "server", "offset": 60, "data_base64": "AAAGBAAAAAAAAAEAAAAA"}
+{"type": "data", "connection_id": "fixture-h2", "direction": "client", "offset": 84, "data_base64": "AAAABAEAAAAA"}
+{"type": "data", "connection_id": "fixture-h2", "direction": "client", "offset": 93, "data_base64": "AAAGBAAAAAAAAAEAAAAA"}
+{"type": "data", "connection_id": "fixture-h2", "direction": "server", "offset": 75, "data_base64": "AAAABAEAAAAA"}
+{"type": "data", "connection_id": "fixture-h2", "direction": "server", "offset": 84, "data_base64": "AAAGBAAAAAAAAAEAACAA"}
+{"type": "data", "connection_id": "fixture-h2", "direction": "client", "offset": 108, "data_base64": "AAAABAEAAAAA"}
+{"type": "data", "connection_id": "fixture-h2", "direction": "client", "offset": 117, "data_base64": "AAAGBAAAAAAAAAEAACAA"}
+{"type": "data", "connection_id": "fixture-h2", "direction": "server", "offset": 99, "data_base64": "AAAABAEAAAAA"}
+{"type": "data", "connection_id": "fixture-h2", "direction": "client", "offset": 132, "data_base64": "AABNAQQAAAABID/hP4OHQY0vkdNdBV0lQm4800z/RIRgpJz/QIbysicdhZOgQOkqncdFpVBksOhCiE2FHShSU9imPXDezKGqkL5NVN9ag/aEyVyCde8AAE4AAQAAAAEotS/9YJwDJQIAtAN7Im1lc3NhZ2UiOiJQcm94eUxhbmUg5Y2P6K6u6L+Y5Y6f6aqM6K+BIiwiaXRlbXMiOlsxLDIsM119CgEA64X/FRQAAAsBBQAAAAOCh8JEhWEFIeqTwQ=="}
+{"type": "data", "connection_id": "fixture-h2", "direction": "server", "offset": 108, "data_base64": "AAAeAQQAAAABID/hP0iCCBltlP/4whPqgq5EI/7+1LC0QV2FoOOTAABAAQQAAAABiF+LHXXQYg0mPUx0Qepag/aEyVyCde9AhvKyJx2Fk6BA6Sqdx0WlUGSw6EKITYUdKFJT2KY9cN7MoaqQvk1U3wAABQEEAAAAA4jBwL++AAAnAAAAAAADKLUv/WCcAyUCALQDeyJtZXNzYWdlIjoiUHJveHlMYW5lIOWNj+iuAAAnAAAAAAABKLUv/WCcAyUCALQDeyJtZXNzYWdlIjoiUHJveHlMYW5lIOWNj+iuAAAnAAAAAAADrui/mOWOn+mqjOivgSIsIml0ZW1zIjpbMSwyLDNdfQoBAOuF/xUUAAAQAQUAAAADQIjysScpOqLaf4WU3lNthQAAJwAAAAAAAa7ov5jljp/pqozor4EiLCJpdGVtcyI6WzEsMiwzXX0KAQDrhf8VFAAAAQEFAAAAAb4="}
+{"type": "eof", "connection_id": "fixture-h2", "direction": "client", "clean": true}
+{"type": "eof", "connection_id": "fixture-h2", "direction": "server", "clean": true}
+{"type": "close", "connection_id": "fixture-h2"}

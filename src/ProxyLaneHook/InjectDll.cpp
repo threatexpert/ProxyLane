@@ -1,4 +1,4 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include "InjectDll.h"
 #include "InjectDllArm64.h"
 #include "ProcessArchitecture.h"
@@ -39,28 +39,17 @@ FARPROC get_proc_address2(void* hDll, LPCSTR fname)
 
 #if defined(_M_ARM64) && !defined(_M_ARM64EC)
 
-int InjectDll(HANDLE process, HANDLE thread, LPCSTR dll, LPCSTR pipe)
+int InjectDll(HANDLE process, HANDLE thread, LPCWSTR dll, LPCSTR pipe)
 {
-	if (!dll) { SetLastError(ERROR_INVALID_PARAMETER); return -1; }
-	WCHAR path[32768];
-	if (!MultiByteToWideChar(CP_ACP, 0, dll, -1, path, _countof(path))) return -1;
-	return InjectDllArm64W(process, thread, path, pipe);
+	return InjectDllArm64W(process, thread, dll, pipe);
 }
 
 #elif defined(_M_X64) && !defined(_M_ARM64EC)
 
-unsigned char sc_ldr[112] = {
-	0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x48, 0x83, 0xC1, 0x34, 0xFF, 0x13, 0x48,
-	0x85, 0xC0, 0x74, 0x27, 0x48, 0x8D, 0x93, 0x38, 0x01, 0x00, 0x00, 0x80, 0x3A, 0x00, 0x74, 0x14,
-	0x48, 0x8B, 0xC8, 0xFF, 0x53, 0x08, 0x48, 0x85, 0xC0, 0x74, 0x10, 0x48, 0x8B, 0x8B, 0x78, 0x01,
-	0x00, 0x00, 0xFF, 0xD0, 0xC7, 0x43, 0x30, 0x01, 0x00, 0x00, 0x00, 0x48, 0x8B, 0x4B, 0x28, 0x48,
-	0x85, 0xC9, 0x74, 0x0A, 0xFF, 0x53, 0x18, 0x48, 0x8B, 0x4B, 0x28, 0xFF, 0x53, 0x20, 0x83, 0x7B,
-	0x30, 0x01, 0x75, 0x0F, 0x80, 0xBB, 0x80, 0x01, 0x00, 0x00, 0x00, 0x75, 0x06, 0x83, 0xC9, 0xFF,
-	0xFF, 0x53, 0x10, 0x48, 0x8B, 0x83, 0x88, 0x01, 0x00, 0x00, 0x48, 0x83, 0xC4, 0x20, 0x5B, 0xC3
-};
+#include "../remotecode/remoteCode.x64.inc"
 
 
-int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
+int InjectDll(HANDLE hProc, HANDLE hThread, LPCWSTR lpMyDll, LPCSTR lpszPipeName)
 {
 	if (!ProcessArchitecture::RequireDirectInjection(hProc)) return -1;
 	int bOK(-1);
@@ -68,13 +57,19 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 	ZeroMemory(&param_myapi, sizeof(param_myapi));
 
 	HMODULE hKernel = GetModuleHandleA("kernel32.dll");
-	*(FARPROC*)&param_myapi.LoadLibraryA = get_proc_address2(hKernel, "LoadLibraryA");
+	*(FARPROC*)&param_myapi.LoadLibraryW = get_proc_address2(hKernel, "LoadLibraryW");
 	*(FARPROC*)&param_myapi.GetProcAddress = get_proc_address2(hKernel, "GetProcAddress");
 	*(FARPROC*)&param_myapi.Sleep = get_proc_address2(hKernel, "Sleep");
 	*(FARPROC*)&param_myapi.SetEvent = get_proc_address2(hKernel, "SetEvent");
 	*(FARPROC*)&param_myapi.CloseHandle = get_proc_address2(hKernel, "CloseHandle");
-	//WideCharToMultiByte(0, 0, lpMyDll, -1, param_myapi.szMyDll, MAX_PATH, 0, 0);
-	strcpy(param_myapi.szMyDll, lpMyDll);
+	*(FARPROC*)&param_myapi.GetLastError = get_proc_address2(hKernel, "GetLastError");
+	*(FARPROC*)&param_myapi.FormatMessageA = get_proc_address2(hKernel, "FormatMessageA");
+	*(FARPROC*)&param_myapi.OutputDebugStringA = get_proc_address2(hKernel, "OutputDebugStringA");
+    strcpy_s(param_myapi.loadFailureFormat,
+        "[ProxyLane.Loader.v1] stage=LoadLibraryW error=%1!08X!\n");
+    if (!lpMyDll || wcslen(lpMyDll) >= _countof(param_myapi.szMyDll))
+        return -1;
+    wcscpy_s(param_myapi.szMyDll, lpMyDll);
 	strcpy(param_myapi.szMyEntry, "gp_HookWinsock");
 	param_myapi.noSleep = true;
 
@@ -189,19 +184,10 @@ __CleanUp:
 
 #elif defined(_M_IX86)
 
-static unsigned char sc_ldr[116] = {
-	0x55, 0x8B, 0xEC, 0x56, 0x8B, 0x75, 0x08, 0x8D, 0x46, 0x1C, 0x50, 0x8B, 0x06, 0xFF, 0xD0, 0x8B,
-	0xC8, 0x85, 0xC9, 0x74, 0x29, 0x80, 0xBE, 0x20, 0x01, 0x00, 0x00, 0x00, 0x8D, 0x86, 0x20, 0x01,
-	0x00, 0x00, 0x74, 0x13, 0x50, 0x8B, 0x46, 0x04, 0x51, 0xFF, 0xD0, 0x85, 0xC0, 0x74, 0x0F, 0xFF,
-	0xB6, 0x60, 0x01, 0x00, 0x00, 0xFF, 0xD0, 0xC7, 0x46, 0x18, 0x01, 0x00, 0x00, 0x00, 0x8B, 0x46,
-	0x14, 0x85, 0xC0, 0x74, 0x0E, 0x50, 0x8B, 0x46, 0x0C, 0xFF, 0xD0, 0xFF, 0x76, 0x14, 0x8B, 0x46,
-	0x10, 0xFF, 0xD0, 0x83, 0x7E, 0x18, 0x01, 0x75, 0x10, 0x80, 0xBE, 0x64, 0x01, 0x00, 0x00, 0x00,
-	0x75, 0x07, 0x8B, 0x4E, 0x08, 0x6A, 0xFF, 0xFF, 0xD1, 0x8B, 0x86, 0x68, 0x01, 0x00, 0x00, 0x5E,
-	0x5D, 0xC2, 0x04, 0x00
-};
+#include "../remotecode/remoteCode.x86.inc"
 
 
-int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
+int InjectDll(HANDLE hProc, HANDLE hThread, LPCWSTR lpMyDll, LPCSTR lpszPipeName)
 {
 	if (!ProcessArchitecture::RequireDirectInjection(hProc)) return -1;
 	int bOK(-1);
@@ -209,13 +195,19 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCSTR lpMyDll, LPCSTR lpszPipeName)
 	ZeroMemory(&param_myapi, sizeof(param_myapi));
 
 	HMODULE hKernel = GetModuleHandleA("kernel32.dll");
-	*(FARPROC*)&param_myapi.LoadLibraryA = get_proc_address2(hKernel, "LoadLibraryA");
+	*(FARPROC*)&param_myapi.LoadLibraryW = get_proc_address2(hKernel, "LoadLibraryW");
 	*(FARPROC*)&param_myapi.GetProcAddress = get_proc_address2(hKernel, "GetProcAddress");
 	*(FARPROC*)&param_myapi.Sleep = get_proc_address2(hKernel, "Sleep");
 	*(FARPROC*)&param_myapi.SetEvent = get_proc_address2(hKernel, "SetEvent");
 	*(FARPROC*)&param_myapi.CloseHandle = get_proc_address2(hKernel, "CloseHandle");
-	//WideCharToMultiByte(0, 0, lpMyDll, -1, param_myapi.szMyDll, MAX_PATH, 0, 0);
-	strcpy(param_myapi.szMyDll, lpMyDll);
+	*(FARPROC*)&param_myapi.GetLastError = get_proc_address2(hKernel, "GetLastError");
+	*(FARPROC*)&param_myapi.FormatMessageA = get_proc_address2(hKernel, "FormatMessageA");
+	*(FARPROC*)&param_myapi.OutputDebugStringA = get_proc_address2(hKernel, "OutputDebugStringA");
+    strcpy_s(param_myapi.loadFailureFormat,
+        "[ProxyLane.Loader.v1] stage=LoadLibraryW error=%1!08X!\n");
+    if (!lpMyDll || wcslen(lpMyDll) >= _countof(param_myapi.szMyDll))
+        return -1;
+    wcscpy_s(param_myapi.szMyDll, lpMyDll);
 	strcpy(param_myapi.szMyEntry, "gp_HookWinsock");
 	param_myapi.noSleep = true;
 

@@ -6,7 +6,9 @@
 #include "stdafx.h"
 #include "ProxyTaskMgr.h"
 #include "PRCTcpPeer.h"
+#include "MitmBridge.h"
 #include "ProxyLog.h"
+#include "DohPolicy.h"
 //#include "PRCUdpPeer.h"
 
 #define TIMER_TCPPERTASK 100
@@ -111,7 +113,7 @@ CProxyTCPTaskMgr::~CProxyTCPTaskMgr(void)
 
 
 BOOL CProxyTCPTaskMgr::OnNewTask(SOCKET sClient, LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo,
-	IProxyLog::ConnectionStage& stage)
+	IProxyLog::ConnectionStage& stage, const ProxyChain *lpChain)
 {
 	stage = IProxyLog::STAGE_ALLOCATE;
 	CTcpProxyTask *pTask = new CTcpProxyTask(this);
@@ -121,7 +123,7 @@ BOOL CProxyTCPTaskMgr::OnNewTask(SOCKET sClient, LPPRCClient lpPRCClient, LPProx
 		return FALSE;
 	}
 
-	if(!pTask->SetTaskInfo(sClient, lpPRCClient, lpProxyInfo, stage))
+	if(!pTask->SetTaskInfo(sClient, lpPRCClient, lpProxyInfo, stage, lpChain))
 	{
 		const int error = WSAGetLastError();
 		delete pTask;
@@ -168,6 +170,28 @@ VOID CProxyTCPTaskMgr::RemoveAllTasks()
 	m_tasklist.clear();
 }
 
+DWORD CProxyTCPTaskMgr::PrepareReconnect(BOOL decrypt)
+{
+    (void)decrypt;
+    CTSList<CTcpProxyTask*>::critical lc = m_tasklist;
+    DWORD count = 0;
+    for (auto task : m_tasklist) {
+        // A new monitoring run cannot resume any TCP capture across a gap,
+        // including TLS bridges kept alive after stopping the previous run.
+        task->m_reconnectSelected = !task->IsDeletePending() && !task->m_reconnectPending;
+        if (task->m_reconnectSelected) ++count;
+    }
+    return count;
+}
+void CProxyTCPTaskMgr::CompleteReconnect(BOOL disconnect)
+{
+    CTSList<CTcpProxyTask*>::critical lc = m_tasklist;
+    for (auto task : m_tasklist) {
+        if (task->m_reconnectSelected && disconnect) task->m_reconnectPending = true;
+        task->m_reconnectSelected = false;
+    }
+}
+
 VOID CProxyTCPTaskMgr::OnTimer(UINT_PTR nIDEvent)
 {
 	switch(nIDEvent)
@@ -178,7 +202,14 @@ VOID CProxyTCPTaskMgr::OnTimer(UINT_PTR nIDEvent)
 			for(list<CTcpProxyTask*>::iterator it = m_tasklist.begin(); it!=m_tasklist.end(); )
 			{
 				CTcpProxyTask *pObj = *it;
-				if(pObj->m_pClient && pObj->m_pClient->GetSocketHandle() != INVALID_SOCKET)
+                if (pObj->m_reconnectPending) {
+                    pObj->EndTask();
+                    OnDelTask(&pObj->m_PRCClient);
+                    it = m_tasklist.erase(it);
+                    delete pObj;
+                    continue;
+                }
+                if(pObj->m_pClient && pObj->m_pClient->GetSocketHandle() != INVALID_SOCKET)
 					pObj->m_pClient->OnTimer();
 				if(pObj->m_pServer && pObj->m_pServer->GetSocketHandle() != INVALID_SOCKET)
 					pObj->m_pServer->OnTimer();
@@ -349,7 +380,7 @@ BOOL CProxyUDPTaskMgr::OnNewTask(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInf
 {
 	if (!lpPRCClient || !lpProxyInfo)
 		return FALSE;
-	if (!CanStartUdpAssociation(lpProxyInfo))
+	if (!DohPolicy::Intercept(*lpPRCClient, *lpProxyInfo) && !CanStartUdpAssociation(lpProxyInfo))
 		return FALSE;
 	CTSList<CUdpProxyTask*>::critical lc = m_tasklist;
 	for(list<CUdpProxyTask*>::iterator it = m_tasklist.begin(); it != m_tasklist.end(); )
@@ -460,7 +491,7 @@ INT  CProxyUDPTaskMgr::KillTasks(LPPRCClient lpPRCClient)
 			pObj->m_PRCClient.s == lpPRCClient->s)
 		{
 			ClearTaskPortStates(pObj);
-			pObj->CloseTask();
+			pObj->CloseTask("application socket closed");
 			nCount ++;
 		}
 	}
@@ -475,6 +506,7 @@ VOID CProxyUDPTaskMgr::RemoveAllTasks()
 	{
 		CUdpProxyTask *pObj = m_tasklist.front();
 		m_tasklist.pop_front();
+		pObj->CloseTask("proxy stopped");
 		RemoveTask(pObj);
 	}
 	KillTimer(TIMER_TCPPERTASK);
@@ -555,6 +587,7 @@ VOID CProxyUDPTaskMgr::OnTimer(UINT_PTR nIDEvent)
 				if (!TestTaskByPid(pObj->m_PRCClient.dwPid,
 					pObj->m_PRCClient.processCreateTime))
 				{
+					pObj->CloseTask("application process exited");
 					it = m_tasklist.erase(it);
 					RemoveTask(pObj);
 				}else if (pObj->IsClosed())

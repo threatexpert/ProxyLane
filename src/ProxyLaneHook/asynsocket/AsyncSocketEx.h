@@ -159,8 +159,14 @@ public:
 	virtual BOOL Connect(LPCSTR lpszHostAddress, UINT nHostPort);
 	virtual BOOL Connect( const SOCKADDR* lpSockAddr, int nSockAddrLen );
 
-	BOOL ConnectRawByName(LPCSTR lpszHostAddress, UINT nHostPort);
-	BOOL ConnectRaw(const SOCKADDR* lpSockAddr, int nSockAddrLen);
+	typedef int (WSAAPI *ConnectFunction)(SOCKET, const SOCKADDR*, int);
+	typedef HANDLE (WSAAPI *ResolveFunction)(HWND, u_int, const char*, char*, int);
+	// Carry the selected transport through asynchronous DNS completion.
+	BOOL ConnectRawByName(LPCSTR lpszHostAddress, UINT nHostPort,
+		ConnectFunction connectFunction = ::connect,
+		ResolveFunction resolveFunction = ::WSAAsyncGetHostByName);
+	BOOL ConnectRaw(const SOCKADDR* lpSockAddr, int nSockAddrLen,
+		ConnectFunction connectFunction = ::connect);
 
 	//Controls the mode of the socket.
 	BOOL IOCtl( long lCommand, DWORD* lpArgument );
@@ -275,6 +281,7 @@ protected:
 	char *m_pAsyncGetHostByNameBuffer; //Buffer for hostend structure
 	HANDLE m_hAsyncGetHostByNameHandle; //TaskHandle
 	int m_nAsyncGetHostByNamePort; //Port to connect to
+	ConnectFunction m_asyncConnectFunction; //Transport selected when DNS started
 
 	//Returns the handle of the helper window
 	HWND GetHelperWindowHandle();

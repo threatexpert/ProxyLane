@@ -86,9 +86,6 @@ CAsyncSocketExLayer::CAsyncSocketExLayer()
 	m_nLayerState=notsock;
 	m_nCriticalError=0;
 
-	m_connMainFlag = 0;
-	m_connSubFlag = 0;
-
 	BypassHook(TRUE);
 }
 
@@ -294,25 +291,8 @@ BOOL CAsyncSocketExLayer::ConnectNext(LPCSTR lpszHostAddress, UINT nHostPort)
 		res = m_pNextLayer->Connect(lpszHostAddress, nHostPort);
 	else
 	{
-// 		SOCKADDR_IN sockAddr = {0};
-// 		sockAddr.sin_addr.s_addr = inet_addr(lpszHostAddress);
-// 		if (sockAddr.sin_addr.s_addr == INADDR_NONE)
-// 		{
-// 			LPHOSTENT lphost = m_pReal_gethostbyname(lpszHostAddress);
-// 			if (lphost == NULL) {
-// 				WSASetLastError(WSAEINVAL);
-// 				return FALSE;
-// 			}
-// 			sockAddr.sin_addr.s_addr = ((LPIN_ADDR)lphost->h_addr)->s_addr;
-// 		}
-// 		sockAddr.sin_family = AF_INET;
-// 		sockAddr.sin_port = htons((u_short)nHostPort);
-// 		*(DWORD*)&sockAddr.sin_zero[0] = m_connMainFlag;
-// 		*(DWORD*)&sockAddr.sin_zero[4] = m_connSubFlag;
-// 
-// 		res = (m_pReal_connect(m_pOwnerSocket->GetSocketHandle(), (SOCKADDR*)&sockAddr, sizeof(sockAddr)) != SOCKET_ERROR);
-
-		res = m_pOwnerSocket->ConnectRawByName(lpszHostAddress, nHostPort);
+		res = m_pOwnerSocket->ConnectRawByName(lpszHostAddress, nHostPort,
+			m_pReal_connect, m_pReal_WSAAsyncGetHostByName);
 	}
 
 	if (res || WSAGetLastError() == WSAEWOULDBLOCK)
@@ -331,8 +311,6 @@ BOOL CAsyncSocketExLayer::ConnectNext(const SOCKADDR* lpSockAddr, int nSockAddrL
 		res = m_pNextLayer->Connect(lpSockAddr, nSockAddrLen);
 	else
 	{
-		*(DWORD*)&lpSockAddr->sa_data[6] = m_connMainFlag;
-		*(DWORD*)&lpSockAddr->sa_data[10] = m_connSubFlag;
 		res = (m_pReal_connect(m_pOwnerSocket->GetSocketHandle(), lpSockAddr, nSockAddrLen) != SOCKET_ERROR);
 	}
 
@@ -674,13 +652,7 @@ BOOL CAsyncSocketExLayer::ShutDownNext(int nHow /*=sends*/)
 		return shutdown(m_pOwnerSocket->GetSocketHandle(), nHow);
 	}
 	else
-		return m_pNextLayer->ShutDownNext(nHow);
-}
-
-void CAsyncSocketExLayer::SetConnectionFlag(DWORD main, DWORD sub)
-{
-	m_connMainFlag = main;
-	m_connSubFlag = sub;
+		return m_pNextLayer->ShutDown(nHow);
 }
 
 //

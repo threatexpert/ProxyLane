@@ -18,7 +18,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo Building ProxyLaneSecureTransport Release DLLs for Win32 and x64...
+echo Building ProxyLaneSecureTransport Release DLL for the x64 host...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PROXYLANE_ROOT%\scripts\build-secure-transport.ps1"
 if errorlevel 1 (
     echo.
@@ -27,7 +27,6 @@ if errorlevel 1 (
 )
 
 echo.
-echo [OK] Release DLLs were written to:
-echo   %PROXYLANE_ROOT%\bin\ProxyLaneSecureTransport32.dll
+echo [OK] Release DLL was written to:
 echo   %PROXYLANE_ROOT%\bin\ProxyLaneSecureTransport64.dll
 exit /b 0

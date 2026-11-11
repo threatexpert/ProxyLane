@@ -1,14 +1,18 @@
-#pragma once
+﻿#pragma once
 
 #include "structinfo.h"
 #include "PRCUdpPeer.h"
 #include "UdpAssociationPolicy.h"
 #include <list>
 #include <vector>
+#include <memory>
+#include "DohResolver.h"
+class CProtocolTap;
+class CQuicBridge;
 
 class CProxyUDPTaskMgr;
 
-class CUdpProxyTask
+class CUdpProxyTask : public CWndTimer
 {
 	friend CProxyUDPTaskMgr;
 public:
@@ -17,7 +21,7 @@ public:
 
 
 	VOID EndTask();
-	VOID CloseTask();
+	VOID CloseTask(const char* reason = "UDP route closed; cause unavailable");
 	BOOL IsClosed();
 	BOOL SetTaskInfo(LPPRCClient lpPRCClient, LPProxyInfo lpProxyInfo);
 	BOOL AddRoute(LPPRCClient lpPRCClient);
@@ -28,6 +32,7 @@ public:
 	VOID OnPeerClosed(CPRCUdpPeer *pPeer, int errorCode);
 	VOID OnServerReady(CPRCUdpPeer *pPeer);
 	VOID OnMaintenanceTimer();
+    void OnMessage(UINT, WPARAM, LPARAM, BOOL&) override;
 	VOID OnServerWritable();
 	VOID OnRouteWritable(CPRCUdpPeer *routePeer);
 	BOOL ForwardClientDatagram(CPRCUdpPeer *routePeer,
@@ -35,6 +40,7 @@ public:
 		const char *data, int length);
 	BOOL ForwardServerDatagram(_SockAddr source,
 		const char *data, int length);
+    BOOL ForwardUpstreamDatagram(CPRCUdpPeer::_CSAddrInfo target,const char *data,int length);
 	BOOL CreateServerPeer();
 	VOID ScheduleServerReconnect(int errorCode);
 	BOOL QueueDatagram(CPRCUdpPeer::_CSAddrInfo target,
@@ -49,6 +55,8 @@ public:
 	WORD m_LocalProxyUdpPort;
 
 private:
+    std::shared_ptr<CDohWakeup> m_dohWake;
+    bool m_dohNoticeFailed = false;
 	VOID EnterServerDormant();
 	VOID WakeServerAssociation();
 	VOID ExpirePendingDatagrams(DWORD now);
@@ -60,9 +68,21 @@ private:
 		_SockAddr applicationEndpoint;
 		BOOL hasApplicationEndpoint;
 		BOOL firstDatagramLogged;
+		std::shared_ptr<CProtocolTap> capture;
+        std::shared_ptr<CQuicBridge> quic;
+        bool quicRetired = false;
+        CPRCUdpPeer::_CSAddrInfo quicTarget;
+        std::shared_ptr<CDohQuery> doh;
+        DohQueryLogInfo dohLog;
+        std::list<std::vector<char>> dohPending;
+        size_t dohPendingBytes = 0;
+        std::list<CDnsDohRequest> dnsRequests;
 	};
 	typedef std::list<UdpRoute> UdpRouteList;
+    BOOL DeliverServerDatagram(UdpRoute&,const char*,int);
+    void PumpQuic(UdpRoute&);
 	UdpRouteList m_routes;
+    ProxyChain m_dnsChain;
 	struct PendingDatagram
 	{
 		CPRCUdpPeer::_CSAddrInfo target;

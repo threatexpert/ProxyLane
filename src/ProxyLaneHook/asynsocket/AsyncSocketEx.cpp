@@ -460,7 +460,8 @@ public:
 					return 0;
 				}
 
-				BOOL res = pSocket->ConnectRaw((SOCKADDR*)&sockAddr, sizeof(sockAddr));
+				BOOL res = pSocket->ConnectRaw((SOCKADDR*)&sockAddr, sizeof(sockAddr),
+					pSocket->m_asyncConnectFunction);
 				delete[] pSocket->m_pAsyncGetHostByNameBuffer;
 				pSocket->m_pAsyncGetHostByNameBuffer = 0;
 				pSocket->m_hAsyncGetHostByNameHandle = 0;
@@ -524,6 +525,7 @@ CAsyncSocketEx::CAsyncSocketEx()
 #endif //NOLAYERS
 	m_pAsyncGetHostByNameBuffer = NULL;
 	m_hAsyncGetHostByNameHandle = NULL;
+	m_asyncConnectFunction = ::connect;
 }
 
 CAsyncSocketEx::~CAsyncSocketEx()
@@ -840,12 +842,14 @@ int CAsyncSocketEx::Send(const void* lpBuf, int nBufLen, int nFlags /*=0*/)
 		return send(m_SocketData.hSocket, (LPSTR)lpBuf, nBufLen, nFlags);
 }
 
-BOOL CAsyncSocketEx::ConnectRaw(const SOCKADDR* lpSockAddr, int nSockAddrLen)
+BOOL CAsyncSocketEx::ConnectRaw(const SOCKADDR* lpSockAddr, int nSockAddrLen,
+	ConnectFunction connectFunction)
 {
-	return connect(m_SocketData.hSocket, (SOCKADDR*)lpSockAddr, nSockAddrLen) != SOCKET_ERROR;
+	return connectFunction(m_SocketData.hSocket, lpSockAddr, nSockAddrLen) != SOCKET_ERROR;
 }
 
-BOOL CAsyncSocketEx::ConnectRawByName(LPCSTR lpszHostAddress, UINT nHostPort)
+BOOL CAsyncSocketEx::ConnectRawByName(LPCSTR lpszHostAddress, UINT nHostPort,
+	ConnectFunction connectFunction, ResolveFunction resolveFunction)
 {
 	SOCKADDR_IN sockAddr = { 0 };
 	sockAddr.sin_addr.s_addr = inet_addr(lpszHostAddress);
@@ -853,7 +857,8 @@ BOOL CAsyncSocketEx::ConnectRawByName(LPCSTR lpszHostAddress, UINT nHostPort)
 	{
 		m_pAsyncGetHostByNameBuffer = new char[MAXGETHOSTSTRUCT];
 		m_nAsyncGetHostByNamePort = nHostPort;
-		m_hAsyncGetHostByNameHandle = WSAAsyncGetHostByName(GetHelperWindowHandle(), WM_SOCKETEX_GETHOST, lpszHostAddress, m_pAsyncGetHostByNameBuffer, MAXGETHOSTSTRUCT);
+		m_asyncConnectFunction = connectFunction;
+		m_hAsyncGetHostByNameHandle = resolveFunction(GetHelperWindowHandle(), WM_SOCKETEX_GETHOST, lpszHostAddress, m_pAsyncGetHostByNameBuffer, MAXGETHOSTSTRUCT);
 		if (!m_hAsyncGetHostByNameHandle)
 			return FALSE;
 		WSASetLastError(WSAEWOULDBLOCK);
@@ -861,7 +866,7 @@ BOOL CAsyncSocketEx::ConnectRawByName(LPCSTR lpszHostAddress, UINT nHostPort)
 	}
 	sockAddr.sin_family = AF_INET;
 	sockAddr.sin_port = htons((u_short)nHostPort);
-	return ConnectRaw((SOCKADDR*)&sockAddr, sizeof(sockAddr));
+	return ConnectRaw((SOCKADDR*)&sockAddr, sizeof(sockAddr), connectFunction);
 }
 
 BOOL CAsyncSocketEx::Connect(LPCSTR lpszHostAddress, UINT nHostPort)

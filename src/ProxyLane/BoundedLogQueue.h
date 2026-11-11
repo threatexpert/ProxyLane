@@ -82,6 +82,14 @@ public:
 		return m_entries.size();
 	}
 
+	void Clear()
+	{
+		std::lock_guard<std::mutex> guard(m_lock);
+		m_entries.clear();
+		m_dropped = 0;
+		m_notificationPending = false;
+	}
+
 private:
 	std::list<T> m_entries;
 	size_t m_capacity;

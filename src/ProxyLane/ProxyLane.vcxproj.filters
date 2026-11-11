@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="源文件">
@@ -21,6 +21,9 @@
     <ClCompile Include="ApplicationCatalogCache.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="RecentApplicationCache.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="RecentApplications.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -30,6 +33,7 @@
     <ClCompile Include="AppVersion.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="LaunchShortcut.cpp"><Filter>源文件</Filter></ClCompile>
     <ClCompile Include="AutomationOptions.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -45,6 +49,7 @@
     <ClCompile Include="ListCtrlEx.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ProcessListAccessibility.cpp"><Filter>源文件</Filter></ClCompile>
     <ClCompile Include="MainTab.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -54,13 +59,28 @@
     <ClCompile Include="Page1.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ConfigImport.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="ConfigStorage.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="ProfileSharing.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="Page2.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="Page3.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="Page4Protocol.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ProtocolViewModel.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="Page4.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ChainRouteView.cpp"><Filter>源文件</Filter></ClCompile>
+    <ClCompile Include="LaunchPanel.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="Page5.cpp">
@@ -95,6 +115,10 @@
     <ClInclude Include="AppVersion.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="UpdateRelease.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="LaunchShortcut.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="AutomationOptions.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -113,13 +137,35 @@
     <ClInclude Include="ListCtrlEx.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ProcessListAccessibility.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="MainTab.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="ModernUI.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ProxyTestResultDialog.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SshAuthControls.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="SshKeyStore.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="SshPrivateKey.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="ChainNodeEditDialog.h">
+        <Filter>Header Files</Filter>
+      </ClInclude>
+    <ClInclude Include="ProxyTestError.h">
+        <Filter>Header Files</Filter>
+      </ClInclude>
+    <ClInclude Include="ChainProgressPresentation.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="ChainRouteView.h">
+        <Filter>Header Files</Filter>
+      </ClInclude>
     <ClInclude Include="Page1.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ConfigImport.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="ConfigStorage.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="ProfileShareCodec.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="Page2.h">
@@ -128,7 +174,28 @@
     <ClInclude Include="Page3.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ProcessIconCache.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ProtocolViewModel.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="MitmSettings.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="RecordingSettings.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="RecordingDialog.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="ByteHexView.h" />
+    <ClInclude Include="ProtocolRawView.h" />
     <ClInclude Include="Page4.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="GlyphData.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="AsyncSnapshot.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="LaunchPanelPaging.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="LaunchPanel.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="Page5.h">
@@ -161,6 +228,18 @@
     <ClInclude Include="RecentApplications.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ProcessImagePath.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="BrowserLaunchWatch.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ProcessCommandLine.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="BrowserReuseDialog.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ProcessActions.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -177,6 +256,15 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="TrafficRateSampler.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ExitProcessesDialog.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ExitProcessCleanup.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="ExitCleanupDialog.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="..\ProxyLaneHook\token.h">

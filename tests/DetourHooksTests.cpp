@@ -1,4 +1,5 @@
 #include "DetourHooks.h"
+#include "HookFailureDiagnostics.h"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -111,7 +112,9 @@ void DetachRollback()
     BYTE patched[16];
     std::memcpy(patched, code.bytes, sizeof(patched));
     DetourHookBinding wrong[] = { bindings[0], { bindings[1].original, Replacement } };
-    Check(RemoveDetourHooks(wrong, 2) != NO_ERROR, "reject second mismatched detach");
+    DetourHookFailure failure = {};
+    Check(RemoveDetourHooks(wrong, 2, &failure) != NO_ERROR, "reject second mismatched detach");
+    Check(failure.bindingIndex == 1 && !std::strcmp(failure.stage, "DetourDetach"), "identify failed detach binding");
     Check(original == firstTrampoline && second == secondTrampoline, "failed detach preserves pointers");
     Check(std::memcmp(code.bytes, patched, sizeof(patched)) == 0, "failed detach preserves first patch");
     Check(entry() == 43 && secondEntry() == 0 && second() == 42, "failed detach preserves both hooks");
@@ -133,10 +136,25 @@ void Rollback()
     original = reinterpret_cast<Function>(code.bytes);
     Function tooShort = reinterpret_cast<Function>(code.bytes + 128);
     DetourHookBinding bindings[] = { { reinterpret_cast<PVOID*>(&original), Replacement }, { reinterpret_cast<PVOID*>(&tooShort), WrongReplacement } };
-    Check(InstallDetourHooks(NULL, 1) == ERROR_INVALID_PARAMETER, "reject missing bindings");
+    DetourHookFailure failure = {};
+    Check(InstallDetourHooks(NULL, 1, &failure) == ERROR_INVALID_PARAMETER, "reject missing bindings");
+    Check(failure.bindingIndex == size_t(-1) && !std::strcmp(failure.stage, "validate-bindings"), "identify invalid batch");
     DetourHookBinding duplicates[] = { bindings[0], bindings[0] };
-    Check(InstallDetourHooks(duplicates, 2) == ERROR_INVALID_PARAMETER, "reject duplicate binding");
-    Check(InstallDetourHooks(bindings, 2) == ERROR_INVALID_BLOCK, "reject unrelocatable batch");
+    Check(InstallDetourHooks(duplicates, 2, &failure) == ERROR_INVALID_PARAMETER, "reject duplicate binding");
+    Check(failure.bindingIndex == 1 && !std::strcmp(failure.stage, "validate-bindings"), "identify duplicate binding");
+    Check(InstallDetourHooks(bindings, 2, &failure) == ERROR_INVALID_BLOCK, "reject unrelocatable batch");
+    Check(failure.bindingIndex == 1 && !std::strcmp(failure.stage, "DetourAttach"), "identify unrelocatable API");
+    HookFailureDiagnostics diagnostic;
+    diagnostic.Set(ERROR_INVALID_BLOCK, failure.stage, "test.dll", "TooShort");
+    SetLastError(ERROR_ACCESS_DENIED); // Cleanup must not change the recorded failure.
+    WCHAR message[1536] = {};
+    diagnostic.Format(message, _countof(message), L"C:\\test\\Antigravity.exe", 58660);
+    Check(wcsstr(message, L"Antigravity.exe (58660)") && wcsstr(message, L"stage=DetourAttach") &&
+        wcsstr(message, L"module=test.dll") && wcsstr(message, L"API=TooShort") &&
+        wcsstr(message, L"error=9 (0x00000009)"), "complete immutable diagnostic");
+    diagnostic.Set(0, "allocate-tls", "kernel32.dll", "TlsAlloc");
+    diagnostic.Format(message, _countof(message), L"test.exe", 1);
+    Check(wcsstr(message, L"No error code supplied"), "do not invent an original error code");
     Check(original == reinterpret_cast<Function>(code.bytes) && original() == 42, "abort leaves first pointer unchanged");
     Check(tooShort == reinterpret_cast<Function>(code.bytes + 128), "abort leaves second pointer unchanged");
     Check(std::memcmp(code.bytes, constant, sizeof(constant)) == 0, "abort leaves code unchanged");

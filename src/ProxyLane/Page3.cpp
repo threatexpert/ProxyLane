@@ -7,12 +7,19 @@
 #include "MainTab.h"
 #include "Page2.h"
 #include "AutomationOptions.h"
+#include "LaunchShortcut.h"
 #include "Localization.h"
 #include "..\ProxyLaneHook\token.h"
 #include "..\ProxyLaneHook\ElevatedLaunchProtocol.h"
 #include "PackagedAppSupport.h"
 #include "ApplicationPicker.h"
 #include "ProcessActions.h"
+#include "ProcessImagePath.h"
+#include "ProcessCommandLine.h"
+#include "BrowserReuseDialog.h"
+#include "ProxyLaneDlg.h"
+#include "../ProxyLaneHook/ProcessCreationRecording.h"
+#include "../ProxyLaneHook/ProcessCreationSnapshot.h"
 #include "ScopedProcessSuspension.h"
 
 #include "..\ProxyLaneHook\ProxyModule.h"
@@ -393,150 +400,116 @@ static BOOL SetProcessStartTime(ULONGLONG startTimeValue, _myPROCESSINFO& proces
 	return TRUE;
 }
 
-// 读取单个已打开进程的创建时间，作为旧系统和异常情况下的回退路径。
-static BOOL GetProcessStartTime(HANDLE hProcess, _myPROCESSINFO& processInfo)
+int GetProcessList(list<_myPROCESSINFO> &ls, LPCTSTR unknownProcess = NULL)
 {
-	FILETIME creationTime;
-	FILETIME exitTime;
-	FILETIME kernelTime;
-	FILETIME userTime;
-	if (!GetProcessTimes(hProcess, &creationTime, &exitTime, &kernelTime, &userTime))
-		return FALSE;
-
-	ULARGE_INTEGER timeValue;
-	timeValue.LowPart = creationTime.dwLowDateTime;
-	timeValue.HighPart = creationTime.dwHighDateTime;
-	return SetProcessStartTime(timeValue.QuadPart, processInfo);
-}
-
-// SYSTEM_PROCESS_INFORMATION 的固定前缀。创建时间位于偏移 32，父 PID 紧随进程 PID。
-// 这里只读取 XP 至今保持稳定的字段，不依赖较新 SDK 中不断扩展的后续成员。
-struct ProcessSnapshotEntryPrefix
-{
-	ULONG nextEntryOffset;
-	BYTE reservedBeforeImageName[52];
-	PVOID reservedImageNameAndPriority[3];
-	HANDLE processId;
-	PVOID parentProcessId;
-};
-
-static BOOL GetSnapshotProcessStartTimes(std::map<DWORD, ULONGLONG>& startTimes)
-{
-	typedef LONG (WINAPI* NtQuerySystemInformationProc)(
-		ULONG systemInformationClass,
-		PVOID systemInformation,
-		ULONG systemInformationLength,
-		PULONG returnLength);
-
-	HMODULE ntdll = GetModuleHandle(_T("ntdll.dll"));
-	NtQuerySystemInformationProc querySystemInformation = ntdll
-		? reinterpret_cast<NtQuerySystemInformationProc>(
-			GetProcAddress(ntdll, "NtQuerySystemInformation"))
-		: NULL;
-	if (!querySystemInformation)
-		return FALSE;
-
-	const ULONG systemProcessInformation = 5;
-	const LONG statusInfoLengthMismatch = static_cast<LONG>(0xC0000004L);
-	ULONG bufferSize = 64 * 1024;
-	std::vector<BYTE> buffer;
-	LONG status = statusInfoLengthMismatch;
-	for (int attempt = 0; attempt < 8 && status == statusInfoLengthMismatch; ++attempt)
+	ProxyProcessIdentity::Snapshot snapshot;
+	if (!ProxyProcessIdentity::QuerySnapshot(snapshot)) return -1;
+	const BOOL queryByPid = IsVistaOrLater();
+	ProcessImagePath::Resolver pathResolver;
+	if (queryByPid) pathResolver.Refresh();
+	list<_myPROCESSINFO> rows;
+	int count = 0;
+	for (size_t i = 0; i < snapshot.processes.size(); ++i)
 	{
-		buffer.resize(bufferSize);
-		ULONG requiredSize = 0;
-		status = querySystemInformation(
-			systemProcessInformation,
-			&buffer[0],
-			bufferSize,
-			&requiredSize);
-		if (status == statusInfoLengthMismatch)
+		const ProxyProcessIdentity::Process& process = snapshot.processes[i];
+		_myPROCESSINFO info = {};
+		info.pid = process.pid;
+		info.parentPid = process.parentPid;
+		// Keep the previous insertion-at-head order using the native snapshot.
+		info.defaultOrder = -count;
+		info.treeOrder = -1;
+		const CString name = !process.name.empty() ? CString(process.name.c_str()) :
+			(process.pid == 0 ? CString(_T("[System Process]")) : (unknownProcess ? CString(unknownProcess) : Localization::Get(_T("page3.unknown_process"))));
+		_tcsncpy_s(info.proname, _countof(info.proname), name, _TRUNCATE);
+		if (process.creationTime) SetProcessStartTime(process.creationTime, info);
+
+		if (queryByPid)
 		{
-			bufferSize = requiredSize > bufferSize
-				? requiredSize + 64 * 1024
-				: bufferSize * 2;
+			std::wstring nativePath;
+			if (process.creationTime && ProcessImagePath::Query(process.pid, nativePath))
+			{
+				const CString path(pathResolver.Convert(nativePath).c_str());
+				// Do not expose a truncated path as an actionable executable path.
+				if (path.GetLength() < _countof(info.propath))
+					_tcscpy_s(info.propath, _countof(info.propath), path);
+			}
+		}
+		else
+		{
+			// XP/Server 2003 compatibility only. Modern path queries never open a process.
+			HANDLE handle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, process.pid);
+			if (!handle) handle = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, process.pid);
+			if (handle)
+			{
+				if (process.creationTime && ProcessActions::CreationTime(handle) == process.creationTime)
+					GetProcessFullPath(handle, info.propath, MAX_PATH);
+				CloseHandle(handle);
+			}
+		}
+		rows.push_back(info);
+		++count;
+	}
+	if (queryByPid)
+	{
+		// One batch recheck after all PID-only queries, not a snapshot per row.
+		// A failed recheck leaves names/times available but discards unverified paths.
+		ProxyProcessIdentity::Snapshot after;
+		ProxyProcessIdentity::QuerySnapshot(after);
+		for (auto row = rows.begin(); row != rows.end(); ++row)
+		{
+			const auto found = after.creationTimes.find(row->pid);
+			if (!after.complete || !row->startTimeValue || found == after.creationTimes.end() ||
+				found->second != row->startTimeValue) row->propath[0] = _T('\0');
 		}
 	}
-	if (status < 0 || buffer.empty())
-		return FALSE;
+	ls.splice(ls.end(), rows);
+	return count;
+}
 
-	BYTE* entryAddress = &buffer[0];
-	for (;;)
+void CPage3::OnHookWsock(LPHookWSockResult)
+{
+	// The pipe server updates the shared registry before notifying observers.
+}
+
+BOOL CPage3::GetRunningHookedProcesses(std::vector<_myPROCESSINFO>& processes)
+{
+	processes.clear();
+	if (!m_processRegistry) return FALSE;
+	// Fetch anew every round so hooks registered while the dialog is open are
+	// included. Retry a growing registry without accepting a truncated snapshot.
+	std::vector<HookProcessIdentityInfo> identities(64);
+	bool complete = false;
+	for (int attempt = 0; attempt < 8; ++attempt)
 	{
-		ProcessSnapshotEntryPrefix* entry =
-			reinterpret_cast<ProcessSnapshotEntryPrefix*>(entryAddress);
-		DWORD pid = static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(entry->processId));
-		LARGE_INTEGER* creationTime = reinterpret_cast<LARGE_INTEGER*>(entryAddress + 32);
-		if (pid != 0 && creationTime->QuadPart > 0)
-			startTimes[pid] = static_cast<ULONGLONG>(creationTime->QuadPart);
-
-		if (entry->nextEntryOffset == 0)
+		const DWORD count = m_processRegistry->SnapshotHooked(&identities[0],
+			static_cast<DWORD>(identities.size()));
+		if (count <= identities.size())
+		{
+			identities.resize(count);
+			complete = true;
 			break;
-		entryAddress += entry->nextEntryOffset;
-	}
-	return !startTimes.empty();
-}
-
-int GetProcessList(list<_myPROCESSINFO> &ls)
-{
-	int nCount = 0;
-	PROCESSENTRY32 pe;
-	DWORD dwRet;
-	_myPROCESSINFO mypi;
-	std::map<DWORD, ULONGLONG> snapshotStartTimes;
-	GetSnapshotProcessStartTimes(snapshotStartTimes);
-
-	//
-	// 通过 TOOHLP32 函数枚举进程
-	//
-
-	HANDLE hSP = ::CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-	if (hSP != INVALID_HANDLE_VALUE)
-	{
-		pe.dwSize = sizeof(pe);
-
-		for (dwRet = Process32First(hSP, &pe);
-			dwRet;
-			dwRet = Process32Next(hSP, &pe))
-		{
-			ZeroMemory(&mypi, sizeof(mypi));
-
-			mypi.pid = pe.th32ProcessID;
-			mypi.parentPid = pe.th32ParentProcessID;
-			// 保持原界面逐项插入到列表首行时形成的默认顺序。
-			mypi.defaultOrder = -nCount;
-			mypi.treeOrder = -1;
-			_tcsncpy(mypi.proname, pe.szExeFile, MAX_PATH);
-			mypi.proname[MAX_PATH - 1] = _T('\0');
-			std::map<DWORD, ULONGLONG>::const_iterator snapshotTime =
-				snapshotStartTimes.find(mypi.pid);
-			if (snapshotTime != snapshotStartTimes.end())
-				SetProcessStartTime(snapshotTime->second, mypi);
-
-			HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pe.th32ProcessID);
-			if (!hProcess)
-			{
-				// Vista+ 的路径 API 以及启动时间只需要进程查询权限。
-				hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pe.th32ProcessID);
-			}
-			if (hProcess)
-			{
-				// 新系统优先 QueryFullProcessImageName；XP 自动回退到 PSAPI。
-				GetProcessFullPath(hProcess, mypi.propath, MAX_PATH);
-				if (!mypi.hasStartTime)
-					GetProcessStartTime(hProcess, mypi);
-				CloseHandle(hProcess);
-			}
-
-			ls.push_back(mypi);
-
-			nCount++;
 		}
-
-		::CloseHandle(hSP);
+		identities.resize(static_cast<size_t>(count) + 64);
 	}
-
-	return nCount;
+	if (!complete) return FALSE;
+	ProxyProcessIdentity::Snapshot snapshot;
+	if (!identities.empty() && !ProxyProcessIdentity::QuerySnapshot(snapshot)) return FALSE;
+	for (size_t i = 0; i < identities.size(); ++i)
+	{
+		const HookProcessIdentityInfo& identity = identities[i];
+		if (snapshot.HasExited(identity)) continue;
+		_myPROCESSINFO process = {};
+		process.pid = identity.dwProcessId;
+		process.hasStartTime = TRUE;
+		process.startTimeValue = identity.processCreateTime;
+		_tcsncpy_s(process.propath, _countof(process.propath), identity.szAppPath, _TRUNCATE);
+		const TCHAR* name = _tcsrchr(process.propath, _T('\\'));
+		name = name ? name + 1 : process.propath;
+		const CString displayName = *name ? CString(name) : Localization::Get(_T("page3.unknown_process"));
+		_tcsncpy_s(process.proname, _countof(process.proname), displayName, _TRUNCATE);
+		processes.push_back(process);
+	}
+	return TRUE;
 }
 
 BOOL InjectDll2(HANDLE hProc, DWORD dwPid, DWORD dwTid, LPCSTR lpszPipeName)
@@ -605,7 +578,7 @@ BOOL InjectDll(HANDLE hProc, DWORD dwPid, DWORD dwTid, LPCSTR lpszPipeName)
 	}
 }
 
-BOOL HookProcess(DWORD pid, LPCSTR pipeName)
+BOOL HookProcess(DWORD pid, LPCSTR pipeName, ULONGLONG expectedCreationTime = 0)
 {
 	BOOL bOK = FALSE;
 	HANDLE hRemoteProcess = NULL;
@@ -621,6 +594,14 @@ BOOL HookProcess(DWORD pid, LPCSTR pipeName)
 
 	do 
 	{
+		// Browser warning actions refer to the displayed lifetime, never a new
+		// process that has since acquired its PID. Hold this handle through injection.
+		if (expectedCreationTime && (ProcessActions::CreationTime(hRemoteProcess) != expectedCreationTime ||
+			WaitForSingleObject(hRemoteProcess, 0) != WAIT_TIMEOUT))
+		{
+			SetLastError(ERROR_NOT_FOUND);
+			break;
+		}
 		if (!InjectDll(hRemoteProcess, pid, 0, pipeName))
 			break;
 
@@ -717,7 +698,6 @@ IMPLEMENT_DYNAMIC(CPage3, CModernDialog)
 
 CPage3::CPage3(CWnd* pParent /*=NULL*/)
 	: CModernDialog(CPage3::IDD, pParent)
-	, m_evlock()
 	, m_sortColumn(-1)
 	, m_sortState(PROCESS_SORT_NONE)
 	, m_processNameSearchTick(0)
@@ -726,16 +706,23 @@ CPage3::CPage3(CWnd* pParent /*=NULL*/)
 	, m_launchedProcessId(0)
 	, m_launchedProcessTime(0)
 	, m_launchSelectionTick(0)
+	, m_processRegistry(NULL)
+	, m_processesExpanded(FALSE)
+	, m_recentLoad(NULL)
+	, m_recentConsumed(TRUE)
+	, m_recentReadFailed(FALSE)
+	, m_recentLaunching(FALSE)
 {
 	//m_pEdit = NULL;
 	//m_pEdit = new CMyEdit;
-	m_evlock.SetEvent();
 
 }
 
 CPage3::~CPage3()
 {
 	ClearWindowFinderHighlight();
+	if (m_recentLoad) m_recentLoad->Release();
+	RecentApplications::ReleaseIcons(m_recentEntries);
 }
 
 void CPage3::DoDataExchange(CDataExchange* pDX)
@@ -743,7 +730,6 @@ void CPage3::DoDataExchange(CDataExchange* pDX)
 	CDialog::DoDataExchange(pDX);
 	DDX_Control(pDX, IDC_PSLIST, m_ListCtrl);
 	DDX_Control(pDX, IDC_WINDOW_FINDER, m_btnWindowFinder);
-	DDX_Control(pDX, IDC_REFRESH, m_btnRefresh);
 	DDX_Control(pDX, IDC_INJECTDLL, m_btnInject);
 	DDX_Control(pDX, IDC_SELECT_APP, m_btnSelectApp);
 	DDX_Control(pDX, IDC_TERMINATE_PROCESS, m_btnTerminate);
@@ -754,24 +740,69 @@ void CPage3::DoDataExchange(CDataExchange* pDX)
 BOOL CPage3::OnInitDialog()
 {
 	CModernDialog::OnInitDialog();
+	// Acquire the module-lifetime registry once; never consult the transient
+	// g_GlobalProxy pointer from cleanup workers or drawing after service stop.
+	IGlobalProxy* proxy = GetGlobalProxyInstance();
+	if (proxy)
+	{
+		m_processRegistry = proxy->GetProcessRegistry();
+		ReleaseGlobalProxyInstance();
+	}
+	SetTimer(TIMER_PROCESS_REGISTRY, 30000, NULL);
 	DragAcceptFiles(FALSE);
 	m_ListCtrl.DragAcceptFiles(FALSE);
 	m_btnWindowFinder.SetVisualStyle(CModernButton::STYLE_SECONDARY);
-	m_btnRefresh.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	m_btnSelectApp.SetVisualStyle(CModernButton::STYLE_PRIMARY);
+	m_btnSelectApp.SetBackdropColor(UiTheme::Surface());
 	m_btnInject.SetVisualStyle(CModernButton::STYLE_SECONDARY);
 	m_btnTerminate.SetVisualStyle(CModernButton::STYLE_DANGER);
 	m_btnTerminate.EnableWindow(FALSE);
 	RestoreProcessPageSubtitle();
+
+	// The launch panel paints itself; without this the page background erase
+	// would wipe it whenever the page is invalidated after the panel painted.
+	ModifyStyle(0, WS_CLIPCHILDREN);
+	m_processToggle.Create(Localization::Get(_T("launch.processes_show")),
+		WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+		CRect(0, 0, 0, 0), this, IDC_PROCESS_TOGGLE);
+	m_processToggle.SetFont(&m_uiFont, FALSE);
+	m_processToggle.SetVisualStyle(CModernButton::STYLE_SECONDARY);
+	// Lets the user stop the proxy where they started it from.
+	m_btnStopProxy.Create(Localization::Get(_T("action.stop_proxy")),
+		WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_STOP_PROXY_APP);
+	m_btnStopProxy.SetFont(&m_uiFont, FALSE);
+	m_btnStopProxy.SetVisualStyle(CModernButton::STYLE_DANGER);
+	m_btnStopProxy.SetBackdropColor(UiTheme::Surface());
+	// Lets the user check the selected profile before enabling it.
+	m_btnTestProxy.Create(Localization::Get(_T("action.test_current")),
+		WS_CHILD | WS_TABSTOP | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_TEST_PROXY_APP);
+	m_btnTestProxy.SetFont(&m_uiFont, FALSE);
+	m_btnTestProxy.SetVisualStyle(CModernButton::STYLE_SOFT);
+	m_btnTestProxy.SetIcon(CModernButton::ICON_GAUGE);
+	m_btnTestProxy.SetBackdropColor(UiTheme::Surface());
+	if (m_launchPanel.Create(this, IDC_LAUNCH_PANEL))
+		m_launchPanel.SetWindowPos(&wndBottom, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+	SetTimer(TIMER_LAUNCH_PANEL, 500, NULL);
+	RefreshLaunchPanel();
+ m_processSearch.Create(WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, CRect(), this, 0x2410);
+ m_processSearch.SetFont(&m_uiFont);
+ m_processSearch.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)(LPCWSTR)Localization::Get(L"process.filter_short"));
+ m_onlyHooked.Create(Localization::Get(L"process.only_hooked"), WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, CRect(), this, 0x2411);
+ m_onlyHooked.SetFont(&m_uiFont);
+ m_filterEmpty.Create(Localization::Get(L"process.no_match"), WS_CHILD | SS_CENTER, CRect(), this, 0x2413);
+ m_filterEmpty.SetFont(&m_uiFont);
+	SetProcessesExpanded(FALSE);
 	if (m_windowFinderToolTip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX))
 	{
 		m_windowFinderToolTip.AddTool(
 			&m_btnWindowFinder,
 			Localization::Get(_T("page3.finder_tip")));
 		m_windowFinderToolTip.SetMaxTipWidth(UiTheme::ScaleForWindow(m_hWnd, 320));
+		m_windowFinderToolTip.AddTool(&m_processSearch, Localization::Get(L"process.filter"));
 	}
 	// 资源模板为兼容旧版本仍可能带有单选样式，初始化时统一启用多选。
 	m_ListCtrl.ModifyStyle(LVS_SINGLESEL, 0);
+	m_ListCtrl.EnableSnapshotAccessibility();
 
 	m_ListCtrl.InsertColumn(0, _T("PID"), 0, 50);
 	m_ListCtrl.InsertColumn(1, Localization::Get(_T("page3.column_process")), 0, 180);
@@ -779,7 +810,7 @@ BOOL CPage3::OnInitDialog()
 	m_ListCtrl.InsertColumn(3, Localization::Get(_T("page3.column_path")), 0, 200);
 
 	DWORD dwStyle = m_ListCtrl.GetExtendedStyle();
-	dwStyle |= LVS_EX_FULLROWSELECT;
+	dwStyle |= LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER;
 	m_ListCtrl.SetExtendedStyle(dwStyle);
 
 	DebugPrivilege(SE_DEBUG_NAME, TRUE);
@@ -1028,6 +1059,8 @@ static AppLaunchResult LaunchElevatedAndProxy(
 
 BOOL CPage3::PreTranslateMessage(MSG* message)
 {
+	if (message && message->message == WM_LBUTTONDOWN && message->hwnd != m_launchPanel.GetSafeHwnd())
+		m_launchPanel.FinishOrganizing();
 	if (message && m_windowFinderToolTip.GetSafeHwnd())
 		m_windowFinderToolTip.RelayEvent(message);
 
@@ -1130,14 +1163,28 @@ BOOL CPage3::SelectFirstProcessByNamePrefix(const CString& prefix)
 }
 
 BEGIN_MESSAGE_MAP(CPage3, CModernDialog)
+ ON_EN_CHANGE(0x2410, &CPage3::OnProcessFilterChanged)
+ ON_BN_CLICKED(0x2411, &CPage3::OnProcessFilterChanged)
+	ON_WM_SHOWWINDOW()
+	ON_WM_DESTROY()
+	ON_MESSAGE(WM_PROCESS_LIST_REQUEST, &CPage3::OnProcessListRequest)
+	ON_MESSAGE(ProcessListAccessibility::ChangedMessage, &CPage3::OnProcessAccessibilityChanged)
+	ON_MESSAGE(ProcessListAccessibility::RequestMessage, &CPage3::OnProcessAccessibilityRequest)
 	ON_WM_SIZE()
-	ON_BN_CLICKED(IDC_REFRESH, &CPage3::OnBnClickedRefresh)
 	ON_BN_CLICKED(IDC_INJECTDLL, &CPage3::OnBnClickedInjectdll)
 	ON_BN_CLICKED(IDC_SELECT_APP, &CPage3::OnBnClickedSelectApp)
 	ON_BN_CLICKED(IDC_TERMINATE_PROCESS, &CPage3::OnBnClickedTerminateProcess)
 	ON_NOTIFY(LVN_ITEMCHANGED, IDC_PSLIST, &CPage3::OnProcessSelectionChanged)
 	ON_NOTIFY(LVN_COLUMNCLICK, IDC_PSLIST, &CPage3::OnLvnColumnClickProcessList)
 	ON_NOTIFY(NM_CUSTOMDRAW, IDC_PSLIST, &CPage3::OnNMCustomdrawProcessList)
+	ON_MESSAGE(WM_LAUNCH_PANEL_TILE, &CPage3::OnLaunchPanelTile)
+	ON_MESSAGE(WM_LAUNCH_PANEL_PROFILE, &CPage3::OnLaunchPanelProfile)
+	ON_MESSAGE(WM_LAUNCH_PANEL_EDIT, &CPage3::OnLaunchPanelEdit)
+	ON_MESSAGE(WM_LAUNCH_PANEL_SHORTCUT, &CPage3::OnLaunchPanelShortcut)
+	ON_BN_CLICKED(IDC_PROCESS_TOGGLE, &CPage3::OnBnClickedProcessToggle)
+	ON_BN_CLICKED(IDC_STOP_PROXY_APP, &CPage3::OnBnClickedStopProxy)
+	ON_BN_CLICKED(IDC_TEST_PROXY_APP, &CPage3::OnBnClickedTestProxy)
+	ON_MESSAGE(WM_RECENT_APPLICATIONS_CHANGED, &CPage3::OnRecentApplicationsChanged)
 	ON_MESSAGE(WM_WINDOW_FINDER_BEGIN, &CPage3::OnWindowFinderBegin)
 	ON_MESSAGE(WM_WINDOW_FINDER_UPDATE, &CPage3::OnWindowFinderUpdate)
 	ON_MESSAGE(WM_WINDOW_FINDER_COMPLETE, &CPage3::OnWindowFinderComplete)
@@ -1163,82 +1210,117 @@ void CPage3::LayoutProcessPage()
 	if (rcClient.Width() <= 0 || rcClient.Height() <= 0)
 		return;
 
-	int margin = UiTheme::ScaleForWindow(m_hWnd, 8);
-	int gap = UiTheme::ScaleForWindow(m_hWnd, 6);
-	int finderWidth = UiTheme::ScaleForWindow(m_hWnd, 30);
-	int refreshWidth = UiTheme::ScaleForWindow(m_hWnd, 70);
-	int injectWidth = UiTheme::ScaleForWindow(m_hWnd, 96);
-	if (m_btnInject.GetSafeHwnd())
+	const int margin = UiTheme::ScaleForWindow(m_hWnd, 8);
+	const int gap = UiTheme::ScaleForWindow(m_hWnd, 6);
+	const int buttonHeight = UiTheme::ScaleForWindow(m_hWnd, 30);
+
+	auto textWidth = [this](CModernButton& button, int minimum)
 	{
-		CString buttonText;
-		m_btnInject.GetWindowText(buttonText);
-		CClientDC buttonDC(&m_btnInject);
-		CFont* buttonFont = m_btnInject.GetFont();
-		CFont* oldFont = buttonFont ? buttonDC.SelectObject(buttonFont) : NULL;
-		injectWidth = max(injectWidth, buttonDC.GetTextExtent(buttonText).cx
-			+ UiTheme::ScaleForWindow(m_hWnd, 28));
-		if (oldFont)
-			buttonDC.SelectObject(oldFont);
-	}
-	int buttonHeight = UiTheme::ScaleForWindow(m_hWnd, 30);
-	int selectWidth = UiTheme::ScaleForWindow(m_hWnd, 120);
-	if (m_btnSelectApp.GetSafeHwnd())
-	{
+		if (!button.GetSafeHwnd()) return UiTheme::ScaleForWindow(m_hWnd, minimum);
 		CString text;
-		m_btnSelectApp.GetWindowText(text);
-		CClientDC dc(&m_btnSelectApp);
-		CFont* font = m_btnSelectApp.GetFont();
+		button.GetWindowText(text);
+		CClientDC dc(&button);
+		CFont* font = button.GetFont();
 		CFont* oldFont = font ? dc.SelectObject(font) : NULL;
-		selectWidth = max(selectWidth, dc.GetTextExtent(text).cx
-			+ UiTheme::ScaleForWindow(m_hWnd, 28));
+		const int width = max(UiTheme::ScaleForWindow(m_hWnd, minimum),
+			dc.GetTextExtent(text).cx + UiTheme::ScaleForWindow(m_hWnd, 28));
 		if (oldFont) dc.SelectObject(oldFont);
-	}
-	int buttonTop = UiTheme::ScaleForWindow(m_hWnd, 8);
-	int terminateWidth = UiTheme::ScaleForWindow(m_hWnd, 90);
-	if (m_btnTerminate.GetSafeHwnd())
+		return width;
+	};
+
+	// Launch panel with the primary action inside it.
+	int top = UiTheme::ScaleForWindow(m_hWnd, 66);
+	if (m_launchPanel.GetSafeHwnd())
 	{
-		CString text;
-		m_btnTerminate.GetWindowText(text);
-		CClientDC dc(&m_btnTerminate);
-		CFont* font = m_btnTerminate.GetFont();
-		CFont* oldFont = font ? dc.SelectObject(font) : NULL;
-		terminateWidth = max(terminateWidth, dc.GetTextExtent(text).cx
-			+ UiTheme::ScaleForWindow(m_hWnd, 28));
-		if (oldFont) dc.SelectObject(oldFont);
+		m_launchPanel.SetCompact(m_processesExpanded);
+		// The short "Enable" (with icon) does not need the wide primary slot.
+		const int actionWidth = m_btnSelectApp.IconWidth()
+			? textWidth(m_btnSelectApp, 96) + m_btnSelectApp.IconWidth() : textWidth(m_btnSelectApp, 150);
+		const BOOL running = g_MainTab && g_MainTab->IsProxyRunning();
+		const int stopWidth = running ? textWidth(m_btnStopProxy, 96) : 0;
+		const BOOL testing = !running && HasConfiguredProxy();
+		const int testWidth = testing ? textWidth(m_btnTestProxy, 88) + m_btnTestProxy.IconWidth() : 0;
+		const int secondaryWidth = running ? stopWidth : testWidth;
+		m_launchPanel.SetActionWidth(actionWidth + (secondaryWidth ? secondaryWidth + UiTheme::ScaleForWindow(m_hWnd, 10) : 0));
+		const int panelHeight = m_launchPanel.PreferredHeight(rcClient.Width() - margin * 2);
+		CRect panel(margin, top, rcClient.right - margin, top + panelHeight);
+		m_launchPanel.MoveWindow(&panel);
+		const int actionHeight = UiTheme::ScaleForWindow(m_hWnd, 34);
+		CRect slot = m_launchPanel.ActionSlot(actionWidth, actionHeight);
+		if (m_btnSelectApp.GetSafeHwnd())
+			m_btnSelectApp.MoveWindow(panel.left + slot.left, panel.top + slot.top, actionWidth, actionHeight);
+		if (m_btnStopProxy.GetSafeHwnd() && g_MainTab && g_MainTab->IsProxyRunning())
+		{
+			m_btnStopProxy.MoveWindow(panel.left + slot.left - stopWidth - UiTheme::ScaleForWindow(m_hWnd, 10),
+				panel.top + slot.top, stopWidth, actionHeight);
+		}
+		if (m_btnTestProxy.GetSafeHwnd() && testing)
+		{
+			m_btnTestProxy.MoveWindow(panel.left + slot.left - testWidth - UiTheme::ScaleForWindow(m_hWnd, 10),
+				panel.top + slot.top, testWidth, actionHeight);
+		}
+		top = panel.bottom + UiTheme::ScaleForWindow(m_hWnd, 16);
 	}
-	const int toolbarWidth = selectWidth + finderWidth + refreshWidth + injectWidth + terminateWidth + gap * 4;
-	int toolbarLeft = rcClient.right - margin - toolbarWidth;
-	int listTop = UiTheme::ScaleForWindow(m_hWnd, 58);
-	const BOOL separateRow = toolbarLeft < UiTheme::ScaleForWindow(m_hWnd, 160);
+
+	// Process section: heading on the left, tools on the right.
+	auto compactWidth = [this](CWnd& control, int padding, int minimum) {
+		if (!control.GetSafeHwnd()) return UiTheme::ScaleForWindow(m_hWnd, max(padding, minimum));
+		CString label; control.GetWindowText(label);
+		CClientDC dc(&control);
+		CFont* font = control.GetFont();
+		CFont* old = font ? dc.SelectObject(font) : NULL;
+		const int width = max(UiTheme::ScaleForWindow(m_hWnd, minimum),
+			dc.GetTextExtent(label).cx + UiTheme::ScaleForWindow(m_hWnd, padding));
+		if (old) dc.SelectObject(old);
+		return width;
+	};
+	const int finderWidth = UiTheme::ScaleForWindow(m_hWnd, 30);
+	const int injectWidth = compactWidth(m_btnInject, 20, 72);
+	const int terminateWidth = compactWidth(m_btnTerminate, 20, 72);
+	const int toolbarWidth = finderWidth + injectWidth + terminateWidth + gap * 2;
+	const int headingWidth = compactWidth(m_processToggle, 20, 0);
+	const int onlyWidth = compactWidth(m_onlyHooked, 44, 0);
+	const int preferredSearchWidth = UiTheme::ScaleForWindow(m_hWnd, 120);
+	const int minimumSearchWidth = UiTheme::ScaleForWindow(m_hWnd, 80);
+	const int availableSearchWidth = rcClient.Width() - margin * 2 - toolbarWidth - headingWidth - onlyWidth - gap * 3;
+	// Shrink the search field before moving the action buttons to another row.
+	const BOOL separateRow = availableSearchWidth < minimumSearchWidth;
+	const int firstRowSpace = rcClient.Width() - margin * 2 - headingWidth - onlyWidth - gap * 2;
+	const int searchWidth = separateRow ? min(preferredSearchWidth, max(minimumSearchWidth, firstRowSpace))
+		: min(preferredSearchWidth, availableSearchWidth);
+
+	if (m_processToggle.GetSafeHwnd())
+		m_processToggle.MoveWindow(margin, top, headingWidth, buttonHeight);
+	if (m_processSearch.GetSafeHwnd())
+	{
+		m_processSearch.ShowWindow(m_processesExpanded ? SW_SHOW : SW_HIDE);
+		m_onlyHooked.ShowWindow(m_processesExpanded ? SW_SHOW : SW_HIDE);
+		m_processSearch.MoveWindow(margin + headingWidth + gap, top, searchWidth, buttonHeight);
+		m_onlyHooked.MoveWindow(margin + headingWidth + gap * 2 + searchWidth, top, onlyWidth, buttonHeight);
+	}
+	if (!m_processesExpanded)
+		return;
+	int left = separateRow ? margin : rcClient.right - margin - toolbarWidth;
+	int toolbarTop = top;
 	if (separateRow)
-	{
-		buttonTop = listTop;
-		toolbarLeft = margin;
-		listTop += buttonHeight + margin;
-	}
-	if (CWnd* title = GetDlgItem(IDC_STATIC_PAGE_TITLE))
-	{
-		CRect titleRect;
-		title->GetWindowRect(&titleRect);
-		ScreenToClient(&titleRect);
-		title->MoveWindow(titleRect.left, titleRect.top,
-			max(0, (separateRow ? rcClient.right - margin : toolbarLeft - gap) - titleRect.left),
-			titleRect.Height());
-	}
-	CWnd* buttons[] = { &m_btnSelectApp, &m_btnWindowFinder, &m_btnRefresh, &m_btnInject, &m_btnTerminate };
-	const int widths[] = { selectWidth, finderWidth, refreshWidth, injectWidth, terminateWidth };
-	int left = toolbarLeft;
+		toolbarTop = top + buttonHeight + gap;
+	CWnd* buttons[] = { &m_btnWindowFinder, &m_btnInject, &m_btnTerminate };
+	const int widths[] = { finderWidth, injectWidth, terminateWidth };
 	for (int i = 0; i < _countof(buttons); ++i)
 	{
 		if (separateRow && left > margin && left + widths[i] > rcClient.right - margin)
 		{
 			left = margin;
-			buttonTop += buttonHeight + gap;
-			listTop = buttonTop + buttonHeight + margin;
+			toolbarTop += buttonHeight + gap;
 		}
-		if (buttons[i]->GetSafeHwnd()) buttons[i]->MoveWindow(left, buttonTop, widths[i], buttonHeight);
+		if (buttons[i]->GetSafeHwnd()) buttons[i]->MoveWindow(left, toolbarTop, widths[i], buttonHeight);
 		left += widths[i] + gap;
 	}
+	const int listTop = toolbarTop + buttonHeight + gap + UiTheme::ScaleForWindow(m_hWnd, 2);
+
+ if (m_filterEmpty.GetSafeHwnd()) m_filterEmpty.SetWindowPos(&wndTop, margin + gap, listTop + buttonHeight + gap,
+  max(0, rcClient.Width() - margin * 2 - gap * 2), buttonHeight, SWP_NOACTIVATE);
+
 	if (m_ListCtrl.GetSafeHwnd())
 	{
 		CRect rc(margin, listTop, rcClient.right - margin, max(listTop, rcClient.bottom - margin));
@@ -1250,6 +1332,8 @@ void CPage3::LayoutProcessPage()
 
 void CPage3::OnProcessSelectionChanged(NMHDR*, LRESULT* result)
 {
+	if (m_applyingProcesses) { *result = 0; return; }
+	if (m_ListCtrl.GetSelectedCount() > 0 && !m_btnWindowFinder.IsTracking()) RestoreProcessPageSubtitle();
 	if (m_btnTerminate.GetSafeHwnd())
 		m_btnTerminate.EnableWindow(!m_terminating && m_ListCtrl.GetSelectedCount() > 0);
 	*result = 0;
@@ -1257,7 +1341,7 @@ void CPage3::OnProcessSelectionChanged(NMHDR*, LRESULT* result)
 
 void CPage3::OnBnClickedTerminateProcess()
 {
-	if (m_terminating) return;
+	if (m_terminating || m_applyingProcesses) return;
 	CancelLaunchSelection();
 	struct Target { DWORD pid; CString name; HANDLE handle; DWORD error; };
 	std::vector<Target> targets;
@@ -1322,8 +1406,338 @@ void CPage3::OnBnClickedTerminateProcess()
 	UpdatePslist(FALSE);
 }
 
+void CPage3::ReloadRecentApplications(BOOL force)
+{
+	if (m_recentLaunching) return;
+	// Mirrors the shared cache protocol used by the proxy page: the cache owns
+	// background loading; this page only clones what is ready to show.
+	const BOOL running = g_MainTab && g_MainTab->IsProxyRunning();
+	CPage1* settings = g_MainTab ? g_MainTab->GetPage1() : NULL;
+	const CString profile = running ? g_MainTab->GetRunningProfileName() :
+		(settings ? settings->GetSelectedProfileName() : CString());
+	const CString identity = running ? g_MainTab->GetRunningRecentProfileId() :
+		(settings ? settings->GetSelectedRecentProfileId() : CString());
+	if (m_launchPanel.IsInteracting() && identity == m_recentProfileId) return;
+	BOOL changed = force || identity != m_recentProfileId;
+	if (identity != m_recentProfileId)
+	{
+		RecentApplications::ReleaseIcons(m_recentEntries);
+		m_recentEntries.clear();
+		if (m_recentLoad) { m_recentLoad->Release(); m_recentLoad = NULL; }
+		m_recentProfileId = identity;
+		m_recentConsumed = TRUE;
+		m_recentReadFailed = FALSE;
+	}
+	if (!identity.IsEmpty())
+	{
+		RecentApplications::Load* latest = RecentApplications::AcquireLoad(profile, RecentApplications::DefaultPath(), identity);
+		if (latest != m_recentLoad)
+		{
+			RecentApplications::Load* ready = RecentApplications::AcquireReadyLoad(profile, RecentApplications::DefaultPath(), identity);
+			if (ready)
+			{
+				RecentApplications::ReleaseIcons(m_recentEntries);
+				m_recentEntries.clear();
+				RecentApplications::Clone(ready->entries, m_recentEntries);
+				ready->Release();
+			}
+			if (m_recentLoad) m_recentLoad->Release();
+			m_recentLoad = latest;
+			m_recentConsumed = FALSE;
+			changed = TRUE;
+		}
+		else latest->Release();
+		EnterCriticalSection(&m_recentLoad->lock);
+		const BOOL done = m_recentLoad->done;
+		LeaveCriticalSection(&m_recentLoad->lock);
+		if (done && !m_recentConsumed)
+		{
+			m_recentReadFailed = !m_recentLoad->succeeded;
+			if (!m_recentReadFailed)
+			{
+				RecentApplications::ReleaseIcons(m_recentEntries);
+				m_recentEntries.clear();
+				RecentApplications::Clone(m_recentLoad->entries, m_recentEntries);
+			}
+			m_recentConsumed = TRUE;
+			changed = TRUE;
+		}
+	}
+	if (!changed) return;
+
+	// The picker and Home receive the same user-defined order from the cache.
+	std::vector<CLaunchPanel::Tile> tiles;
+	for (size_t i = 0; i < m_recentEntries.size(); ++i)
+	{
+		CLaunchPanel::Tile tile;
+		tile.id = m_recentEntries[i].id;
+		tile.icon = m_recentEntries[i].app.icon;
+		tile.name = m_recentEntries[i].app.name;
+		tile.tip = RecentApplications::Description(m_recentEntries[i]);
+		tile.elevated = m_recentEntries[i].elevated;
+		tile.pinned = m_recentEntries[i].pinned;
+		tile.available = m_recentEntries[i].available;
+		tile.packaged = m_recentEntries[i].app.IsPackaged();
+		tiles.push_back(tile);
+	}
+	const int oldPanelHeight = m_launchPanel.PreferredHeight();
+	m_launchPanel.SetTiles(tiles);
+	if (oldPanelHeight != m_launchPanel.PreferredHeight())
+		LayoutProcessPage();
+}
+
+BOOL CPage3::HasConfiguredProxy() const
+{
+	return g_MainTab && g_MainTab->GetPage1() && g_MainTab->GetPage1()->m_cfgls.GetCount() > 0;
+}
+
+LRESULT CPage3::OnLaunchPanelEdit(WPARAM, LPARAM parameter)
+{
+	const CLaunchPanel::Edit edit = *reinterpret_cast<const CLaunchPanel::Edit*>(parameter);
+	CPage1* settings = g_MainTab ? g_MainTab->GetPage1() : NULL;
+	if (!settings || m_recentLaunching) return 0;
+	const BOOL running = g_MainTab->IsProxyRunning();
+	const CString profile = running ? g_MainTab->GetRunningProfileName() : settings->GetSelectedProfileName();
+	const CString identity = running ? g_MainTab->GetRunningRecentProfileId() : settings->GetSelectedRecentProfileId();
+	if (identity.IsEmpty() || identity != m_recentProfileId) { RefreshLaunchPanel(); return 0; }
+	RecentApplications::Store store(profile, RecentApplications::DefaultPath(), identity);
+	const BOOL saved = edit.remove ? store.Remove(edit.id) : store.MoveTo(edit.id, edit.targetId);
+	if (!saved) MessageBox(Localization::Get(L"recent.write_failed"), Localization::Get(L"recent.title"), MB_OK | MB_ICONWARNING);
+	ReloadRecentApplications(TRUE);
+	settings->PostMessage(WM_RECENT_APPLICATIONS_CHANGED);
+	return saved;
+}
+
+LRESULT CPage3::OnLaunchPanelShortcut(WPARAM, LPARAM parameter)
+{
+	const CString id = *reinterpret_cast<const CString*>(parameter);
+	CPage1* settings = g_MainTab ? g_MainTab->GetPage1() : NULL;
+	if (!settings || m_recentLaunching) return 0;
+	const BOOL running = g_MainTab->IsProxyRunning();
+	const CString profile = running ? g_MainTab->GetRunningProfileName() : settings->GetSelectedProfileName();
+	const CString identity = running ? g_MainTab->GetRunningRecentProfileId() : settings->GetSelectedRecentProfileId();
+	if (profile.IsEmpty() || identity.IsEmpty() || identity != m_recentProfileId) return 0;
+	size_t index = 0;
+	while (index < m_recentEntries.size() && m_recentEntries[index].id != id) ++index;
+	if (index == m_recentEntries.size()) return 0;
+	RecentApplications::Entry entry = m_recentEntries[index]; entry.app.icon = NULL;
+	m_recentLaunching = TRUE;
+	struct Reset { BOOL& value; ~Reset() { value = FALSE; } } reset = { m_recentLaunching };
+	auto stillCurrent = [this, settings, running, profile, identity]() -> BOOL {
+		if (running != g_MainTab->IsProxyRunning()) return FALSE;
+		return identity == m_recentProfileId && (running ?
+			(profile == g_MainTab->GetRunningProfileName() && identity == g_MainTab->GetRunningRecentProfileId()) :
+			(profile == settings->GetSelectedProfileName() && identity == settings->GetSelectedRecentProfileId()));
+	};
+	if (settings->GetSelectedProfileName() == profile && settings->HasUnsavedProfileChanges())
+	{
+		if (MessageBox(Localization::Get(L"shortcut.save_profile"), Localization::Get(L"shortcut.title"),
+			MB_OKCANCEL | MB_ICONQUESTION) != IDOK || !stillCurrent() ||
+			settings->GetSelectedProfileName() != profile || !settings->SavePendingProfile()) return 0;
+	}
+	if (LaunchShortcut::PromptCreate(this, profile, entry, stillCurrent))
+		g_MainTab->ShowTransientStatus(Localization::Get(L"shortcut.created"), CStatusLabel::TONE_SUCCESS);
+	return 0;
+}
+
+void CPage3::RefreshLaunchPanel()
+{
+	if (!m_launchPanel.GetSafeHwnd()) return;
+	const int oldPanelHeight = m_launchPanel.PreferredHeight();
+	const BOOL running = g_MainTab && g_MainTab->IsProxyRunning();
+	const BOOL configured = HasConfiguredProxy();
+	ReloadRecentApplications(FALSE);
+	CString empty = Localization::Get(!m_recentConsumed ? L"apps.loading_list" :
+		(m_recentReadFailed ? L"recent.read_failed" : L"recent.empty"));
+	LPCTSTR titleKey = running ? _T("launch.title_ready") : (configured ? _T("launch.title_offline") : _T("launch.title_unconfigured"));
+	LPCTSTR bodyKey = running ? _T("launch.body_ready") : (configured ? _T("launch.body_offline") : _T("launch.body_unconfigured"));
+	CString body = Localization::Get(bodyKey);
+	COLORREF bodyColor = CLR_NONE;
+	CPage1* settings = g_MainTab ? g_MainTab->GetPage1() : NULL;
+	const BOOL testAvailable = !running && configured && settings;
+	if (!testAvailable) m_showTestStatus = FALSE;
+	if (m_showTestStatus)
+	{
+		CStatusLabel::Tone tone;
+		const CString status = settings->GetProxyTestStatus(tone);
+		// Editing or switching the profile resets Page1 to a neutral status.
+		if (settings->IsProxyTesting() || (tone != CStatusLabel::TONE_NEUTRAL && !status.IsEmpty()))
+		{
+			body = status;
+			bodyColor = tone == CStatusLabel::TONE_SUCCESS ? UiTheme::Success() :
+				tone == CStatusLabel::TONE_DANGER ? UiTheme::Danger() :
+				tone == CStatusLabel::TONE_WARNING ? RGB(180, 83, 9) :
+				tone == CStatusLabel::TONE_INFO ? UiTheme::Accent() : CLR_NONE;
+		}
+		else if (!settings->IsProxyTesting())
+			m_showTestStatus = FALSE;
+	}
+	m_launchPanel.SetText(Localization::Get(titleKey), body,
+		Localization::Get(_T("recent.title")), empty);
+	m_launchPanel.SetBodyColor(bodyColor);
+	m_launchPanel.SetEnabledState(running);
+	m_launchPanel.SetProfileSummary(!running && configured ?
+		g_MainTab->GetPage1()->GetSelectedProfileSummary() : CString());
+	if (m_btnStopProxy.GetSafeHwnd())
+		m_btnStopProxy.ShowWindow(running ? SW_SHOW : SW_HIDE);
+	BOOL relayout = FALSE;
+	if (m_btnTestProxy.GetSafeHwnd())
+	{
+		const BOOL wasVisible = m_btnTestProxy.IsWindowVisible();
+		m_btnTestProxy.ShowWindow(testAvailable ? SW_SHOW : SW_HIDE);
+		const CString testText = Localization::Get(testAvailable && settings->IsProxyTesting()
+			? _T("launch.action_cancel_test") : _T("launch.action_test"));
+		CString currentTest;
+		m_btnTestProxy.GetWindowText(currentTest);
+		if (currentTest != testText) { m_btnTestProxy.SetWindowText(testText); relayout = TRUE; }
+		if (wasVisible != testAvailable) relayout = TRUE;
+	}
+
+	// One action button whose meaning follows the state of the proxy.
+	// Beside the header that names the profile, short verbs are enough.
+	LPCTSTR actionKey = running ? _T("apps.select") : (configured ? _T("launch.action_enable") : _T("launch.goto_proxy"));
+	m_btnSelectApp.SetIcon(!running && configured ? CModernButton::ICON_POWER : CModernButton::ICON_NONE);
+	const CString actionText = Localization::Get(actionKey);
+	CString current;
+	m_btnSelectApp.GetWindowText(current);
+	if (current != actionText)
+	{
+		m_btnSelectApp.SetWindowText(actionText);
+		LayoutProcessPage();
+	}
+	else if (relayout || oldPanelHeight != m_launchPanel.PreferredHeight())
+		LayoutProcessPage();
+}
+
+void CPage3::OnBnClickedTestProxy()
+{
+	CPage1* settings = g_MainTab ? g_MainTab->GetPage1() : NULL;
+	if (!settings || g_MainTab->IsProxyRunning()) return;
+	// Same test as the proxy page: it uses the selected profile, including
+	// unsaved edits, and a second click cancels a running test.
+	settings->OnBnClickedTestproxy();
+	m_showTestStatus = TRUE;
+	RefreshLaunchPanel();
+}
+
+void CPage3::OnBnClickedStopProxy()
+{
+	if (g_MainTab && g_MainTab->GetPage1())
+		g_MainTab->GetPage1()->OnBnClickedCancel();
+}
+
+void CPage3::OnBnClickedProcessToggle()
+{
+	SetProcessesExpanded(!m_processesExpanded);
+}
+
+void CPage3::SetProcessesExpanded(BOOL expanded)
+{
+	m_processesExpanded = expanded;
+	if (expanded && m_processSearch.GetSafeHwnd()) {
+		m_processSearch.GetWindowText(m_filterText); m_filterText.Trim(); m_filterText.MakeLower();
+		m_filterHooked = m_onlyHooked.GetCheck() == BST_CHECKED;
+	}
+	// Prepare geometry and rows while hidden. Showing the template rectangle
+	// first briefly covers the recent-app tiles on the first expansion.
+	const BOOL freezeRedraw = IsWindowVisible();
+	if (freezeRedraw) SetRedraw(FALSE);
+	if (!expanded) { CancelLaunchSelection(); CancelProcessRefresh(); }
+	RestoreProcessPageSubtitle();
+	if (m_processToggle.GetSafeHwnd())
+		m_processToggle.SetWindowText(Localization::Get(expanded ? _T("launch.processes_hide") : _T("launch.processes_show")));
+	LayoutProcessPage();
+	const int show = expanded ? SW_SHOWNA : SW_HIDE;
+	m_ListCtrl.ShowWindow(show);
+	m_btnWindowFinder.ShowWindow(show);
+	m_btnInject.ShowWindow(show);
+	m_btnTerminate.ShowWindow(show);
+	m_processSearch.ShowWindow(show); m_onlyHooked.ShowWindow(show);
+	m_filterEmpty.ShowWindow(SW_HIDE);
+	if (freezeRedraw)
+	{
+		SetRedraw(TRUE);
+		RedrawWindow(NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+	}
+	// WM_SETREDRAW(FALSE) temporarily removes WS_VISIBLE from this page.
+	// Request the initial snapshot only after restoring the page's visibility.
+	if (expanded) UpdatePslist(TRUE);
+	PublishProcessAccessibility(false);
+}
+
+LRESULT CPage3::OnLaunchPanelProfile(WPARAM, LPARAM)
+{
+	if (g_MainTab && !g_MainTab->IsProxyRunning() && !m_recentLaunching)
+	{
+		g_MainTab->SelectPage(CMainTab::PAGE_PROXY);
+		g_MainTab->GetPage1()->m_cfgls.SetFocus();
+	}
+	return 0;
+}
+
+LRESULT CPage3::OnLaunchPanelTile(WPARAM index, LPARAM mode)
+{
+	if (m_recentLaunching || !g_MainTab || index >= m_recentEntries.size()) return 0;
+	RecentApplications::Entry entry = m_recentEntries[index];
+	// Change only the launch copy. Remember() commits this preference after a
+	// successful launch, retaining the tile's identity, pin and position.
+	if (mode == CLaunchPanel::LAUNCH_NORMAL) entry.elevated = FALSE;
+	else if (mode == CLaunchPanel::LAUNCH_ADMIN && !entry.app.IsPackaged()) entry.elevated = TRUE;
+	m_recentLaunching = TRUE;
+	struct Reset {
+		BOOL& flag; CLaunchPanel& panel;
+		~Reset() { flag = FALSE; panel.SetBusyTile(-1); }
+	} reset = { m_recentLaunching, m_launchPanel };
+	if (!g_MainTab->IsProxyRunning())
+	{
+		CPage1* settings = g_MainTab->GetPage1();
+		const CString profile = settings ? settings->GetSelectedProfileName() : CString();
+		if (profile.IsEmpty() || entry.profileId != settings->GetSelectedRecentProfileId())
+		{
+			g_MainTab->ShowTransientStatus(Localization::Get(L"launch.profile_changed"), CStatusLabel::TONE_NEUTRAL);
+			return 0;
+		}
+		CString prompt = Localization::Format(L"launch.confirm_start_app",
+			static_cast<LPCTSTR>(profile), static_cast<LPCTSTR>(entry.app.name));
+		if (settings->HasUnsavedProfileChanges()) prompt += L"\r\n\r\n" + Localization::Get(L"launch.confirm_draft");
+		if (MessageBox(prompt, Localization::Get(L"launch.confirm_title"), MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) return 0;
+		// A modal confirmation can pump messages: never silently use a different profile.
+		if (profile != settings->GetSelectedProfileName() || entry.profileId != settings->GetSelectedRecentProfileId())
+		{
+			g_MainTab->ShowTransientStatus(Localization::Get(L"launch.profile_changed"), CStatusLabel::TONE_NEUTRAL);
+			return 0;
+		}
+		m_launchPanel.SetBusyTile(static_cast<int>(index));
+		InstalledApplications::Application target;
+		if (!RecentApplications::Resolve(entry, target))
+		{
+			MessageBox(Localization::Get(L"recent.unavailable"), Localization::Get(L"recent.title"), MB_OK | MB_ICONWARNING);
+			return 0;
+		}
+		if (!g_MainTab->IsProxyRunning() && !settings->StartProxy(TRUE)) return 0;
+	}
+	m_launchPanel.SetBusyTile(static_cast<int>(index));
+	LaunchRecentApplication(entry); // Revalidates the running identity and application target.
+	return 0;
+}
+
+LRESULT CPage3::OnRecentApplicationsChanged(WPARAM, LPARAM)
+{
+	ReloadRecentApplications(TRUE);
+	return 0;
+}
+
 void CPage3::OnBnClickedSelectApp()
 {
+	if (!g_MainTab || !g_MainTab->IsProxyRunning())
+	{
+		// Not running: start the configured proxy, or lead the user to configure one.
+		if (HasConfiguredProxy())
+			g_MainTab->GetPage1()->OnBnClickedOk();
+		else if (g_MainTab)
+			g_MainTab->SelectPage(CMainTab::PAGE_PROXY);
+		return;
+	}
 	CApplicationPicker picker(this);
 	if (picker.DoModal() != IDOK) return;
 	if (!picker.m_selectedRecent.id.IsEmpty())
@@ -1345,6 +1759,29 @@ AppLaunchResult CPage3::LaunchInteractiveApplication(const InstalledApplications
 		elevationMode == APP_LAUNCH_ELEVATION_FORCE_ADMIN);
 	InstalledApplications::Application resolved;
 	if (!RecentApplications::Resolve(entry, resolved)) return APP_LAUNCH_INVALID_TARGET;
+	AutomationOptions shortcutOptions;
+	InstalledApplications::Application original;
+	const LaunchShortcut::DecodeResult shortcutState = LaunchShortcut::Decode(resolved, original, shortcutOptions);
+	if (shortcutState == LaunchShortcut::Invalid) return APP_LAUNCH_SHORTCUT_INVALID;
+	if (shortcutState == LaunchShortcut::Decoded)
+	{
+		if (shortcutOptions.elevated) elevationMode = APP_LAUNCH_ELEVATION_FORCE_ADMIN;
+		shortcutOptions.elevated = elevationMode == APP_LAUNCH_ELEVATION_FORCE_ADMIN;
+		if (shortcutOptions.profileName.CompareNoCase(runningProfile) != 0)
+		{
+			const int answer = LaunchShortcut::ChooseProfile(GetSafeHwnd(), shortcutOptions.profileName, runningProfile);
+			if (answer == IDCANCEL) return APP_LAUNCH_CANCELLED;
+			if (answer == IDYES)
+			{
+				shortcutOptions.shortcut = TRUE;
+				return LaunchShortcut::Start(shortcutOptions) ? APP_LAUNCH_FORWARDED : APP_LAUNCH_CREATE_PROCESS_FAILED;
+			}
+			if (!g_MainTab->IsProxyRunning() || runningIdentity != g_MainTab->GetRunningRecentProfileId()) return APP_LAUNCH_CANCELLED;
+		}
+		resolved = original;
+		// Do not remember a wrapper or its source .lnk: future launches must target the app.
+		entry = RecentApplications::FromApplication(resolved, elevationMode == APP_LAUNCH_ELEVATION_FORCE_ADMIN);
+	}
 	const CString name = entry.app.name;
 	entry.app = resolved;
 	entry.app.icon = NULL;
@@ -1362,6 +1799,7 @@ AppLaunchResult CPage3::LaunchInteractiveApplication(const InstalledApplications
 			g_MainTab->AddLogText(0, text);
 		}
 		g_MainTab->GetPage1()->PostMessage(WM_RECENT_APPLICATIONS_CHANGED);
+		PostMessage(WM_RECENT_APPLICATIONS_CHANGED);
 	}
 	return result;
 }
@@ -1382,6 +1820,7 @@ void CPage3::LaunchRecentApplication(const RecentApplications::Entry& entry)
 
 void CPage3::ShowApplicationLaunchResult(const CString& name, AppLaunchResult result)
 {
+	if (result == APP_LAUNCH_CANCELLED || result == APP_LAUNCH_FORWARDED) return;
 	if (result == APP_LAUNCH_SUCCESS)
 	{
 		g_MainTab->ShowTransientStatus(Localization::Format(_T("dialog.started_proxy"),
@@ -1390,6 +1829,7 @@ void CPage3::ShowApplicationLaunchResult(const CString& name, AppLaunchResult re
 	}
 	LPCTSTR messageKey = _T("dialog.drop_launch_failed");
 	if (result == APP_LAUNCH_INVALID_TARGET) messageKey = _T("dialog.drop_invalid");
+	else if (result == APP_LAUNCH_SHORTCUT_INVALID) messageKey = L"shortcut.recursive";
 	else if (result == APP_LAUNCH_UAC_CANCELLED) messageKey = _T("dialog.drop_uac_cancelled");
 	else if (result == APP_LAUNCH_ELEVATED_HELPER_FAILED) messageKey = _T("dialog.drop_elevated_failed");
 	else if (result == APP_LAUNCH_INJECTION_FAILED)
@@ -1457,10 +1897,368 @@ void CPage3::UpdateWindowFinderHighlight(HWND targetWindow)
 
 BOOL CPage3::SelectProcessByPid(DWORD processId)
 {
+	if (!m_processesExpanded) SetProcessesExpanded(TRUE);
 	std::vector<DWORD> processIds;
 	if (processId)
 		processIds.push_back(processId);
 	return SelectProcessesByPid(processIds);
+}
+
+BOOL CPage3::IsBrowserCandidateHooked(const BrowserLaunchWatch::Identity& identity) const
+{
+	HookProcessIdentityInfo record = {};
+	return m_processRegistry && m_processRegistry->Get(identity.pid, identity.time, &record) &&
+		record.hookState == PROCESS_HOOK_STATE_SUCCEEDED;
+}
+
+static std::vector<BrowserLaunchWatch::Node> ReadBrowserNodes(
+	const ProxyProcessIdentity::Snapshot& snapshot, const std::wstring& path, DWORD sessionId,
+	unsigned* unreadable = NULL)
+{
+	std::vector<BrowserLaunchWatch::Node> nodes;
+	if (unreadable) *unreadable = 0;
+	if (!snapshot.complete) return nodes;
+	const std::wstring name = path.substr(path.find_last_of(L"\\/") + 1);
+	const BOOL modern = IsVistaOrLater();
+	ProcessImagePath::Resolver resolver;
+	if (modern) resolver.Refresh();
+	for (const auto& process : snapshot.processes)
+	{
+		if (!process.creationTime || process.sessionId != sessionId || _wcsicmp(process.name.c_str(), name.c_str())) continue;
+		std::wstring actualPath;
+		if (modern)
+		{
+			if (!ProcessImagePath::Query(process.pid, actualPath))
+			{
+				if (unreadable) ++*unreadable;
+				continue;
+			}
+			actualPath = resolver.Convert(actualPath);
+		}
+		else
+		{
+			ProcessCommandLine::Handle handle(OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, process.pid));
+			TCHAR buffer[MAX_PATH] = {};
+			if (!handle.value || !ProcessCommandLine::SameLifetime(handle.value, process.creationTime) ||
+				!GetProcessFullPath(handle.value, buffer, _countof(buffer)))
+			{
+				if (unreadable) ++*unreadable;
+				continue;
+			}
+			actualPath = buffer;
+		}
+		if (_wcsicmp(actualPath.c_str(), path.c_str())) continue;
+		std::wstring commandLine;
+		const auto role = ProcessCommandLine::Query(process.pid, process.creationTime, commandLine) ?
+			BrowserLaunchWatch::Classify(commandLine) : BrowserLaunchWatch::Unknown;
+		nodes.push_back({ {process.pid, process.creationTime}, process.parentPid, process.sessionId, actualPath, role });
+	}
+	// Path queries use a PID. Discard exited/reused identities after enrichment.
+	ProxyProcessIdentity::Snapshot after;
+	ProxyProcessIdentity::QuerySnapshot(after);
+	nodes.erase(std::remove_if(nodes.begin(), nodes.end(), [&](const BrowserLaunchWatch::Node& node) {
+		return !BrowserLaunchWatch::Matches(after, node.identity);
+	}), nodes.end());
+	return nodes;
+}
+
+BrowserLaunchWatch::Observation CPage3::CaptureBrowserCandidates(LPCTSTR path)
+{
+	BrowserLaunchWatch::Observation observation;
+	if (!BrowserLaunchWatch::Supported(path) || !m_processRegistry ||
+		theApp.GetAutomationOptions().enabled || !g_MainTab || !g_MainTab->IsProxyRunning()) return observation;
+	TCHAR fullPath[MAX_PATH];
+	const DWORD length = GetFullPathName(path, _countof(fullPath), fullPath, NULL);
+	if (!length || length >= _countof(fullPath)) return observation;
+	ProxyProcessIdentity::Snapshot snapshot;
+	if (!ProxyProcessIdentity::QuerySnapshot(snapshot))
+	{
+		g_MainTab->AddLogText(0, Localization::Get(_T("browser_reuse.log_scan_failed")));
+		return observation;
+	}
+	bool foundSession = false;
+	for (const auto& process : snapshot.processes)
+	{
+		if (process.pid != GetCurrentProcessId()) continue;
+		observation.sessionId = process.sessionId;
+		foundSession = true;
+		break;
+	}
+	if (!foundSession) return observation;
+	observation.path = fullPath;
+	// Keep already-hooked roots too: their existing/restarted network service may not be hooked.
+	unsigned unreadable = 0;
+	for (const auto& instance : BrowserLaunchWatch::Instances(ReadBrowserNodes(snapshot, observation.path, observation.sessionId, &unreadable)))
+		observation.candidates.push_back(instance.main.identity);
+	g_MainTab->AddLogText(0, Localization::Format(_T("browser_reuse.log_candidates"),
+		fullPath, static_cast<unsigned>(observation.candidates.size()), unreadable));
+	return observation;
+}
+
+void CPage3::WatchBrowserLaunch(BrowserLaunchWatch::Observation observation,
+	DWORD pid, ULONGLONG time, DWORD started)
+{
+	if (!pid || !time || observation.candidates.empty()) return;
+	observation.launched = { pid, time };
+	observation.started = started;
+	m_browserLaunches.push_back(observation);
+	SetTimer(TIMER_BROWSER_LAUNCH, 250, NULL);
+}
+
+void CPage3::CheckBrowserLaunches()
+{
+	if (m_showingBrowserWarning) return;
+	if (!g_MainTab || !g_MainTab->IsProxyRunning())
+	{
+		ClearBrowserNotifications();
+		KillTimer(TIMER_BROWSER_LAUNCH);
+		return;
+	}
+	if (!m_browserLaunches.empty())
+	{
+		ProxyProcessIdentity::Snapshot snapshot;
+		ProxyProcessIdentity::QuerySnapshot(snapshot);
+		const auto hooked = [this](const BrowserLaunchWatch::Identity& identity) { return IsBrowserCandidateHooked(identity); };
+		for (size_t index = 0; index < m_browserLaunches.size();)
+		{
+			std::vector<BrowserLaunchWatch::Identity> candidates;
+			const auto result = BrowserLaunchWatch::Evaluate(m_browserLaunches[index], GetTickCount(), snapshot, candidates);
+			if (result == BrowserLaunchWatch::Pending) { ++index; continue; }
+			auto observation = m_browserLaunches[index];
+			m_browserLaunches.erase(m_browserLaunches.begin() + index);
+			if (result != BrowserLaunchWatch::Suggest)
+			{
+				g_MainTab->AddLogText(0, Localization::Format(_T("browser_reuse.log_discarded"), observation.path.c_str()));
+				continue;
+			}
+			const auto instances = BrowserLaunchWatch::IncompleteInstances(
+				ReadBrowserNodes(snapshot, observation.path, observation.sessionId), candidates, hooked);
+			if (instances.empty())
+			{
+				g_MainTab->AddLogText(0, Localization::Format(_T("browser_reuse.log_resolved"), observation.path.c_str()));
+				continue;
+			}
+			g_MainTab->AddLogText(0, Localization::Format(_T("browser_reuse.log_risk"), observation.path.c_str()));
+			observation.candidates.clear();
+			for (const auto& instance : instances) observation.candidates.push_back(instance.main.identity);
+			// Merge repeated launches into the same still-visible notification only
+			// when the browser lifetime is shared. A restarted browser is a new event.
+			bool merged = false;
+			for (auto& notice : m_browserNotifications)
+			{
+				if (notice.sessionId != observation.sessionId || _wcsicmp(notice.path.c_str(), observation.path.c_str())) continue;
+				bool overlap = false;
+				for (const auto& a : notice.candidates)
+					for (const auto& b : observation.candidates) overlap |= a.pid == b.pid && a.time == b.time;
+				if (!overlap) continue;
+				for (const auto& identity : observation.candidates)
+				{
+					const auto found = std::find_if(notice.candidates.begin(), notice.candidates.end(),
+						[&](const BrowserLaunchWatch::Identity& old) { return old.pid == identity.pid && old.time == identity.time; });
+					if (found == notice.candidates.end()) notice.candidates.push_back(identity);
+				}
+				merged = true;
+				break;
+			}
+			if (!merged) m_browserNotifications.push_back(observation);
+		}
+	}
+	if (!m_browserNotificationActive && !m_browserNotifications.empty())
+	{
+		const auto& notice = m_browserNotifications.front();
+		const CString name(notice.path.substr(notice.path.find_last_of(L"\\/") + 1).c_str());
+		m_browserNotificationActive = TRUE;
+		CProxyLaneDlg* owner = static_cast<CProxyLaneDlg*>(GetTopLevelParent());
+		if (!owner || !owner->ShowBrowserNotification(name)) DismissBrowserNotification();
+	}
+	// Waiting for a notification click/timeout does not poll system processes.
+	if (m_browserLaunches.empty() && (m_browserNotificationActive || m_browserNotifications.empty()))
+		KillTimer(TIMER_BROWSER_LAUNCH);
+}
+
+void CPage3::DismissBrowserNotification()
+{
+	if (!m_browserNotificationActive) return;
+	m_browserNotificationActive = FALSE;
+	if (!m_browserNotifications.empty()) m_browserNotifications.erase(m_browserNotifications.begin());
+	if (!m_browserNotifications.empty()) SetTimer(TIMER_BROWSER_LAUNCH, 250, NULL);
+}
+
+void CPage3::ClearBrowserNotifications()
+{
+	const BOOL active = m_browserNotificationActive;
+	m_browserNotificationActive = FALSE;
+	m_browserNotifications.clear();
+	m_browserLaunches.clear();
+	if (active)
+	{
+		CProxyLaneDlg* owner = static_cast<CProxyLaneDlg*>(GetTopLevelParent());
+		if (owner) owner->HideBrowserNotification();
+	}
+}
+
+void CPage3::OpenBrowserNotification()
+{
+	if (!m_browserNotificationActive || m_browserNotifications.empty()) return;
+	const auto observation = m_browserNotifications.front();
+	DismissBrowserNotification();
+	static_cast<CProxyLaneDlg*>(GetTopLevelParent())->HideBrowserNotification();
+	CWnd* owner = GetTopLevelParent();
+	if (!owner || !owner->IsWindowEnabled() || m_showingBrowserWarning || m_terminating ||
+		m_btnWindowFinder.IsTracking() || !g_MainTab || !g_MainTab->IsProxyRunning()) return;
+	ProxyProcessIdentity::Snapshot snapshot;
+	ProxyProcessIdentity::QuerySnapshot(snapshot);
+	if (!snapshot.complete)
+	{
+		MessageBox(Localization::Get(_T("browser_reuse.check_failed")),
+			Localization::Get(_T("browser_reuse.title")), MB_OK | MB_ICONINFORMATION);
+		return;
+	}
+	const auto hooked = [this](const BrowserLaunchWatch::Identity& identity) { return IsBrowserCandidateHooked(identity); };
+	const auto candidates = observation.candidates;
+	const auto nodes = ReadBrowserNodes(snapshot, observation.path, observation.sessionId);
+	const auto instances = BrowserLaunchWatch::IncompleteInstances(nodes, candidates, hooked);
+	if (instances.empty())
+	{
+		MessageBox(Localization::Get(_T("browser_reuse.resolved")),
+			Localization::Get(_T("browser_reuse.title")), MB_OK | MB_ICONINFORMATION);
+		return;
+	}
+	CString details;
+	const CString name(observation.path.substr(observation.path.find_last_of(L"\\/") + 1).c_str());
+	const auto append = [&](const BrowserLaunchWatch::Identity& identity, LPCTSTR role, bool child) {
+		if (child) details += _T("   ");
+		details += Localization::Format(_T("browser_reuse.process"), static_cast<LPCTSTR>(name),
+			identity.pid, static_cast<LPCTSTR>(Localization::Get(role)), static_cast<LPCTSTR>(Localization::Get(hooked(identity) ?
+				_T("browser_reuse.hooked") : _T("browser_reuse.unhooked"))));
+	};
+	for (const auto& instance : instances)
+	{
+		append(instance.main.identity, instance.main.role == BrowserLaunchWatch::Main ?
+			_T("browser_reuse.main") : _T("browser_reuse.unknown_root"), false);
+		for (const auto& network : instance.networks) append(network, _T("browser_reuse.network"), true);
+		if (instance.networks.empty()) details += Localization::Get(_T("browser_reuse.unknown_network"));
+		details += _T("\r\n");
+	}
+	m_showingBrowserWarning = TRUE;
+	CBrowserReuseDialog dialog(name, details, owner);
+	const INT_PTR choice = dialog.DoModal();
+	if (choice == IDC_BROWSER_REUSE_TERMINATE || choice == IDC_BROWSER_REUSE_PROXY)
+	{
+		// Freeze the scope to the main/network identities actually shown. Do
+		// not add new children or another browser instance after the user clicks.
+		std::vector<BrowserLaunchWatch::Identity> targets;
+		for (const auto& instance : instances)
+		{
+			targets.push_back(instance.main.identity);
+			targets.insert(targets.end(), instance.networks.begin(), instance.networks.end());
+		}
+		g_MainTab->HideTransientStatus();
+		ApplyBrowserProcessAction(name, targets, choice == IDC_BROWSER_REUSE_TERMINATE);
+	}
+	if (choice == IDOK)
+	{
+		g_MainTab->HideTransientStatus();
+		CancelLaunchSelection();
+		g_MainTab->SelectPage(CMainTab::PAGE_APPLICATIONS);
+		UpdatePslist(FALSE);
+		ProxyProcessIdentity::Snapshot current;
+		ProxyProcessIdentity::QuerySnapshot(current);
+		std::vector<DWORD> selected;
+		const auto remaining = BrowserLaunchWatch::IncompleteInstances(
+			ReadBrowserNodes(current, observation.path, observation.sessionId), candidates, hooked);
+		for (const auto& instance : remaining)
+		{
+			std::vector<BrowserLaunchWatch::Identity> related = instance.networks;
+			related.push_back(instance.main.identity);
+			for (const auto& candidate : related)
+			{
+				const auto row = m_processSortData.find(candidate.pid);
+				if (row != m_processSortData.end() && row->second.startTimeValue == candidate.time)
+					selected.push_back(candidate.pid);
+			}
+		}
+		m_ListCtrl.SetItemState(-1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+		SelectProcessesByPid(selected);
+		SetDlgItemText(IDC_STATIC_PAGE_SUBTITLE, Localization::Get(selected.empty() ?
+			_T("browser_reuse.gone") : _T("browser_reuse.selected")));
+	}
+	m_showingBrowserWarning = FALSE;
+}
+
+void CPage3::ApplyBrowserProcessAction(const CString& name,
+	const std::vector<BrowserLaunchWatch::Identity>& targets, BOOL terminate)
+{
+	CWnd* owner = GetTopLevelParent();
+	const CString title = Localization::Get(terminate ? _T("browser_reuse.terminate") : _T("browser_reuse.proxy"));
+	ProxyProcessIdentity::Snapshot snapshot;
+	if (!ProxyProcessIdentity::QuerySnapshot(snapshot))
+	{
+		owner->MessageBox(Localization::Get(_T("page3.read_failed")), title, MB_OK | MB_ICONWARNING);
+		return;
+	}
+	std::vector<BrowserLaunchWatch::Identity> active;
+	int skipped = 0;
+	for (const auto& target : targets)
+	{
+		if (!BrowserLaunchWatch::Matches(snapshot, target) || (!terminate && IsBrowserCandidateHooked(target)))
+			++skipped;
+		else active.push_back(target);
+	}
+	if (terminate && !active.empty())
+	{
+		CString names;
+		for (size_t i = 0; i < active.size() && i < 10; ++i)
+		{
+			CString line;
+			line.Format(_T("%s (PID %lu)\r\n"), static_cast<LPCTSTR>(name), active[i].pid);
+			names += line;
+		}
+		if (active.size() > 10) names += _T("...\r\n");
+		if (owner->MessageBox(Localization::Format(_T("page3.end_confirm"),
+			static_cast<int>(active.size()), static_cast<LPCTSTR>(names)), title,
+			MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING) != IDYES) return;
+	}
+	std::vector<DWORD> errors;
+	if (terminate)
+	{
+		std::vector<ProcessActions::TerminationTarget> exact;
+		for (const auto& target : active) exact.push_back({ target.pid, target.time });
+		errors = ProcessActions::TerminateExactProcesses(exact);
+	}
+	else if (!active.empty())
+	{
+		char pipe[MAX_PATH] = {};
+		IProxyReceptionCentre* prc = g_GlobalProxy ? g_GlobalProxy->GetPRCInstance() : NULL;
+		if (!g_MainTab->IsProxyRunning() || !prc || !prc->GetPRCPipeName(pipe, MAX_PATH))
+		{
+			owner->MessageBox(Localization::Get(_T("page3.start_proxy_first")), title, MB_OK | MB_ICONWARNING);
+			return;
+		}
+		for (const auto& target : active)
+		{
+			SetLastError(ERROR_SUCCESS);
+			const BOOL hooked = HookProcess(target.pid, pipe, target.time);
+			const DWORD error = GetLastError();
+			errors.push_back(hooked ? ERROR_SUCCESS : (error ? error : ERROR_GEN_FAILURE));
+		}
+	}
+	int succeeded = 0, failed = 0;
+	CString failures;
+	for (size_t i = 0; i < errors.size(); ++i)
+	{
+		if (!errors[i]) ++succeeded;
+		else if (++failed <= 10) failures += Localization::Format(_T("page3.end_error"),
+			static_cast<LPCTSTR>(name), active[i].pid, errors[i]);
+	}
+	CString summary = Localization::Format(_T("page3.result_summary"),
+		static_cast<int>(targets.size()), succeeded, failed, skipped);
+	if (skipped) summary += _T("\r\n") + Localization::Get(_T("browser_reuse.skipped"));
+	if (failed) summary += _T("\r\n\r\n") + failures;
+	summary += _T("\r\n\r\n") + Localization::Get(terminate ?
+		_T("browser_reuse.restart") : _T("browser_reuse.connections"));
+	owner->MessageBox(summary, title, MB_OK | (failed ? MB_ICONWARNING : MB_ICONINFORMATION));
+	UpdatePslist(FALSE);
 }
 
 void CPage3::CancelLaunchSelection()
@@ -1511,6 +2309,7 @@ void CPage3::RefreshLaunchedProcess(DWORD pid, HANDLE process, ULONGLONG creatio
 
 BOOL CPage3::SelectProcessesByPid(const std::vector<DWORD>& processIds)
 {
+	if (!m_processesExpanded) SetProcessesExpanded(TRUE);
 	if (processIds.empty() || !m_ListCtrl.GetSafeHwnd())
 		return FALSE;
 
@@ -1612,13 +2411,15 @@ void CPage3::CollectDescendantProcessIds(
 
 void CPage3::RestoreProcessPageSubtitle()
 {
+	// The selection tip only makes sense while the process list is shown.
 	SetDlgItemText(
 		IDC_STATIC_PAGE_SUBTITLE,
-		Localization::Get(_T("page3.list_tip")));
+		Localization::Get(m_processesExpanded ? _T("page3.list_tip") : _T("page3.subtitle")));
 }
 
 LRESULT CPage3::OnWindowFinderBegin(WPARAM, LPARAM)
 {
+	CancelProcessRefresh();
 	KillTimer(TIMER_PSLIST);
 	ClearWindowFinderHighlight();
 	if (m_windowFinderToolTip.GetSafeHwnd())
@@ -1642,6 +2443,26 @@ LRESULT CPage3::OnWindowFinderComplete(WPARAM, LPARAM parameter)
 	RestoreProcessPageSubtitle();
 	SetTimer(TIMER_PSLIST, 2000, NULL);
 
+	DWORD pid = 0; HWND highlight = NULL;
+	if (!ResolveWindowFinderTarget(targetWindow, pid, highlight)) return 0;
+	HANDLE process = OpenProcess(IsVistaOrLater() ? 0x1000 : PROCESS_QUERY_INFORMATION, FALSE, pid);
+	const ULONGLONG time = process ? ProcessActions::CreationTime(process) : 0;
+	if (process) CloseHandle(process);
+	// Bind the delayed action to the process lifetime observed at the drop.
+	if (!time)
+	{
+		MessageBox(Localization::Get(L"page3.target_exited"), Localization::Get(L"page3.target_unavailable"), MB_ICONWARNING);
+		return 0;
+	}
+	m_pendingFinderTarget = targetWindow;
+	m_pendingFinderPid = pid;
+	m_pendingFinderTime = time;
+	UpdatePslist(TRUE);
+	return 0;
+}
+
+LRESULT CPage3::FinishWindowFinder(HWND targetWindow, DWORD expectedPid, ULONGLONG expectedTime)
+{
 	DWORD processId = 0;
 	HWND highlightWindow = NULL;
 	if (!ResolveWindowFinderTarget(targetWindow, processId, highlightWindow))
@@ -1653,8 +2474,9 @@ LRESULT CPage3::OnWindowFinderComplete(WPARAM, LPARAM parameter)
 		return 0;
 	}
 
-	UpdatePslist(TRUE);
-	if (!SelectProcessByPid(processId))
+	const auto identity = m_processSortData.find(processId);
+	if (processId != expectedPid || identity == m_processSortData.end() ||
+		identity->second.startTimeValue != expectedTime || !SelectProcessByPid(processId))
 	{
 		MessageBox(
 			Localization::Get(_T("page3.target_exited")),
@@ -1739,6 +2561,7 @@ LRESULT CPage3::OnWindowFinderComplete(WPARAM, LPARAM parameter)
 
 LRESULT CPage3::OnWindowFinderCancel(WPARAM, LPARAM)
 {
+	m_pendingFinderTarget = NULL;
 	ClearWindowFinderHighlight();
 	RestoreProcessPageSubtitle();
 	SetTimer(TIMER_PSLIST, 2000, NULL);
@@ -1747,123 +2570,212 @@ LRESULT CPage3::OnWindowFinderCancel(WPARAM, LPARAM)
 
 int CPage3::UpdatePslist(BOOL bRefresh)
 {
-	CSingleLock lc(&m_evlock, TRUE);
-
-	list<_myPROCESSINFO> psls;
-
-	//查询当前所有进程
-	int nPsCount = GetProcessList(psls);
-
-	// 保存本次快照，排序比较时直接使用原始数据，避免按显示文本错误排序。
-	m_processSortData.clear();
-	for (list<_myPROCESSINFO>::const_iterator it = psls.begin(); it != psls.end(); ++it)
-		m_processSortData[it->pid] = *it;
-	BuildProcessTree();
-
-	int nItemCount = m_ListCtrl.GetItemCount();
-	TCHAR szPath[MAX_PATH];
-
-	//listctrl中逐个item的查看是否在psls中， 如果在则将psls中的节点移除， 不在则将item移除
-	for(int nItem=0; nItem<nItemCount; nItem++)
+	if (!m_processesExpanded || !IsWindowVisible() || m_applyingProcesses ||
+		m_btnWindowFinder.IsTracking() || m_terminating) return 0;
+	const CString unknown = Localization::Get(L"page3.unknown_process");
+	if (m_processQuery.Request([unknown](std::list<_myPROCESSINFO>& rows) {
+		try { return GetProcessList(rows, unknown) >= 0; }
+		catch (CException* error) { error->Delete(); return false; }
+	}))
 	{
-		LVITEM lvitem;
-		lvitem.mask = LVIF_PARAM | LVIF_TEXT;
-		lvitem.iItem = nItem;
-		lvitem.pszText = szPath;
-		lvitem.cchTextMax = MAX_PATH;
-		lvitem.iSubItem = 3;
-
-		//
-		szPath[0] = 0;
-
-		if(m_ListCtrl.GetItem(&lvitem))
+		m_processQueryTick = GetTickCount();
+		m_processSlowShown = FALSE;
+		if (bRefresh || m_displayedProcesses.empty())
 		{
-			DWORD dwPid = (DWORD)lvitem.lParam;
-
-			BOOL bLive = FALSE;
-			for(list<_myPROCESSINFO>::iterator it = psls.begin(); it!=psls.end();)
-			{
-				if(it->pid == dwPid)
-				{
-					BOOL sameProcess = TRUE;
-					std::map<DWORD, ULONGLONG>::const_iterator displayedTime =
-						m_displayedStartTimes.find(dwPid);
-					if (displayedTime != m_displayedStartTimes.end()
-						&& displayedTime->second != 0
-						&& it->hasStartTime
-						&& displayedTime->second != it->startTimeValue)
-					{
-						// PID 已被新进程复用，先删除旧行，再按新进程重新插入。
-						sameProcess = FALSE;
-					}
-
-					if (!sameProcess)
-						break;
-
-					m_ListCtrl.SetItemText(nItem, 1, it->proname);
-					m_ListCtrl.SetItemText(nItem, 2, it->startTimeText);
-					if (szPath[0] == 0)
-					{
-						if (it->propath[0] != _T('\0'))
-						{
-							m_ListCtrl.SetItemText(nItem, 3, it->propath);
-						}
-					}
-
-					m_displayedStartTimes[dwPid] = it->hasStartTime ? it->startTimeValue : 0;
-					psls.erase(it++);
-					bLive = TRUE;
-					break;
-				}else
-				{
-					it++;
-				}
-			}
-
-			if(bLive == FALSE)
-			{
-				m_displayedStartTimes.erase(dwPid);
-				m_ListCtrl.DeleteItem(nItem--);
-				nItemCount--;
-			}
+			SetDlgItemText(IDC_STATIC_PAGE_SUBTITLE, Localization::Get(L"page3.loading_processes"));
+			m_processStatusShown = TRUE;
 		}
 	}
-
-	//list有剩的则是新的进程
-	for(list<_myPROCESSINFO>::iterator it = psls.begin(); it!=psls.end(); it++)
-	{
-		CString szPid;
-		szPid.Format(_T("%d"), it->pid);
-
-		LVITEM lvitem;
-
-		lvitem.mask = LVIF_PARAM|LVIF_TEXT;
-
-		lvitem.pszText = szPid.GetBuffer();
-		lvitem.lParam = it->pid;
-
-		lvitem.iSubItem = 0;
-		lvitem.iItem = 0;
-
-		m_ListCtrl.InsertItem(&lvitem);
-		m_ListCtrl.SetItemText(0, 1, it->proname);
-		m_ListCtrl.SetItemText(0, 2, it->startTimeText);
-		m_ListCtrl.SetItemText(0, 3, it->propath);
-		m_displayedStartTimes[it->pid] = it->hasStartTime ? it->startTimeValue : 0;
-
-		//if(!bRefresh && m_btnAuto.GetCheck() == BST_CHECKED)
-		//{
-		//	ProxyProcess(it->pid);
-		//}
-
-	}
-
-	// 自动刷新后继续保持用户选择的排序状态。
-	ApplyProcessSort();
-
-	m_evlock.SetEvent();
-	lc.Unlock();
+	// Also poll a previous in-flight query after collapse/reopen. Never create a second worker.
+	if (!m_pollingProcesses) m_pollingProcesses = SetTimer(TIMER_PROCESS_RESULT, 100, NULL) != 0;
 	return 0;
+}
+
+void CPage3::OnShowWindow(BOOL show, UINT status)
+{
+	CModernDialog::OnShowWindow(show, status);
+	if (!show) CancelProcessRefresh();
+	else PostMessage(WM_PROCESS_LIST_REQUEST);
+}
+
+void CPage3::OnDestroy()
+{
+	CancelProcessRefresh();
+	CModernDialog::OnDestroy();
+}
+
+LRESULT CPage3::OnProcessListRequest(WPARAM, LPARAM)
+{
+	UpdatePslist(TRUE);
+	return 0;
+}
+
+void CPage3::CancelProcessRefresh()
+{
+	KillTimer(0x2410);
+	KillTimer(TIMER_PROCESS_RESULT);
+	m_pollingProcesses = FALSE;
+	m_processQuery.Cancel();
+	m_pendingFinderTarget = NULL;
+	m_pendingProcessRows.clear();
+	if (m_applyingProcesses)
+	{
+		// A partially installed snapshot must not become actionable after reopening.
+		m_ListCtrl.DeleteAllItems();
+		m_processSortData.clear();
+		m_displayedProcesses.clear();
+		m_processTreePrefixes.clear();
+	}
+	m_applyingProcesses = FALSE;
+	if (m_btnInject.GetSafeHwnd()) m_btnInject.EnableWindow(TRUE);
+	if (m_btnWindowFinder.GetSafeHwnd()) m_btnWindowFinder.EnableWindow(TRUE);
+	if (m_btnTerminate.GetSafeHwnd()) m_btnTerminate.EnableWindow(!m_terminating && m_ListCtrl.GetSelectedCount() > 0);
+}
+
+CString CPage3::ProcessDisplayName(const _myPROCESSINFO& info) const
+{
+	CString name;
+	if (m_sortState == PROCESS_SORT_NONE)
+	{
+		const auto prefix = m_processTreePrefixes.find(info.pid);
+		if (prefix != m_processTreePrefixes.end()) name = prefix->second;
+	}
+	return name + info.proname;
+}
+
+void CPage3::PollProcessList()
+{
+	if (!IsWindowVisible() || !m_processesExpanded) { CancelProcessRefresh(); return; }
+	if (m_terminating || m_btnWindowFinder.IsTracking()) return;
+	if (m_applyingProcesses) { ApplyProcessBatch(); return; }
+	auto result = m_processQuery.Take();
+	if (!result)
+	{
+		if (m_processQuery.Busy())
+		{
+			if (!m_processSlowShown && GetTickCount() - m_processQueryTick >= 1500)
+			{
+				m_processSlowShown = TRUE;
+				m_processStatusShown = TRUE;
+				SetDlgItemText(IDC_STATIC_PAGE_SUBTITLE, Localization::Get(L"page3.slow_processes"));
+			}
+			return;
+		}
+		KillTimer(TIMER_PROCESS_RESULT);
+		m_pollingProcesses = FALSE;
+		// This can be an invalidated result after reopening. Schedule a fresh scan.
+		UpdatePslist(FALSE);
+		return;
+	}
+	if (!result->succeeded)
+	{
+		KillTimer(TIMER_PROCESS_RESULT);
+		m_pollingProcesses = FALSE;
+		m_pendingFinderTarget = NULL;
+		SetDlgItemText(IDC_STATIC_PAGE_SUBTITLE, Localization::Get(L"page3.process_read_failed"));
+		m_processStatusShown = TRUE;
+		return;
+	}
+	m_processSortData.clear();
+	for (const auto& row : result->value) m_processSortData[row.pid] = row;
+	BuildProcessTree();
+	BeginFilteredUpdate();
+}
+
+void CPage3::ApplyProcessBatch()
+{
+	// Limit notifications and redraw work per message-loop turn. Accessibility
+	// observers must not multiply an entire full-list rewrite every two seconds.
+	const DWORD start = GetTickCount();
+	int processed = 0;
+	BOOL batchChanged = FALSE;
+	while (processed < 64 && GetTickCount() - start < 8)
+	{
+		if (m_processApplyIndex < static_cast<int>(m_displayedProcesses.size()))
+		{
+			const int row = m_processApplyIndex;
+			auto& displayed = m_displayedProcesses[row];
+			const DWORD pid = displayed.pid;
+			const auto next = m_pendingProcessRows.find(pid);
+			if (next == m_pendingProcessRows.end() ||
+				displayed.startTime != next->second.startTimeValue)
+			{
+				m_ListCtrl.DeleteItem(row);
+				m_displayedProcesses.erase(m_displayedProcesses.begin() + row);
+				batchChanged = TRUE;
+				++processed;
+				continue;
+			}
+			const auto& info = next->second;
+			const CString values[] = { ProcessDisplayName(info), CString(info.startTimeText), CString(info.propath) };
+			for (int column = 1; column <= 3; ++column)
+				if (displayed.columns[column - 1] != values[column - 1])
+				{
+					m_ListCtrl.SetItemText(row, column, values[column - 1]);
+					displayed.columns[column - 1] = values[column - 1];
+					batchChanged = TRUE;
+					++processed;
+				}
+			m_pendingProcessRows.erase(next);
+			++m_processApplyIndex;
+		}
+		else if (!m_pendingProcessRows.empty())
+		{
+			const auto next = m_pendingProcessRows.begin();
+			const auto& info = next->second;
+			CString pid; pid.Format(L"%lu", info.pid);
+			const int row = m_ListCtrl.InsertItem(static_cast<int>(m_displayedProcesses.size()), pid);
+			if (row >= 0)
+			{
+				DisplayedProcess displayed = { info.pid, info.startTimeValue,
+					{ ProcessDisplayName(info), CString(info.startTimeText), CString(info.propath) } };
+				m_ListCtrl.SetItemData(row, info.pid);
+				for (int column = 1; column <= 3; ++column)
+					m_ListCtrl.SetItemText(row, column, displayed.columns[column - 1]);
+				m_displayedProcesses.insert(m_displayedProcesses.begin() + row, displayed);
+			}
+			m_pendingProcessRows.erase(next);
+			m_processApplyIndex = static_cast<int>(m_displayedProcesses.size());
+			batchChanged = TRUE;
+			processed += 5; // Insert, item data and three columns.
+		}
+		else break;
+	}
+	if (batchChanged) m_ListCtrl.Invalidate(FALSE);
+	if (m_processApplyIndex < static_cast<int>(m_displayedProcesses.size()) || !m_pendingProcessRows.empty())
+	{
+		// Actions already check m_applyingProcesses. Disable their buttons only
+		// when installation actually spans another message-loop turn.
+		m_btnInject.EnableWindow(FALSE);
+		m_btnTerminate.EnableWindow(FALSE);
+		m_btnWindowFinder.EnableWindow(FALSE);
+		return;
+	}
+	SortDisplayedProcesses();
+	m_ListCtrl.Invalidate(FALSE); // Refresh age shading once per completed snapshot.
+	m_applyingProcesses = FALSE;
+	KillTimer(TIMER_PROCESS_RESULT);
+	m_pollingProcesses = FALSE;
+	if (!m_btnInject.IsWindowEnabled()) m_btnInject.EnableWindow(TRUE);
+	if (!m_btnWindowFinder.IsWindowEnabled()) m_btnWindowFinder.EnableWindow(TRUE);
+	m_btnTerminate.EnableWindow(!m_terminating && m_ListCtrl.GetSelectedCount() > 0);
+	if (m_processStatusShown)
+	{
+		RestoreProcessPageSubtitle();
+		m_processStatusShown = FALSE;
+	}
+	if (m_launchedProcessId) TrySelectLaunchedProcess();
+	if (m_pendingFinderTarget)
+	{
+		const HWND target = m_pendingFinderTarget;
+		m_pendingFinderTarget = NULL;
+		FinishWindowFinder(target, m_pendingFinderPid, m_pendingFinderTime);
+	}
+ m_filterEmpty.ShowWindow(m_displayedProcesses.empty() && (!m_filterText.IsEmpty() || m_filterHooked) ? SW_SHOWNA : SW_HIDE);
+ // Filtering a snapshot must not lose a system query that was already in flight.
+ if (m_processQuery.Busy()) m_pollingProcesses = SetTimer(TIMER_PROCESS_RESULT, 100, NULL) != 0;
+	PublishProcessAccessibility(true);
+	if (m_ListCtrl.AccessibilityBridge()) PostMessage(ProcessListAccessibility::RequestMessage);
 }
 
 int CALLBACK CPage3::CompareProcessItems(LPARAM leftParam, LPARAM rightParam, LPARAM sortParam)
@@ -2080,12 +2992,129 @@ void CPage3::AppendProcessTree(
 
 void CPage3::ApplyProcessSort()
 {
-	if (m_ListCtrl.GetSafeHwnd() && m_ListCtrl.GetItemCount() > 1)
-		m_ListCtrl.SortItems(CompareProcessItems, reinterpret_cast<LPARAM>(this));
+	SortDisplayedProcesses();
 	UpdateProcessNameDisplay();
 	// 新进程的背景色会随时间衰减，定时刷新时强制重绘可及时切换颜色阶段。
 	if (m_ListCtrl.GetSafeHwnd())
 		m_ListCtrl.Invalidate(FALSE);
+	PublishProcessAccessibility(true);
+}
+
+LRESULT CPage3::OnProcessAccessibilityChanged(WPARAM force, LPARAM)
+{
+	m_ListCtrl.AcknowledgeAccessibilityUpdate();
+	if (!m_applyingProcesses || force) PublishProcessAccessibility(false);
+	return 0;
+}
+
+void CPage3::PublishProcessAccessibility(bool structureChanged)
+{
+	auto bridge = m_ListCtrl.AccessibilityBridge();
+	if (!bridge || !bridge->Available()) return;
+	try {
+		auto snapshot = std::make_shared<ProcessListAccessibility::Snapshot>();
+		snapshot->name = Localization::Get(L"page3.accessible_process_list").GetString();
+		snapshot->visible = m_ListCtrl.IsWindowVisible() != FALSE;
+		snapshot->enabled = m_ListCtrl.IsWindowEnabled() != FALSE;
+		snapshot->hasFocus = ::GetFocus() == m_ListCtrl.m_hWnd;
+		m_ListCtrl.GetClientRect(&snapshot->client);
+		CHeaderCtrl* header = m_ListCtrl.GetHeaderCtrl();
+		if (header) {
+			snapshot->header = header->m_hWnd;
+			header->GetWindowRect(&snapshot->headerRect);
+			m_ListCtrl.ScreenToClient(&snapshot->headerRect);
+			for (int i = 0; i < 4; ++i) {
+				header->GetItemRect(i, &snapshot->columns[i]);
+				header->ClientToScreen(&snapshot->columns[i]);
+				m_ListCtrl.ScreenToClient(&snapshot->columns[i]);
+			}
+		}
+		snapshot->headings[0] = L"PID";
+		snapshot->headings[1] = Localization::Get(L"page3.column_process").GetString();
+		snapshot->headings[2] = Localization::Get(L"page3.column_started").GetString();
+		snapshot->headings[3] = Localization::Get(L"page3.column_path").GetString();
+		snapshot->top = m_ListCtrl.GetTopIndex();
+		CRect rowRect;
+		if (!m_displayedProcesses.empty() && m_ListCtrl.GetItemRect(snapshot->top, &rowRect, LVIR_BOUNDS)) {
+			snapshot->rowTop = rowRect.top;
+			snapshot->rowHeight = max(1, rowRect.Height());
+		}
+		SCROLLINFO scroll = { sizeof(scroll), SIF_ALL };
+		if (m_ListCtrl.GetScrollInfo(SB_HORZ, &scroll)) {
+			snapshot->horizontalPosition = scroll.nPos;
+			snapshot->horizontalMaximum = max(0, scroll.nMax - static_cast<int>(scroll.nPage) + 1);
+		}
+		snapshot->focused = m_ListCtrl.GetNextItem(-1, LVNI_FOCUSED);
+		std::set<int> selected;
+		for (int row = m_ListCtrl.GetNextItem(-1, LVNI_SELECTED); row >= 0; row = m_ListCtrl.GetNextItem(row, LVNI_SELECTED))
+			selected.insert(row);
+		snapshot->rows.reserve(m_displayedProcesses.size());
+		for (size_t i = 0; i < m_displayedProcesses.size(); ++i) {
+			const auto& displayed = m_displayedProcesses[i];
+			ProcessListAccessibility::Row row;
+			row.pid = displayed.pid; row.created = displayed.startTime;
+			row.text[0] = std::to_wstring(row.pid);
+			for (int c = 0; c < 3; ++c) row.text[c + 1] = displayed.columns[c].GetString();
+			row.selected = selected.count(static_cast<int>(i)) != 0;
+			snapshot->rows.push_back(std::move(row));
+		}
+		bridge->Publish(snapshot, structureChanged);
+	} catch (...) {} // Keep the last complete accessibility snapshot on allocation failure.
+}
+
+LRESULT CPage3::OnProcessAccessibilityRequest(WPARAM, LPARAM)
+{
+	auto bridge = m_ListCtrl.AccessibilityBridge();
+	if (!bridge || m_applyingProcesses) return 0;
+	const auto requests = bridge->TakeRequests();
+	if (!m_ListCtrl.IsWindowVisible()) return 0;
+	for (const auto& request : requests) {
+		using namespace ProcessListAccessibility;
+		if (request.action == Sort) {
+			if (request.column < 0 || request.column >= 4) continue;
+			NM_LISTVIEW notification = {}; notification.iSubItem = request.column;
+			LRESULT result = 0; OnLvnColumnClickProcessList(&notification.hdr, &result);
+			continue;
+		}
+		if (request.action == ScrollBy || request.action == ScrollTo) {
+			CRect client, rowRect; m_ListCtrl.GetClientRect(&client);
+			const int top = m_ListCtrl.GetTopIndex();
+			if (!m_ListCtrl.GetItemRect(top, &rowRect, LVIR_BOUNDS)) continue;
+			const int height = max(1, rowRect.Height());
+			int x = static_cast<int>(request.x), y = static_cast<int>(request.y) * height;
+			if (request.action == ScrollTo) {
+				SCROLLINFO info = { sizeof(info), SIF_ALL }; m_ListCtrl.GetScrollInfo(SB_HORZ, &info);
+				x = request.x < 0 ? 0 : static_cast<int>(request.x * max(0, info.nMax - static_cast<int>(info.nPage) + 1) / 100) - info.nPos;
+				const int maximum = max(0, static_cast<int>(m_displayedProcesses.size()) - m_ListCtrl.GetCountPerPage());
+				y = request.y < 0 ? 0 : (static_cast<int>(request.y * maximum / 100) - top) * height;
+			}
+			m_ListCtrl.Scroll(CSize(x, y)); continue;
+		}
+		int index = -1;
+		for (size_t i = 0; request.hasRow && i < m_displayedProcesses.size(); ++i)
+			if (m_displayedProcesses[i].pid == request.pid && m_displayedProcesses[i].startTime == request.created) { index = static_cast<int>(i); break; }
+		if (request.action == Focus) m_ListCtrl.SetFocus();
+		if (index < 0) continue; // A stale automation object must never select a reused PID.
+		if (request.action == Select) m_ListCtrl.SetItemState(-1, 0, LVIS_SELECTED);
+		if (request.action == Select || request.action == AddSelection || request.action == RemoveSelection)
+			m_ListCtrl.SetItemState(index, request.action == RemoveSelection ? 0 : LVIS_SELECTED, LVIS_SELECTED);
+		if (request.action == Focus) m_ListCtrl.SetItemState(index, LVIS_FOCUSED, LVIS_FOCUSED);
+		if (request.action == Focus || request.action == Reveal) m_ListCtrl.EnsureVisible(index, FALSE);
+	}
+	PublishProcessAccessibility(false);
+	return 0;
+}
+
+void CPage3::SortDisplayedProcesses()
+{
+	const auto less = [this](const DisplayedProcess& left, const DisplayedProcess& right) {
+		return CompareProcessItems(left.pid, right.pid, reinterpret_cast<LPARAM>(this)) < 0;
+	};
+	if (!std::is_sorted(m_displayedProcesses.begin(), m_displayedProcesses.end(), less))
+	{
+		if (m_ListCtrl.SortItems(CompareProcessItems, reinterpret_cast<LPARAM>(this)))
+			std::sort(m_displayedProcesses.begin(), m_displayedProcesses.end(), less);
+	}
 }
 
 void CPage3::UpdateProcessNameDisplay()
@@ -2093,9 +3122,10 @@ void CPage3::UpdateProcessNameDisplay()
 	if (!m_ListCtrl.GetSafeHwnd())
 		return;
 
-	for (int item = 0; item < m_ListCtrl.GetItemCount(); ++item)
+	for (int item = 0; item < static_cast<int>(m_displayedProcesses.size()); ++item)
 	{
-		DWORD pid = static_cast<DWORD>(m_ListCtrl.GetItemData(item));
+		auto& displayed = m_displayedProcesses[item];
+		DWORD pid = displayed.pid;
 		std::map<DWORD, _myPROCESSINFO>::const_iterator process = m_processSortData.find(pid);
 		if (process == m_processSortData.end())
 			continue;
@@ -2108,7 +3138,11 @@ void CPage3::UpdateProcessNameDisplay()
 				displayName = prefix->second;
 		}
 		displayName += process->second.proname;
-		m_ListCtrl.SetItemText(item, 1, displayName);
+		if (displayed.columns[0] != displayName)
+		{
+			m_ListCtrl.SetItemText(item, 1, displayName);
+			displayed.columns[0] = displayName;
+		}
 	}
 }
 
@@ -2140,6 +3174,7 @@ void CPage3::UpdateSortIndicator()
 
 void CPage3::OnLvnColumnClickProcessList(NMHDR* notifyHeader, LRESULT* result)
 {
+	if (m_applyingProcesses) { if (result) *result = 0; return; }
 	NM_LISTVIEW* listView = reinterpret_cast<NM_LISTVIEW*>(notifyHeader);
 	if (!listView || listView->iSubItem < 0 || listView->iSubItem > 3)
 	{
@@ -2196,15 +3231,17 @@ void CPage3::OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result)
 
 	int item = static_cast<int>(customDraw->nmcd.dwItemSpec);
 	if (item < 0
-		|| item >= m_ListCtrl.GetItemCount()
 		|| (m_ListCtrl.GetItemState(item, LVIS_SELECTED) & LVIS_SELECTED) != 0)
 	{
+		// The themed, double-buffered list can report CDIS_SELECTED for rows
+		// that are not selected. Query the actual native selection state; using
+		// uItemState here suppresses both age shading and hook-result colors.
 		// 被选中的行继续使用系统高亮色，避免自定义背景掩盖选择状态。
 		*result = CDRF_DODEFAULT;
 		return;
 	}
 
-	DWORD pid = static_cast<DWORD>(m_ListCtrl.GetItemData(item));
+	DWORD pid = static_cast<DWORD>(customDraw->nmcd.lItemlParam);
 	std::map<DWORD, _myPROCESSINFO>::const_iterator process = m_processSortData.find(pid);
 	if (process == m_processSortData.end() || !process->second.hasStartTime)
 	{
@@ -2212,18 +3249,10 @@ void CPage3::OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result)
 		return;
 	}
 
-	IProxyReceptionCentre *receptionCentre = g_GlobalProxy
-		? g_GlobalProxy->GetPRCInstance()
-		: NULL;
-	DWORD hookState = PROCESS_HOOK_STATE_PENDING;
-	DWORD hookError = 0;
-	if (receptionCentre && receptionCentre->GetProcessHookState(
-		pid,
-		process->second.startTimeValue,
-		&hookState,
-		&hookError))
+	HookProcessIdentityInfo identity = { 0 };
+	if (m_processRegistry && m_processRegistry->Get(pid, process->second.startTimeValue, &identity))
 	{
-		switch (hookState)
+		switch (identity.hookState)
 		{
 		case PROCESS_HOOK_STATE_SUCCEEDED:
 			customDraw->clrText = RGB(112, 48, 160);
@@ -2270,16 +3299,9 @@ void CPage3::OnNMCustomdrawProcessList(NMHDR* notifyHeader, LRESULT* result)
 	*result = CDRF_DODEFAULT;
 }
 
-void CPage3::OnBnClickedRefresh()
-{
-	// TODO: 在此添加控件通知处理程序代码
-	m_ListCtrl.DeleteAllItems();
-	m_displayedStartTimes.clear();
-	UpdatePslist(TRUE);
-}
-
 void CPage3::OnBnClickedInjectdll()
 {
+	if (m_applyingProcesses) return;
 	if(!m_ListCtrl.GetSelectedCount())
 	{
 		MessageBox(Localization::Get(_T("page3.select_first")),
@@ -2413,14 +3435,31 @@ void CPage3::OnBnClickedInjectdll()
 
 void CPage3::OnTimer(UINT_PTR nIDEvent)
 {
+	if (nIDEvent == 0x2410) {
+  if (m_btnWindowFinder.IsTracking() || m_terminating) return;
+  KillTimer(0x2410);
+  m_processSearch.GetWindowText(m_filterText); m_filterText.Trim(); m_filterText.MakeLower();
+  m_filterHooked = m_onlyHooked.GetCheck() == BST_CHECKED;
+  BeginFilteredUpdate(); return;
+ }
+ if (nIDEvent == TIMER_PROCESS_RESULT) { PollProcessList(); return; }
+	if (nIDEvent == TIMER_BROWSER_LAUNCH) { CheckBrowserLaunches(); return; }
+	if (nIDEvent == TIMER_LAUNCH_PANEL)
+	{
+		if (IsWindowVisible() && !m_recentLaunching) RefreshLaunchPanel();
+		return;
+	}
 	// TODO: 在此添加消息处理程序代码和/或调用默认值
 	switch(nIDEvent)
 	{
+	case TIMER_PROCESS_REGISTRY:
+		if (m_processRegistry) m_processRegistry->PruneExited();
+		break;
 	case TIMER_PSLIST:
 		{
 			// Hidden pages and a hidden top-level window still receive WM_TIMER.
 			// Avoid enumerating every process while the list cannot be seen.
-			if (IsWindowVisible() && !m_btnWindowFinder.IsTracking() && !m_terminating)
+			if (IsWindowVisible() && m_processesExpanded && !m_btnWindowFinder.IsTracking() && !m_terminating)
 				UpdatePslist(FALSE);
 		}
 		break;
@@ -2442,7 +3481,8 @@ void CPage3::OnTimer(UINT_PTR nIDEvent)
 
 void CPage3::OnPageActivated()
 {
-	if (!m_btnWindowFinder.IsTracking())
+	RefreshLaunchPanel();
+	if (m_processesExpanded && !m_btnWindowFinder.IsTracking())
 		UpdatePslist(TRUE);
 }
 
@@ -2571,6 +3611,23 @@ void CPage3::OnDropAppFile(TCHAR *pFileName)
 	LaunchAndProxyApp(pFileName, noExtraArguments, FALSE);
 }
 
+AppLaunchResult CPage3::LaunchAutomationApplication(const AutomationOptions& options)
+{
+	if (options.packaged)
+	{
+		CString arguments = options.initialArguments;
+		for (size_t i = 0; i < options.targetArguments.size(); ++i)
+		{
+			if (!arguments.IsEmpty()) arguments += L" ";
+			arguments += QuoteCommandLineArgument(options.targetArguments[i]);
+		}
+		return LaunchPackagedAppById(options.targetPath, arguments);
+	}
+	return LaunchAndProxyApp(options.targetPath, options.targetArguments, TRUE,
+		options.elevated ? APP_LAUNCH_ELEVATION_FORCE_ADMIN : APP_LAUNCH_ELEVATION_AUTO,
+		options.initialArguments, options.workingDirectory);
+}
+
 AppLaunchResult CPage3::LaunchAndProxyApp(
 	LPCTSTR fileName,
 	const std::vector<CString>& extraArguments,
@@ -2610,6 +3667,11 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 			return APP_LAUNCH_INVALID_TARGET;
 		}
 		launchArguments = shortcut.arguments;
+		if (!initialArguments.IsEmpty())
+		{
+			if (!launchArguments.IsEmpty()) launchArguments += L" ";
+			launchArguments += initialArguments;
+		}
 		if (shortcut.IsPackaged())
 		{
 			for (size_t i = 0; i < extraArguments.size(); ++i)
@@ -2634,6 +3696,12 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 		if (!szBaseDir[0]) GetAppFolderPath(szTargetPath, szBaseDir);
 	}
 
+	// Last line of defense for every launch entry point, including unattended CLI.
+	if (LaunchShortcut::IsProxyLaneExecutable(szTargetPath) || IsLnk(szTargetPath))
+	{
+		myWow64RevertWow64FsRedirection(WowRedirOldValue);
+		return APP_LAUNCH_INVALID_TARGET;
+	}
 	DWORD targetAttributes = GetFileAttributes(szTargetPath);
 	if (!szTargetPath[0] ||
 		targetAttributes == INVALID_FILE_ATTRIBUTES ||
@@ -2663,29 +3731,37 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 	if (!szBaseDir[0])
 		GetAppFolderPath(szTargetPath, szBaseDir);
 
-	CString commandLine = QuoteCommandLineArgument(szTargetPath);
-	if (!launchArguments.IsEmpty())
-	{
-		commandLine += _T(" ");
-		commandLine += launchArguments;
-	}
 	for (size_t i = 0; i < extraArguments.size(); ++i)
 	{
-		commandLine += _T(" ");
-		commandLine += QuoteCommandLineArgument(extraArguments[i]);
+		if (!launchArguments.IsEmpty()) launchArguments += L" ";
+		launchArguments += QuoteCommandLineArgument(extraArguments[i]);
 	}
+	CString expandedArguments;
+	if (!ExpandLaunchEnvironment(launchArguments, expandedArguments))
+	{
+		myWow64RevertWow64FsRedirection(WowRedirOldValue);
+		return APP_LAUNCH_CREATE_PROCESS_FAILED;
+	}
+	CString commandLine = QuoteCommandLineArgument(szTargetPath);
+	if (!expandedArguments.IsEmpty()) commandLine += L" " + expandedArguments;
 
+	const BrowserLaunchWatch::Observation browserObservation = CaptureBrowserCandidates(szTargetPath);
 	if (elevationMode == APP_LAUNCH_ELEVATION_FORCE_ADMIN)
 	{
 		myWow64RevertWow64FsRedirection(WowRedirOldValue);
 		DWORD launchedPid;
 		ULONGLONG launchedTime;
+		const DWORD started = GetTickCount();
 		AppLaunchResult result = LaunchElevatedAndProxy(
 			GetSafeHwnd(),
 			szTargetPath,
 			commandLine,
 			szBaseDir[0] == 0 ? NULL : szBaseDir, launchedPid, launchedTime);
-		if (result == APP_LAUNCH_SUCCESS) RefreshLaunchedProcess(launchedPid, NULL, launchedTime);
+		if (result == APP_LAUNCH_SUCCESS)
+		{
+			WatchBrowserLaunch(browserObservation, launchedPid, launchedTime, started);
+			RefreshLaunchedProcess(launchedPid, NULL, launchedTime);
+		}
 		return result;
 	}
 
@@ -2712,12 +3788,17 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 		{
 			DWORD launchedPid;
 			ULONGLONG launchedTime;
+			const DWORD started = GetTickCount();
 			AppLaunchResult result = LaunchElevatedAndProxy(
 				GetSafeHwnd(),
 				szTargetPath,
 				commandLine,
 				szBaseDir[0] == 0 ? NULL : szBaseDir, launchedPid, launchedTime);
-			if (result == APP_LAUNCH_SUCCESS) RefreshLaunchedProcess(launchedPid, NULL, launchedTime);
+			if (result == APP_LAUNCH_SUCCESS)
+			{
+				WatchBrowserLaunch(browserObservation, launchedPid, launchedTime, started);
+				RefreshLaunchedProcess(launchedPid, NULL, launchedTime);
+			}
 			return result;
 		}
 #ifndef APPMODEL_ERROR_NO_PACKAGE
@@ -2764,6 +3845,9 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 #endif
 	}
 
+    hnpi.processCreateTime = ProcessActions::CreationTime(pi.hProcess);
+    RecordProcessCreation(g_GlobalProxy ? g_GlobalProxy->GetTlsControl() : NULL,
+        MakeProcessCreationNotice(hnpi), "launcher");
 	BOOL injectionSucceeded = InjectNewProcess(&hnpi);
 	if (!injectionSucceeded && strictInjection)
 	{
@@ -2773,6 +3857,7 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 		return APP_LAUNCH_INJECTION_FAILED;
 	}
 
+	const DWORD resumedAt = GetTickCount();
 	if (ResumeThread(pi.hThread) == (DWORD)-1)
 	{
 		TerminateProcess(pi.hProcess, AUTOMATION_EXIT_CREATE_PROCESS_FAILED);
@@ -2781,6 +3866,8 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 		return APP_LAUNCH_CREATE_PROCESS_FAILED;
 	}
 
+	if (injectionSucceeded)
+		WatchBrowserLaunch(browserObservation, pi.dwProcessId, hnpi.processCreateTime, resumedAt);
 	RefreshLaunchedProcess(pi.dwProcessId, pi.hProcess);
 	CloseHandle(pi.hProcess);
 	CloseHandle(pi.hThread);
@@ -2805,9 +3892,16 @@ AppLaunchResult CPage3::LaunchPackagedAppAndProxy(
 	return LaunchPackagedAppById(aumid, arguments);
 }
 
-AppLaunchResult CPage3::LaunchPackagedAppById(LPCTSTR aumid, const CString& arguments)
+AppLaunchResult CPage3::LaunchPackagedAppById(LPCTSTR aumid, const CString& arguments, AppLauncherResult* outcome)
 {
+	if (outcome) { ZeroMemory(outcome,sizeof(*outcome)); outcome->error=ERROR_GEN_FAILURE; }
 	if (!aumid || !aumid[0]) return APP_LAUNCH_INVALID_TARGET;
+	CString expandedArguments;
+	if (!ExpandLaunchEnvironment(arguments, expandedArguments))
+	{
+		if (outcome) outcome->error = GetLastError();
+		return APP_LAUNCH_CREATE_PROCESS_FAILED;
+	}
 	TCHAR szModulePath[MAX_PATH] = { 0 };
 	if (GetModuleFileName(NULL, szModulePath, _countof(szModulePath)))
 	{
@@ -2824,59 +3918,77 @@ AppLaunchResult CPage3::LaunchPackagedAppById(LPCTSTR aumid, const CString& argu
 		return APP_LAUNCH_CREATE_PROCESS_FAILED;
 	}
 
-	// 预先解析并静态缓存 ntdll 进程挂起与恢复函数，避免进程创建后耗费时间查找
+	// 激活前解析函数；局部变量允许界面与 PRC 工作线程并发调用。
 	typedef LONG (NTAPI *pfnNtSuspendProcess)(HANDLE ProcessHandle);
 	typedef LONG (NTAPI *pfnNtResumeProcess)(HANDLE ProcessHandle);
-	static pfnNtSuspendProcess s_pfnNtSuspendProcess = NULL;
-	static pfnNtResumeProcess s_pfnNtResumeProcess = NULL;
-	static BOOL s_ntApisResolved = FALSE;
-
-	if (!s_ntApisResolved)
+	pfnNtSuspendProcess s_pfnNtSuspendProcess = NULL;
+	pfnNtResumeProcess s_pfnNtResumeProcess = NULL;
+	HMODULE hNtdll = GetModuleHandle(_T("ntdll.dll"));
+	if (hNtdll)
 	{
-		HMODULE hNtdll = GetModuleHandle(_T("ntdll.dll"));
-		if (hNtdll)
-		{
-			s_pfnNtSuspendProcess = reinterpret_cast<pfnNtSuspendProcess>(
-				GetProcAddress(hNtdll, "NtSuspendProcess"));
-			s_pfnNtResumeProcess = reinterpret_cast<pfnNtResumeProcess>(
-				GetProcAddress(hNtdll, "NtResumeProcess"));
-		}
-		s_ntApisResolved = TRUE;
+		s_pfnNtSuspendProcess = reinterpret_cast<pfnNtSuspendProcess>(
+			GetProcAddress(hNtdll, "NtSuspendProcess"));
+		s_pfnNtResumeProcess = reinterpret_cast<pfnNtResumeProcess>(
+			GetProcAddress(hNtdll, "NtResumeProcess"));
 	}
 
 	DWORD processId = 0;
 	HRESULT hr = PackagedAppSupport::ActivatePackagedApp(
 		aumid,
-		arguments.IsEmpty() ? NULL : static_cast<LPCTSTR>(arguments),
+		expandedArguments.IsEmpty() ? NULL : static_cast<LPCTSTR>(expandedArguments),
 		&processId);
 
 	if (FAILED(hr) || processId == 0)
 	{
+		if(outcome) outcome->error=FAILED(hr)?static_cast<DWORD>(hr):ERROR_GEN_FAILURE;
 		return APP_LAUNCH_CREATE_PROCESS_FAILED;
 	}
+	if(outcome) { outcome->error=0; outcome->processId=processId; outcome->hookError=ERROR_GEN_FAILURE; }
 
 	HANDLE hTargetProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processId);
 	if (!hTargetProc)
 	{
-		RefreshLaunchedProcess(processId);
+		if (outcome) outcome->hookError=GetLastError();
+		if (!outcome) RefreshLaunchedProcess(processId);
 		return APP_LAUNCH_PACKAGED_INJECTION_FAILED;
 	}
 	const ULONGLONG creationTime = ProcessActions::CreationTime(hTargetProc);
+    if(outcome) {
+        HookProcessIdentityInfo identity={};
+        if(g_GlobalProxy->GetProcessRegistry()->Get(processId,creationTime,&identity) &&
+            identity.hookState==PROCESS_HOOK_STATE_SUCCEEDED) {
+            outcome->hookError=0; CloseHandle(hTargetProc); return APP_LAUNCH_SUCCESS;
+        }
+    }
+
+    // Activation can return an existing process; do not invent a creation event.
+    HookNewProcessInfo activated = {};
+    activated.dwProcessId = processId;
+    activated.processCreateTime = creationTime;
+    ResolveChildAppPath(hTargetProc, activated.szAppPath, _countof(activated.szAppPath));
+    activated.szAppPath[_countof(activated.szAppPath)-1] = L'\0';
+    RecordProcessCreation(g_GlobalProxy->GetTlsControl(), MakeProcessCreationNotice(activated), "launcher_activation");
 	// Authorization must finish before freezing the app. It used to query a
 	// busy synchronous server pipe, stranding the app while the GUI waited.
 	if (!pPRC->AuthorizeProcessPipeAccess(hTargetProc))
 	{
 		const DWORD error = GetLastError();
 		CloseHandle(hTargetProc);
+		if (outcome) outcome->hookError=error;
 		CString text;
 		text.Format(_T("Packaged app pipe authorization failed: PID %lu, error %lu.\r\n"), processId, error);
 		g_GlobalProxy->GetLogInstance()->LogText(text);
-		RefreshLaunchedProcess(processId, NULL, creationTime);
+		if (!outcome) RefreshLaunchedProcess(processId, NULL, creationTime);
 		return APP_LAUNCH_PACKAGED_INJECTION_FAILED;
 	}
+    if(outcome && !ShouldProxyChildProcess(&activated)) {
+        outcome->hookError=ERROR_ACCESS_DISABLED_BY_POLICY;
+        CloseHandle(hTargetProc); return APP_LAUNCH_PACKAGED_INJECTION_FAILED;
+    }
 	CScopedProcessSuspension suspension(hTargetProc, s_pfnNtSuspendProcess, s_pfnNtResumeProcess);
 
-	// 消除先发延迟：第 0 毫秒立即发起 HookProcess，仅在失败时密集快速重试（前 3 次仅等待 5ms）
+	// This is post-activation attachment: minimize delay, but do not claim that
+	// the application could not execute or send traffic before this point.
 	BOOL injected = FALSE;
 	const int maxAttempts = 15;
 	for (int attempt = 0; attempt < maxAttempts; ++attempt)
@@ -2899,7 +4011,19 @@ AppLaunchResult CPage3::LaunchPackagedAppById(LPCTSTR aumid, const CString& argu
 		injected = FALSE;
 	}
 
-	RefreshLaunchedProcess(processId, NULL, creationTime);
+    if(outcome && injected) {
+        // Wait only after resuming original threads: they may hold the loader lock.
+        injected=FALSE; DWORD started=GetTickCount(); outcome->hookError=WAIT_TIMEOUT;
+        while(GetTickCount()-started<10000) {
+            HookProcessIdentityInfo identity={};
+            if(g_GlobalProxy->GetProcessRegistry()->Get(processId,creationTime,&identity)) {
+                if(identity.hookState==PROCESS_HOOK_STATE_SUCCEEDED) { injected=TRUE; outcome->hookError=0; break; }
+                if(identity.hookState==PROCESS_HOOK_STATE_FAILED) { outcome->hookError=identity.hookError; break; }
+            }
+            if(WaitForSingleObject(hTargetProc,25)==WAIT_OBJECT_0) { outcome->hookError=ERROR_PROCESS_ABORTED; break; }
+        }
+    }
+	if (!outcome) RefreshLaunchedProcess(processId, NULL, creationTime);
 	if (!injected)
 	{
 		return APP_LAUNCH_PACKAGED_INJECTION_FAILED;
@@ -2908,3 +4032,77 @@ AppLaunchResult CPage3::LaunchPackagedAppById(LPCTSTR aumid, const CString& argu
 	return APP_LAUNCH_SUCCESS;
 }
 
+
+BOOL CPage3::GetAppLauncherHostInfo(AppLauncherHostInfo* info)
+{
+    OSVERSIONINFO version={sizeof(version)};
+    if(!info || !GetVersionEx(&version) || version.dwMajorVersion<6 ||
+        (version.dwMajorVersion==6 && version.dwMinorVersion<2)) return FALSE;
+    ZeroMemory(info,sizeof(*info));
+    DWORD length=GetModuleFileNameW(NULL,info->executable,MAX_PATH);
+    if(!length || length>=MAX_PATH) { ZeroMemory(info,sizeof(*info)); return FALSE; }
+    info->version=1; info->processId=GetCurrentProcessId();
+    info->creationTime=AppLauncherProtocol::ProcessTime(GetCurrentProcess());
+    return info->creationTime!=0;
+}
+
+BOOL CPage3::LaunchAppFromShell(const AppLauncherRequest& request, AppLauncherResult& result)
+{
+    LaunchPackagedAppById(request.aumid,CString(),&result);
+    CString message;
+    message.Format(L"AppsFolder activation: %s, requester PID %lu, target PID %lu, launch error 0x%08lX, Hook error %lu.\r\n",
+        request.aumid,request.parentPid,result.processId,result.error,result.hookError);
+    ATLTRACE(L"%s", static_cast<LPCWSTR>(message));
+    if (!result.error && !result.hookError && g_GlobalProxy)
+    {
+        auto processName = [&](DWORD pid, ULONGLONG creationTime, LPCWSTR fallback) {
+            HookProcessIdentityInfo identity = {};
+            if (!g_GlobalProxy->GetProcessRegistry()->Get(pid, creationTime, &identity) || !identity.szAppPath[0])
+                return CString(fallback);
+            CString path(identity.szAppPath);
+            return path.Mid(path.ReverseFind(L'\\') + 1);
+        };
+        CString source = processName(request.parentPid, request.parentCreationTime,
+            Localization::Get(_T("log.unknown_process")));
+        CString target = processName(result.processId, 0, request.aumid);
+        message = Localization::Format(_T("log.app_launch_success"),
+            static_cast<LPCTSTR>(source), request.parentPid,
+            static_cast<LPCTSTR>(target), result.processId);
+    }
+    if(g_GlobalProxy) g_GlobalProxy->GetLogInstance()->LogText(message);
+    return TRUE;
+}
+
+void CPage3::OnProcessFilterChanged()
+{
+ if (!m_processesExpanded || !m_onlyHooked.GetSafeHwnd()) return;
+ SetTimer(0x2410, 150, NULL);
+}
+void CPage3::BeginFilteredUpdate()
+{
+ if (!m_processesExpanded || !IsWindowVisible()) return;
+ m_filterEmpty.ShowWindow(SW_HIDE);
+ std::set<std::pair<DWORD, ULONGLONG>> hooked;
+ if (m_filterHooked && m_processRegistry) {
+  std::vector<HookProcessIdentityInfo> identities(64);
+  for (int attempt = 0; attempt < 8; ++attempt) {
+   DWORD count = m_processRegistry->SnapshotHooked(identities.data(), (DWORD)identities.size());
+   if (count > identities.size()) { identities.resize(count + 64); continue; }
+   for (DWORD i = 0; i < count; ++i) hooked.insert(std::make_pair(identities[i].dwProcessId, identities[i].processCreateTime));
+   break;
+  }
+ }
+ m_pendingProcessRows.clear();
+ for (const auto& pair : m_processSortData) {
+  const auto& info = pair.second;
+  if (m_filterHooked && !hooked.count(std::make_pair(info.pid, info.startTimeValue))) continue;
+  if (!m_filterText.IsEmpty()) {
+   CString text; text.Format(L"%lu %s %s", info.pid, info.proname, info.propath); text.MakeLower();
+   if (text.Find(m_filterText) < 0) continue;
+  }
+  m_pendingProcessRows.insert(pair);
+ }
+ m_applyingProcesses = TRUE; m_processApplyIndex = 0;
+ m_pollingProcesses = SetTimer(TIMER_PROCESS_RESULT, 16, NULL) != 0;
+ ApplyProcessBatch();
+}

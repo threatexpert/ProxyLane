@@ -34,6 +34,9 @@ public:
 
 	INT  AddRef();
 	INT  Release();
+	IProxyTlsControl* GetTlsControl() override;
+	IProxyMonitor* GetMonitorInstance() override;
+	IProxyProcessRegistry* GetProcessRegistry() override;
 
 private:
 	CString m_szLastError;
