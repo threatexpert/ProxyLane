@@ -274,7 +274,7 @@ BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 			break;
 		else if (!ini.DeleteKeyName(section, key)) return false;
 	}
-	return ini.SetString(L"options", L"lastselected", item.strName) != FALSE;
+	return true;
 	});
 }
 

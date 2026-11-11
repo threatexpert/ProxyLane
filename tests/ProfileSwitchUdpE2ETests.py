@@ -74,7 +74,7 @@ def run():
                 check(source)
             select('SG')
             check('SG')
-            assert disk() == original, 'switching only changes lastselected, never profile contents'
+            assert disk() == original, 'switching never changes profile contents'
         print('PASS: Chain/HTTP/SSH/SOCKS5 switches preserve UDP flags without dirtying or writing profiles', flush=True)
 
         # Saving an unrelated edit after a chain round trip cannot persist a lost UDP checkbox.

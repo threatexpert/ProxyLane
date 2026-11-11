@@ -534,12 +534,13 @@ static void TestProfileSave(Fixture& f)
  CString path = f.Path(L"profiles.ini");
  CIniFile ini; ini.SetIniFileName(path);
  Check(ini.SetString(L"proxy_Save", L"RecentAppsId", L"preserve-history") && ini.SetString(L"options", L"unrelated", L"keep"), "seed save fixture");
+ Check(ini.SetString(L"options", L"lastselected", L"Remembered"), "seed remembered profile");
  CProxyProfileStore profiles(ini); CfgProxyItem item = {};
  item.strName = L"Save"; item.pi.strProxyType = L"SOCKS5"; item.pi.strProxyHost = L"127.0.0.1"; item.pi.nProxyPort = 1080;
  item.pi.strProxyUser = L"user"; item.pi.strProxyPass = L"pass"; item.bHookTCP = TRUE;
  Check(profiles.Save(item), "save complete profile transaction");
  Check(ini.GetString(L"proxy_Save", L"RecentAppsId") == L"preserve-history" && ini.GetString(L"options", L"unrelated") == L"keep", "save retains history identity and unrelated options");
- Check(ini.GetString(L"options", L"lastselected") == L"Save", "save and selection are one transaction");
+ Check(ini.GetString(L"options", L"lastselected") == L"Remembered", "saving does not change the remembered profile");
  Check(SetFileAttributes(path, FILE_ATTRIBUTE_READONLY), "make profile file read only");
  item.pi.nProxyPort = 1081;
  Check(!profiles.Save(item), "profile store reports write failure");

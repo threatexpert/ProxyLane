@@ -1293,7 +1293,7 @@ void CProxyLaneDlg::StartProxyFromTaskbarProfile(LPCTSTR profileName)
 			return;
 	}
 
-	if (!page1->LoadProfileByName(profileName, TRUE))
+	if (!page1->LoadProfileByName(profileName))
 	{
 		ShowAndActivate();
 		MessageBox(
@@ -1303,7 +1303,7 @@ void CProxyLaneDlg::StartProxyFromTaskbarProfile(LPCTSTR profileName)
 		return;
 	}
 
-	if (!page1->StartProxy(TRUE))
+	if (!page1->StartProxyFromUi())
 		ShowAndActivate();
 }
 

@@ -238,7 +238,7 @@ BlockUDP=1
         saved = config()
         assert saved['proxy_Key']['targetfilter'] == 'preserve.example'
         assert saved['proxy_Key']['sshkeyfile'] == managed.name and 'sshprivatekey' not in saved['proxy_Key']
-        assert saved['options']['lastselected'] == 'Chain'
+        assert saved['options']['lastselected'] == 'Key', 'editing/testing a chain must not remember it'
         assert saved['proxy_Chain']['hop1'] == 'Key'
         test(page, 1008)
         print('PASS compact node editor, save and mixed-auth chain test', flush=True)

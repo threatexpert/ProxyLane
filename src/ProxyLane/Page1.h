@@ -184,8 +184,9 @@ private:
 public:
 
 	BOOL GetSettings(OUT LPProxyInfo lpPI);
-	BOOL LoadProfileByName(LPCTSTR profileName, BOOL rememberSelection = FALSE);
+	BOOL LoadProfileByName(LPCTSTR profileName);
 	BOOL StartProxy(BOOL showErrors);
+	BOOL StartProxyFromUi();
 	BOOL StopProxy();
 	BOOL IsProxyRunning() const;
 	CString QuicUdpWarning(); // UI thread: active settings, or selected draft while stopped.

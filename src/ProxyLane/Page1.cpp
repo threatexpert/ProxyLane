@@ -1078,10 +1078,22 @@ CString CPage1::SettingsValidationMessage() const
 
 void CPage1::OnBnClickedOk()
 {
-	StartProxy(TRUE);
+	StartProxyFromUi();
 }
 
-BOOL CPage1::LoadProfileByName(LPCTSTR profileName, BOOL rememberSelection)
+BOOL CPage1::StartProxyFromUi()
+{
+	// Explicit enable buttons and tray actions remember the startup profile;
+	// automation and application launches use StartProxy directly.
+	if (m_proxyController.IsRunning())
+		return TRUE;
+	if (!StartProxy(TRUE))
+		return FALSE;
+	m_profileStore.SetLastSelected(GetCurrentProfileName());
+	return TRUE;
+}
+
+BOOL CPage1::LoadProfileByName(LPCTSTR profileName)
 {
 	if (!profileName || !profileName[0])
 		return FALSE;
@@ -1097,8 +1109,6 @@ BOOL CPage1::LoadProfileByName(LPCTSTR profileName, BOOL rememberSelection)
 
 	m_cfgls.SetCurSel(index);
 	UILoadCfg(&item);
-	if (rememberSelection)
-		m_profileStore.SetLastSelected(item.strName);
 	return TRUE;
 }
 
@@ -2287,7 +2297,6 @@ void CPage1::HandleProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WP
                             if (m_profileStore.Load(item)) {
                                 item.strTransportPsk = fingerprint;
                                 if (!m_profileStore.Save(item)) MessageBox(Localization::Get(L"profile.save_failed_title"));
-                                m_profileStore.SetLastSelected(m_loadedProfileName);
                                 SetRuntimeDirty(TRUE);
                             }
                         }
@@ -2695,7 +2704,6 @@ void CPage1::SelectProfileFromDisk(const CString& name)
 		m_cfgls.SetCurSel(m_cfgls.FindStringExact(-1, item.strName));
 		m_cfgls.SetWindowText(item.strName);
 		m_loadingProfile = FALSE;
-		m_profileStore.SetLastSelected(item.strName);
 		UILoadCfg(&item);
 	}
 	else
