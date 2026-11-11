@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <list>
+#include <functional>
 class CProtocolTap;
 class CProxyReceptionCentre;
 
@@ -18,13 +19,18 @@ struct DohQueryLogInfo {
 // messages to live waiters. Dropping the last owner cancels I/O.
 class CDohQuery : public CAsyncSocketEx, public CWndTimer {
 public:
-    static std::shared_ptr<CDohQuery> Resolve(const PRCClient&, const ProxyInfo&, const ProxyChain* = NULL, bool test = false, DohQueryLogInfo* = NULL);
+    using TestProgress = std::function<void(int, int, WPARAM, LPARAM)>;
+    static std::shared_ptr<CDohQuery> Resolve(const PRCClient&, const ProxyInfo&, const ProxyChain* = NULL, bool test = false, DohQueryLogInfo* = NULL, TestProgress = {});
+    void CancelTestProgress() { m_testProgress = {}; }
+    int FailureCode() const { return m_failureCode; }
+    int FailedHop() const { return m_failedHop; }
+    const CStringA& FailureDetail() const { return m_failureDetail; }
     void LogAddressResult(const PRCClient&, const DohQueryLogInfo&) const;
     static std::shared_ptr<CDohQuery> Exchange(const PRCClient&, const ProxyInfo&, const ProxyChain*, const std::vector<unsigned char>&, bool* cacheHit = NULL, bool* shared = NULL);
     static void ClearCache();
     ~CDohQuery();
     bool Done() const { return m_done; }
-    bool Succeeded() const { return m_done && m_error.IsEmpty() && (!m_addresses.empty() || !m_wireAnswer.empty()); }
+    bool Succeeded() const { return m_done && m_error.IsEmpty() && (m_probeSucceeded || !m_addresses.empty() || !m_wireAnswer.empty()); }
     const CStringA& Error() const { return m_error; }
     const std::vector<_SockAddr>& Addresses() const { return m_addresses; }
     const std::vector<unsigned char>& WireAnswer() const { return m_wireAnswer; }
@@ -41,7 +47,7 @@ public:
     void RemoveAllLayers() override;
 private:
     CDohQuery();
-    static std::shared_ptr<CDohQuery> Start(const PRCClient&, const ProxyInfo&, const ProxyChain*, bool, const std::vector<unsigned char>&, bool* cacheHit = NULL, bool* shared = NULL);
+    static std::shared_ptr<CDohQuery> Start(const PRCClient&, const ProxyInfo&, const ProxyChain*, bool, const std::vector<unsigned char>&, bool* cacheHit = NULL, bool* shared = NULL, TestProgress = {});
     bool Begin();
     void Pump();
     void Fail(const char* text);
@@ -59,6 +65,11 @@ private:
     CStringA m_name, m_error;
     bool m_ipv6 = false, m_connected = false, m_done = false, m_pumping = false, m_retry = false;
     bool m_test = false;
+    bool m_probeSucceeded = false;
+    TestProgress m_testProgress;
+    int m_failureCode = PROXYERROR_DOH_FAILED, m_failedHop = -1;
+    int m_testHop = 0, m_testStage = PTS_CONNECTING;
+    CStringA m_failureDetail;
     DWORD m_started = 0, m_attemptStarted = 0, m_ttl = 0;
     std::string m_key;
     std::string m_summaryText;

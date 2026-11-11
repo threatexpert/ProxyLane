@@ -419,6 +419,8 @@ public:
 	bool ordered = true;
 	void OnProxyTesterCallback(IProxyTester*, int error, WPARAM hop, LPARAM tick) override
 	{
+        if (HIWORD(error) == LAYERCALLBACK_DOHTEST && LOWORD(error) == DTS_CONNECTING)
+            progress.clear(); // A new bootstrap attempt has its own handshake timeline.
 		if (HIWORD(error) == LAYERCALLBACK_TESTPROGRESS)
 		{
 			if (hop >= progress.size()) progress.resize(hop + 1);

@@ -96,6 +96,7 @@ CPage1::CPage1(CWnd* pParent /*=NULL*/)
 	m_testIpv6Result = IPV6_TEST_NOT_RUN;
 	m_testUdpRequested = FALSE;
 	m_testTcpPassed = FALSE;
+    m_testDohQuerying = false;
 	m_testUdpPassed = FALSE;
 	m_testUdpError = 0;
 	m_ProxyInfo.reserved = 0;
@@ -1799,6 +1800,7 @@ void CPage1::OnBnClickedTestproxy()
 	m_testIpv6Result = IPV6_TEST_NOT_RUN;
 	m_testUdpRequested = FALSE;
 	m_testTcpPassed = FALSE;
+    m_testDohQuerying = false;
 	m_testUdpPassed = FALSE;
 	m_testUdpError = 0;
 
@@ -1848,6 +1850,9 @@ void CPage1::OnBnClickedTestproxy()
 #endif
 	client.dstAddr.SetPort(nTestPort);
 	m_testTcpTarget = Localization::Format(_T("test.result.tcp_target"), (LPCTSTR)strTestHost, nTestPort);
+    if (m_testProxyInfo.dohEnabled)
+        m_testTcpTarget = Localization::Get(L"test.result.doh_passed") + L"\r\n" + Localization::Format(L"test.result.doh_target", (LPCTSTR)strTestHost,
+            (LPCTSTR)CString(m_testProxyInfo.dohUrl));
 
 	if (!StartProxyTestPhase(client, PROXY_TEST_TCP, _T("status.testing")))
 	{
@@ -1881,6 +1886,10 @@ BOOL CPage1::StartProxyTestPhase(const PRCClient& client, int phase,
 	WSASetLastError(0);
 
 	m_proxyTestPhase = phase;
+	// Start may synchronously report a more specific DoH/transport stage.
+	// Set the initial caption first so that it cannot overwrite that event.
+	if (statusKey && statusKey[0])
+		m_staticTestProxy.SetStatus(Localization::Get(statusKey), CStatusLabel::TONE_INFO);
 	PRCClient mutableClient = client;
 	const BOOL started = m_testChain.size() > 1
 		? m_pProxyTester->StartChain(this, &mutableClient, &m_testChain[0], (INT)m_testChain.size())
@@ -1895,9 +1904,6 @@ BOOL CPage1::StartProxyTestPhase(const PRCClient& client, int phase,
 		return FALSE;
 	}
 
-	if (statusKey && statusKey[0])
-		m_staticTestProxy.SetStatus(Localization::Get(statusKey),
-			CStatusLabel::TONE_INFO);
 	return TRUE;
 }
 
@@ -1975,8 +1981,8 @@ INT_PTR CPage1::ShowProxyTestResult(const CString& error, LPCTSTR actionKey)
 	typedef CProxyTestResultDialog::Row Row;
 	const auto text = [](LPCTSTR key) { return Localization::Get(key); };
 	std::vector<Row> rows;
-	rows.push_back({ m_testTcpPassed ? Result::Passed : Result::Failed, text(_T("test.result.tcp")),
-		text(m_testTcpPassed ? _T("test.result.passed") : _T("test.result.failed")),
+	rows.push_back({ m_testTcpPassed ? Result::Passed : Result::Failed, text(m_testProxyInfo.dohEnabled ? L"test.result.doh" : L"test.result.tcp"),
+		text(m_testTcpPassed ? L"test.result.passed" : L"test.result.failed"),
 		m_testTcpPassed ? m_testTcpTarget : actionKey ? text(_T("test.ssh_unknown_key")) : error });
 	const BOOL direct = m_testProxyInfo.GetProxyType() == PROXYTYPE_NOPROXY && m_testChain.empty();
 	const BOOL udpSupported = ProxyTransportPolicy::SupportsUdpProxy(m_testProxyInfo.GetProxyType()) && m_testChain.empty();
@@ -2017,7 +2023,7 @@ INT_PTR CPage1::ShowProxyTestResult(const CString& error, LPCTSTR actionKey)
 	{
 		m_chainElapsed = GetTickCount() - m_chainStarted;
 		m_chainProgressRunning = false; KillTimer(0x312);
-		m_chainConclusion = Localization::Format(L"chain.test.results",
+		m_chainConclusion = Localization::Format(m_testProxyInfo.dohEnabled ? L"chain.test.doh_results" : L"chain.test.results",
 			(LPCTSTR)rows[0].status, (LPCTSTR)rows[1].status, (LPCTSTR)rows[2].status);
 		for (int i = 0; i < (int)m_chainProgress.size(); ++i)
 			if (ChainLinkFailed(i)) { m_chainConclusion = L"\u00d7 " + ChainLinkText(i); break; }
@@ -2035,6 +2041,17 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 	int nCode = LOWORD(nErrorCode);
 
 	CString szText;
+    if (nType == LAYERCALLBACK_DOHTEST && m_proxyTestPhase == PROXY_TEST_TCP) {
+        m_testDohQuerying = nCode == DTS_QUERYING;
+        if (nCode == DTS_CONNECTING) {
+            m_chainProgress.assign(m_chainProgress.size(), ProxyTestHopProgress());
+            for (auto& error : m_chainErrors) error.Empty();
+            m_chainFollowed = -1;
+        }
+        if (m_chainProgressRunning) UpdateChainProgress();
+        else m_staticTestProxy.SetStatus(Localization::Get(m_testDohQuerying ? L"test.doh_querying" : L"test.doh_connecting"), CStatusLabel::TONE_INFO);
+        return;
+    }
 	if (nType == LAYERCALLBACK_TESTPROGRESS)
 	{
 		const int hop = (int)wParam;
@@ -2074,6 +2091,12 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 	}else if (nType == LAYERCALLBACK_LAYERSPECIFIC)
 	{
 		const int completedPhase = m_proxyTestPhase;
+        CString dohDetail;
+        if (completedPhase == PROXY_TEST_TCP && m_testProxyInfo.dohEnabled && nCode && lParam &&
+            nCode != PROXYERROR_SSH_HOSTKEY_UNKNOWN && nCode != PROXYERROR_SSH_HOSTKEY_CHANGED) {
+            dohDetail = CString(CStringA(reinterpret_cast<LPCSTR>(lParam)).Left(2048));
+            dohDetail.Replace(L'\r', L' '); dohDetail.Replace(L'\n', L' ');
+        }
 		if (completedPhase == PROXY_TEST_TCP && nCode == 0) m_testTcpPassed = TRUE;
 		if (completedPhase == PROXY_TEST_UDP)
 		{
@@ -2093,6 +2116,8 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 				m_chainErrors[hop] = ChainLinkFailed(hop) &&
 					(nCode == PROXYERROR_REQUESTFAILED || nCode == PROXYERROR_NOCONN)
 					? CString() : ProxyTestErrorDescription(nCode, FALSE);
+            if (hop >= 0 && hop < (int)m_chainErrors.size() && !dohDetail.IsEmpty())
+                m_chainErrors[hop] += L"\r\n" + dohDetail;
 		}
 		if (completedPhase == PROXY_TEST_IPV6)
 		{
@@ -2223,6 +2248,7 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 				szText = Localization::Format(_T("test.chain_hop"), failedHop + 1,
 					(LPCTSTR)m_testChainNames[failedHop], (LPCTSTR)szText);
 			LPCTSTR statusKey = _T("status.test_failed");
+            if (!dohDetail.IsEmpty()) szText += L"\r\n\r\n" + dohDetail;
 			if (m_profileDirty && m_runtimeDirty)
 				statusKey = _T("status.test_failed_unsaved_unapplied");
 			else if (m_runtimeDirty)
@@ -2962,6 +2988,7 @@ void CPage1::UpdateChainProgress(bool follow)
     if (m_chainProgressRunning)
     {
         CString activity = m_proxyTestPhase == PROXY_TEST_IPV6 ? Localization::Get(L"chain.test.ipv6_probe") :
+            m_proxyTestPhase == PROXY_TEST_TCP && m_testDohQuerying ? Localization::Get(L"test.doh_querying") :
             current >= 0 && (m_chainProgress[current].stage == PTS_OPENING || ChainLinkFailed(current)) ? ChainLinkText(current) :
             current >= 0 ? Localization::Format(L"chain.test.current", current + 1,
                 (LPCTSTR)ChainStageText(current, m_chainProgress[current].stage)) : Localization::Get(L"chain.test.finishing");

@@ -701,6 +701,7 @@
   "chain.test.finishing": "正在完成链路测试",
   "chain.test.ipv6_probe": "正在探测 IPv6 出口",
   "chain.test.results": "TCP：%s · UDP：%s · IPv6：%s",
+  "chain.test.doh_results": "DoH：%s · UDP：%s · IPv6：%s",
   "chain.test.timing_hint": "耗时包含本节点握手、认证及建立下一跳通道的等待，不包含等待前序节点的时间；并非网络延迟。",
   "ssh.auth": "认证方式",
   "ssh.auth_password": "密码",
@@ -726,5 +727,10 @@
   "profile.invalid_doh": "请填写有效的 HTTPS DoH 地址和 1–8 个连接 IP。IP 不能包含端口；禁止 IPv6 时请使用 IPv4。",
   "profile.doh_unavailable": "加密 DNS（DoH）需要受支持的 64 位 ProxyLane 主程序。32 位目标应用可以通过它使用 DoH。",
   "profile.doh_requires_proxy": "经代理加密解析需要 SOCKS5、HTTP、SSH 或代理链配置，不能用于 NOPROXY。",
-  "test.doh_failed": "加密 DNS（DoH）查询失败。请检查服务地址、连接 IP 和代理链；不会改用本地或普通 DNS。"
+  "test.doh_failed": "加密 DNS（DoH）查询失败。请检查服务地址、连接 IP 和代理链；不会改用本地或普通 DNS。",
+  "test.doh_connecting": "正在通过代理连接 DoH 服务器…",
+  "test.doh_querying": "正在进行 DoH HTTPS 握手与查询…",
+  "test.result.doh": "代理与 DoH 连通性",
+  "test.result.doh_passed": "代理链与 DoH 查询成功",
+  "test.result.doh_target": "查询域名：%s；DoH 服务：%s。"
 }

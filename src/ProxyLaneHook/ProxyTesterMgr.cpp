@@ -25,6 +25,7 @@ CProxyTester::CProxyTester(CProxyTesterMgr *pNotify)
 CProxyTester::~CProxyTester(void)
 {
     if (m_dohWake) m_dohWake->Cancel();
+    if (m_doh) m_doh->CancelTestProgress();
     m_doh.reset();
 	Close();
 	if (m_pChain)
@@ -114,7 +115,16 @@ BOOL CProxyTester::ConnectTcp(const LPPRCClient lpPRCClient)
     if (DohPolicy::Needed(*lpPRCClient, m_proxyinfo) && !lpPRCClient->HasProxyDestination()) {
         m_dohNoticeFailed = false;
         m_dohWake = std::make_shared<CDohWakeup>(GetHwnd(), [this] { m_dohNoticeFailed = true; });
-        m_doh = CDohQuery::Resolve(*lpPRCClient, m_proxyinfo, m_dohRoute.empty() ? NULL : &m_dohRoute, true);
+        m_doh = CDohQuery::Resolve(*lpPRCClient, m_proxyinfo, m_dohRoute.empty() ? NULL : &m_dohRoute, true, NULL,
+            [this](int type, int code, WPARAM param, LPARAM detail) {
+                if (m_completed || !m_pCallback) return;
+                if (type == LAYERCALLBACK_TESTPROGRESS) { Progress((int)param, code, (DWORD)detail); return; }
+                if (code == DTS_CONNECTING) {
+                    m_progress.assign(m_progress.size(), ProxyTestHopProgress()); m_failedHop = -1;
+                }
+                m_pCallback->OnProxyTesterCallback(this, MAKEWPARAM(code, type), param, detail);
+                if (code == DTS_CONNECTING) Progress(0, PTS_CONNECTING, (DWORD)detail);
+            });
         m_pNotify->ArmTester(this, 65000);
         if (!m_doh->NotifyWhenReady(m_dohWake)) { WSASetLastError(WSAENOBUFS); return FailedToStart(); }
         return TRUE;
@@ -268,6 +278,7 @@ void CProxyTester::RemoveAllLayers()
 void CProxyTester::Stop()
 {
     if (m_dohWake) m_dohWake->Cancel();
+    if (m_doh) m_doh->CancelTestProgress();
     m_doh.reset();
 	if (!m_completed)
 	{
@@ -305,7 +316,7 @@ void CProxyTester::Complete(int nCode, WPARAM wParam, LPARAM lParam)
 		return;
 	// A failure no hop reported itself (a timeout, a socket error) belongs to
 	// the first hop that never finished its handshake.
-	if (nCode != 0 && m_failedHop < 0 && m_pChain)
+	if (nCode != 0 && m_failedHop < 0 && m_pChain && !m_doh)
 	{
 		for (size_t i = 0; i < m_progress.size(); ++i)
 			if (m_progress[i].Active()) { m_failedHop = (int)i; break; }
@@ -314,6 +325,7 @@ void CProxyTester::Complete(int nCode, WPARAM wParam, LPARAM lParam)
 	FinishProgress(wParam == WSAETIMEDOUT ? WSAETIMEDOUT : nCode);
 	m_completed = TRUE;
     if (m_dohWake) m_dohWake->Cancel();
+    if (m_doh) m_doh->CancelTestProgress();
     m_doh.reset();
 	m_pNotify->DisarmTester(this);
 	m_pCallback->OnProxyTesterCallback(this,
@@ -442,15 +454,20 @@ void CProxyTester::OnMessage(UINT message, WPARAM low, LPARAM high, BOOL& handle
     handled = TRUE;
     if (m_completed || !m_doh || !m_doh->Done()) return;
     if (!m_doh->Succeeded()) {
-        CStringA error = m_doh->Error(); m_doh.reset();
-        Complete(PROXYERROR_DOH_FAILED, 0, (LPARAM)(LPCSTR)error); return;
+        m_failedHop = m_doh->FailedHop();
+        const int code = m_doh->FailureCode();
+        // An SSH adapter owns preceding hops too. On a tunnel timeout, its
+        // layer index can be later than the hop whose handshake is pending.
+        if (code == PROXYERROR_DOH_FAILED && m_failedHop >= 0)
+            for (size_t i = 0; i < m_progress.size(); ++i)
+                if (m_progress[i].Active()) { m_failedHop = (int)i; break; }
+        CStringA error = (code == PROXYERROR_SSH_HOSTKEY_UNKNOWN || code == PROXYERROR_SSH_HOSTKEY_CHANGED)
+            ? m_doh->FailureDetail() : m_doh->Error();
+        Complete(code, 0, (LPARAM)(LPCSTR)error); return;
     }
-    m_client.proxyDstAddr = m_doh->Addresses().front();
-    m_client.proxyDstAddr.SetPort(m_client.dstAddr.GetPort());
-    m_client.routingFlags |= PRC_CLIENT_FLAG_DOH_RESOLVED;
-    m_doh.reset();
-    m_pNotify->ArmTester(this, 60000);
-    if (!ConnectTcp(&m_client)) Complete(PROXYERROR_NOCONN);
+    // The authenticated DoH response already proves this route is reachable.
+    // Do not open a second tunnel to an address in the DNS answer.
+    Complete(0);
 }
 
 //////////////////////////////////////////////////////////////////////////

@@ -134,6 +134,7 @@ private:
 	BOOL m_testUdpPassed = FALSE;
 	int m_testUdpError = 0;
 	CString m_testTcpTarget;
+    bool m_testDohQuerying = false;
 	INT_PTR ShowProxyTestResult(const CString& details, LPCTSTR actionKey = NULL);
 	ProxyInfo m_testProxyInfo;
 	ProxyChain m_testChain;	// empty = testing a single upstream

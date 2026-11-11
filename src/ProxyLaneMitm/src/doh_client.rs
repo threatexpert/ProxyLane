@@ -21,6 +21,7 @@ struct Client {
     ttl: u32,
     expires: Option<std::time::Instant>,
     wire_query: Option<Vec<u8>>,
+    probe: bool,
 }
 
 impl Client {
@@ -41,6 +42,7 @@ impl Client {
         if let Some(wire) = &wire_query { proxylane_protocol::dns::relay_query(wire)?; }
         let name = if wire_query.is_some() { String::new() } else { q["name"].as_str().ok_or("Missing DNS name")?.to_owned() };
         let ipv6 = q["ipv6"].as_bool().unwrap_or(false);
+        let probe = q["probe"].as_bool().unwrap_or(false);
         let mut roots = RootCertStore::empty();
         roots.add_parsable_certificates(webpki_root_certs::TLS_SERVER_ROOT_CERTS.iter().cloned());
         let mut config = ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
@@ -52,7 +54,7 @@ impl Client {
             tls: ClientConnection::new(Arc::new(config), server_name).map_err(|e| e.to_string())?,
             authority: authority.to_string(), path: uri.path_and_query().map_or("/dns-query", |p| p.as_str()).into(),
             name: name.clone(), ipv6, request: Vec::new(), response: Vec::new(),
-            result: None, error: None, aliases: vec![name.to_ascii_lowercase()], ttl: u32::MAX, expires: None, wire_query,
+            result: None, error: None, aliases: vec![name.to_ascii_lowercase()], ttl: u32::MAX, expires: None, wire_query, probe,
         };
         client.prepare()?;
         Ok(client)
@@ -83,6 +85,12 @@ impl Client {
             }
         }
         if let Some(body) = response_body(&self.response)? {
+            if self.probe {
+                let query = proxylane_protocol::dns::question(&self.name, self.ipv6)?;
+                proxylane_protocol::dns::probe_answer(&body, &query)?;
+                self.result = Some(json!({"probe_ok":true}).to_string());
+                return Ok(());
+            }
             if let Some(query) = &self.wire_query {
                 let ttl = proxylane_protocol::dns::relay_answer(&body, query)?;
                 // Apply HTTP Age to record TTLs as well as the cache lifetime.
@@ -387,9 +395,9 @@ mod tests {
         let server_config = rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
             .with_protocol_versions(&[&rustls::version::TLS13]).unwrap()
             .with_no_client_auth().with_single_cert(vec![certificate.clone()], key.into()).unwrap();
-        for (trusted, raw, chunk_size) in [(false, false, 16384), (true, false, 7), (true, false, 16384), (true, true, 16384)] {
+        for (trusted, raw, chunk_size, probe) in [(false, false, 16384, false), (true, false, 7, false), (true, false, 16384, false), (true, true, 16384, false), (true, false, 16384, true), (false, false, 16384, true)] {
             let query = if raw { json!({"wire":hex(&proxylane_protocol::dns::question("example.org", false).unwrap())}).to_string() }
-                else { r#"{"name":"example.org","ipv6":false}"#.into() };
+                else { json!({"name":"example.org","ipv6":false,"probe":probe}).to_string() };
             let mut client = Client::new("https://resolver.example/dns-query", &query).unwrap();
             if trusted {
                 // Only this test instance trusts its in-memory fixture root.
@@ -416,8 +424,11 @@ mod tests {
                     assert_eq!(server.server_name(), Some("resolver.example"));
                     assert!(request.starts_with(b"POST /dns-query HTTP/1.1\r\nHost: resolver.example\r\n"));
                     let mut answer = proxylane_protocol::dns::question("example.org", false).unwrap();
-                    answer[2] = 0x81; answer[3] = 0x80; answer[7] = 1;
-                    answer.extend_from_slice(&[0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 192, 0, 2, 20]);
+                    answer[2] = 0x81; answer[3] = 0x80;
+                    if !probe {
+                        answer[7] = 1;
+                        answer.extend_from_slice(&[0xc0, 12, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 192, 0, 2, 20]);
+                    }
                     server.writer().write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nContent-Length: {}\r\nAge: 10\r\nX-Test-Padding: {}\r\n\r\n", answer.len(), "x".repeat(8000)).as_bytes()).unwrap();
                     server.writer().write_all(&answer).unwrap(); replied = true;
                 }
@@ -438,6 +449,10 @@ mod tests {
             }
             if trusted {
                 let result: Value = serde_json::from_str(client.result.as_ref().unwrap()).unwrap();
+                if probe {
+                    assert_eq!(result, json!({"probe_ok":true}));
+                    continue;
+                }
                 if raw {
                     let bytes = unhex(result["wire"].as_str().unwrap()).unwrap();
                     assert_eq!(proxylane_protocol::dns::answer(&bytes, "example.org", false).unwrap().ttl, 50);

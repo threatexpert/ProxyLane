@@ -77,12 +77,12 @@ void CDohQuery::ResetTransport() {
     m_addresses.clear(); m_wireAnswer.clear(); m_ttl = 0;
     m_summaryText.clear();
 }
-std::shared_ptr<CDohQuery> CDohQuery::Resolve(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, bool test, DohQueryLogInfo* log) {
+std::shared_ptr<CDohQuery> CDohQuery::Resolve(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, bool test, DohQueryLogInfo* log, TestProgress progress) {
     if (log) {
         log->started = GetTickCount();
         LogDnsRelay(client.dwPid, client.szDomainName, client.dstAddr.IsIPv6() ? "AAAA" : "A", "query started");
     }
-    return Start(client, proxy, chain, test, {}, log ? &log->cacheHit : NULL, log ? &log->shared : NULL);
+    return Start(client, proxy, chain, test, {}, log ? &log->cacheHit : NULL, log ? &log->shared : NULL, std::move(progress));
 }
 void CDohQuery::LogAddressResult(const PRCClient& client, const DohQueryLogInfo& log) const {
     CStringA summary;
@@ -99,12 +99,13 @@ void CDohQuery::LogAddressResult(const PRCClient& client, const DohQueryLogInfo&
 std::shared_ptr<CDohQuery> CDohQuery::Exchange(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, const std::vector<unsigned char>& wire, bool* cacheHit, bool* shared) {
     return Start(client, proxy, chain, false, wire, cacheHit, shared);
 }
-std::shared_ptr<CDohQuery> CDohQuery::Start(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, bool test, const std::vector<unsigned char>& wire, bool* cacheHit, bool* shared) {
+std::shared_ptr<CDohQuery> CDohQuery::Start(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, bool test, const std::vector<unsigned char>& wire, bool* cacheHit, bool* shared, TestProgress progress) {
     if (cacheHit) *cacheHit = false;
     if (shared) *shared = false;
     auto result = std::shared_ptr<CDohQuery>(new CDohQuery);
     result->m_proxy = proxy;
     result->m_test = test;
+    result->m_testProgress = std::move(progress);
     result->m_route = chain && !chain->empty() ? *chain : ProxyChain(1, proxy);
     result->m_name = client.szDomainName; result->m_name.MakeLower();
     result->m_ipv6 = client.dstAddr.IsIPv6();
@@ -124,7 +125,7 @@ std::shared_ptr<CDohQuery> CDohQuery::Start(const PRCClient& client, const Proxy
         KeyPart(key, std::to_string(hop.sshAuth).c_str()); KeyPart(key, hop.strSshKeyFile.szbuf); KeyPart(key, hop.strSshKeyDigest.szbuf);
     }
     const DWORD now = GetTickCount();
-    const auto* cached = queries.cache ? queries.cache->Find(key) : NULL;
+    const auto* cached = !test && queries.cache ? queries.cache->Find(key) : NULL;
     if (cached) {
         if (cacheHit) *cacheHit = true;
         result->m_addresses = cached->addresses; result->m_wireAnswer = cached->wire;
@@ -135,7 +136,7 @@ std::shared_ptr<CDohQuery> CDohQuery::Start(const PRCClient& client, const Proxy
         if (it->second.expired()) it = queries.active.erase(it); else ++it;
     }
     auto existing = queries.active.find(key);
-    if (existing != queries.active.end()) if (auto active = existing->second.lock()) {
+    if (!test && existing != queries.active.end()) if (auto active = existing->second.lock()) {
         if (shared) *shared = true;
         return active;
     }
@@ -156,15 +157,18 @@ std::shared_ptr<CDohQuery> CDohQuery::Start(const PRCClient& client, const Proxy
         result->m_error = "Compatible ProxyLaneMitm64.dll with DoH support is unavailable"; result->m_done = true; return result;
     }
     result->m_started = now;
-    queries.active[key] = result;
+    if (!test) queries.active[key] = result;
     if (!result->SetTimer(1, 1000)) { result->m_done = true; result->m_error = "Cannot create DoH deadline timer"; queries.active.erase(key); }
     else result->Begin();
     return result;
 }
 bool CDohQuery::Begin() {
     m_retry = false; m_attemptStarted = GetTickCount();
+    m_failureCode = PROXYERROR_DOH_FAILED; m_failedHop = -1; m_failureDetail.Empty();
+    m_testHop = 0; m_testStage = PTS_CONNECTING;
+    if (m_testProgress) m_testProgress(LAYERCALLBACK_DOHTEST, DTS_CONNECTING, m_endpoint, m_attemptStarted);
     char error[1024] = {};
-    const std::string query = (m_wireQuery.empty() ? Json{{"name", (LPCSTR)m_name}, {"ipv6", m_ipv6}} : Json{{"wire", Hex(m_wireQuery)}}).dump();
+    const std::string query = (m_wireQuery.empty() ? Json{{"name", (LPCSTR)m_name}, {"ipv6", m_ipv6}, {"probe", m_test}} : Json{{"wire", Hex(m_wireQuery)}}).dump();
     if (m_create(m_proxy.dohUrl.szbuf, query.c_str(), &m_tls, error, sizeof(error)) != 0) { Fail(error); return false; }
     if (!m_layers.Add(*this, m_route.data(), (int)m_route.size(), m_test ? SshSessionUse::Test : SshSessionUse::Business)) { Fail("Cannot build DoH proxy chain"); return false; }
     m_layers.Top()->BypassHook(TRUE);
@@ -180,11 +184,20 @@ bool CDohQuery::Begin() {
 void CDohQuery::Fail(const char* text) {
     if (m_done || m_retry) return;
     m_error = text;
-    if (m_endpoint + 1 < m_bootstrap.size() && GetTickCount() - m_started < 60000) {
+    // Changing the resolver IP cannot fix proxy authentication, host trust,
+    // or an unreachable intermediate node. Test only retries once the last
+    // proxy is opening the resolver tunnel (or the DoH exchange has begun).
+    const bool resolverFailure = m_connected ||
+        (m_testHop == (int)m_route.size() - 1 &&
+            (m_testStage == PTS_OPENING || m_testStage == PTS_PASSED) &&
+            (m_failureCode == PROXYERROR_DOH_FAILED || m_failureCode == PROXYERROR_NOCONN ||
+                m_failureCode == PROXYERROR_REQUESTFAILED));
+    if ((!m_test || resolverFailure) && m_endpoint + 1 < m_bootstrap.size() && GetTickCount() - m_started < 60000) {
         m_retry = true;
         if (ScheduleWork()) return;
         m_retry = false; m_error = "Cannot dispatch DoH retry";
     }
+    if (m_test && !m_connected && m_failedHop < 0) m_failedHop = m_layers.StalledHop();
     m_done = true; KillTimer(1); queries.active.erase(m_key); NotifyWaiters();
 }
 void CDohQuery::Complete() {
@@ -193,7 +206,7 @@ void CDohQuery::Complete() {
     // This is the effective cache lifetime after Rust's DNS/HTTP limits and
     // the host cap. Keep zero when the answer could not actually be cached.
     m_ttl = min(m_ttl, (DWORD)3600);
-    if (m_ttl) {
+    if (!m_test && m_ttl) {
         if (!queries.cache) queries.cache.reset(new CDohCache);
         // Capping only shortens the DNS TTL; zero-TTL answers never enter cache.
         if (!queries.cache->Store(m_key, CDohCache::Entry{m_addresses, m_wireAnswer, m_answerStored, m_ttl * 1000, m_summaryText}))
@@ -239,6 +252,10 @@ void CDohQuery::Pump() {
                     json = (char*)large.data();
                 }
                 auto value = Json::parse(json);
+                if (m_test) {
+                    if (!value.value("probe_ok", false)) throw std::runtime_error("DoH client did not return a connectivity probe result");
+                    m_probeSucceeded = true; Complete(); break;
+                }
                 if (!m_wireQuery.empty()) {
                     m_wireAnswer = Unhex(value.at("wire").get<std::string>());
                     if (m_wireAnswer.size() < 12) throw std::runtime_error("Invalid DNS reply");
@@ -265,7 +282,16 @@ void CDohQuery::Pump() {
     }
     m_pumping = false;
 }
-void CDohQuery::OnConnect(int error) { if (error) Fail("DoH proxy tunnel connection failed"); else { m_connected = true; Pump(); } }
+void CDohQuery::OnConnect(int error) {
+    if (m_done || m_retry) return;
+    if (error) {
+        CStringA text; text.Format("DoH proxy tunnel connection failed (socket error %d)", error); Fail(text);
+    } else {
+        m_connected = true;
+        if (m_testProgress) m_testProgress(LAYERCALLBACK_DOHTEST, DTS_QUERYING, 0, GetTickCount());
+        Pump();
+    }
+}
 void CDohQuery::OnReceive(int error) { if (error) Fail("DoH tunnel receive failed"); else Pump(); }
 void CDohQuery::OnSend(int error) { if (error) Fail("DoH tunnel send failed"); else Pump(); }
 void CDohQuery::OnClose(int) { Pump(); if (!m_done) Fail("DoH tunnel closed before a complete answer"); }
@@ -303,8 +329,19 @@ void CDohQuery::OnMessage(UINT message, WPARAM low, LPARAM high, BOOL& handled) 
     Pump();
 }
 
-int CDohQuery::OnLayerCallback(const CAsyncSocketExLayer*, int type, int code, WPARAM, LPARAM detail) {
+int CDohQuery::OnLayerCallback(const CAsyncSocketExLayer* layer, int type, int code, WPARAM param, LPARAM detail) {
+    if (m_done || m_retry) return 1;
+    if (type == LAYERCALLBACK_TESTPROGRESS && m_test) {
+        const int hop = (int)param >= 0 ? (int)param : m_layers.HopOf(layer);
+        if (hop >= 0) { m_testHop = hop; m_testStage = code; }
+        if (m_testProgress) m_testProgress(type, code, hop, detail);
+        return 1;
+    }
     if (type == LAYERCALLBACK_LAYERSPECIFIC && code != PROXYERROR_NOERROR && code != PROXYSTATUS_LISTENSOCKETCREATED) {
+        if (m_test) {
+            m_failedHop = m_layers.HopOf(layer); m_failureCode = code;
+            m_failureDetail = detail ? (const char*)detail : "";
+        }
         CStringA text; text.Format("DoH proxy handshake failed (%d): %s", code, detail ? (const char*)detail : ""); Fail(text);
     }
     return 1;

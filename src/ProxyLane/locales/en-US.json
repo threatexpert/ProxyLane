@@ -701,6 +701,7 @@
   "chain.test.finishing": "Finishing route test",
   "chain.test.ipv6_probe": "Probing IPv6 egress",
   "chain.test.results": "TCP: %s · UDP: %s · IPv6: %s",
+  "chain.test.doh_results": "DoH: %s · UDP: %s · IPv6: %s",
   "chain.test.timing_hint": "Includes this hop’s handshake, authentication and next-tunnel request; excludes waiting for earlier hops. This is not network latency.",
   "ssh.auth": "Authentication",
   "ssh.auth_password": "Password",
@@ -726,5 +727,10 @@
   "profile.invalid_doh": "Enter a valid HTTPS DoH URL and 1–8 connection IPs without ports. Use IPv4 when IPv6 is blocked.",
   "profile.doh_unavailable": "Encrypted DNS (DoH) requires a supported 64-bit ProxyLane host. It also supports 32-bit target applications.",
   "profile.doh_requires_proxy": "DoH via proxy requires SOCKS5, HTTP, SSH or a proxy chain. It cannot be used with NOPROXY.",
-  "test.doh_failed": "Encrypted DNS (DoH) failed. Check the service URL, connection IPs and proxy chain. No local or plain DNS fallback is used."
+  "test.doh_failed": "Encrypted DNS (DoH) failed. Check the service URL, connection IPs and proxy chain. No local or plain DNS fallback is used.",
+  "test.doh_connecting": "Connecting to the DoH server through the proxy…",
+  "test.doh_querying": "DoH HTTPS handshake and query in progress…",
+  "test.result.doh": "Proxy and DoH connectivity",
+  "test.result.doh_passed": "Proxy chain and DoH query succeeded",
+  "test.result.doh_target": "Query: %s; DoH service: %s."
 }

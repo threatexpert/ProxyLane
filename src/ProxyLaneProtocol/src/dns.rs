@@ -46,6 +46,17 @@ pub fn private_ipv4_ptr_reply(query: &Message) -> Result<Option<Vec<u8>>, String
     Ok(Some(reply.to_vec().map_err(|e| e.to_string())?))
 }
 
+// A connectivity probe needs a valid successful response, not an address.
+pub fn probe_answer(bytes: &[u8], query: &[u8]) -> Result<(), String> {
+    relay_answer(bytes, query)?;
+    let a = Message::from_vec(bytes).map_err(|e| e.to_string())?;
+    if a.truncated() { return Err("DoH probe received a truncated DNS response".into()); }
+    if a.response_code() != hickory_proto::op::ResponseCode::NoError {
+        return Err(format!("DoH DNS response: {}", relay_summary(bytes)?));
+    }
+    Ok(())
+}
+
 pub fn relay_answer(bytes: &[u8], query: &[u8]) -> Result<u32, String> {
     use hickory_proto::op::ResponseCode;
     let q = relay_query(query)?;
@@ -128,6 +139,23 @@ pub fn relay_summary(bytes: &[u8]) -> Result<String, String> {
 mod relay_tests {
     use super::*;
     use hickory_proto::{op::{Edns, ResponseCode}, rr::{Record, RData, rdata::TXT}};
+    #[test]
+    fn connectivity_probe_accepts_nodata_but_rejects_errors_and_mismatches() {
+        let q = question("example.org", false).unwrap();
+        let mut a = relay_query(&q).unwrap();
+        a.set_message_type(MessageType::Response);
+        assert!(probe_answer(&a.to_vec().unwrap(), &q).is_ok());
+        for code in [ResponseCode::NXDomain, ResponseCode::ServFail, ResponseCode::Refused] {
+            a.set_response_code(code);
+            assert!(probe_answer(&a.to_vec().unwrap(), &q).is_err());
+        }
+        a.set_response_code(ResponseCode::NoError).set_truncated(true);
+        assert!(probe_answer(&a.to_vec().unwrap(), &q).is_err());
+        a.set_truncated(false).set_id(123);
+        assert!(probe_answer(&a.to_vec().unwrap(), &q).is_err());
+        assert!(probe_answer(&[0; 3], &q).is_err());
+        assert!(probe_answer(&question("other.example", false).unwrap(), &q).is_err());
+    }
     #[test]
     fn private_ptr_refused_without_affecting_public_ptr_or_other_queries() {
         use hickory_proto::rr::{DNSClass, RecordType};

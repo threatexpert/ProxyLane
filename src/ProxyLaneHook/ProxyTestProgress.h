@@ -5,6 +5,8 @@
 // LOWORD = stage, wParam = zero-based hop, lParam = source GetTickCount().
 // Progress is opt-in on transport layers; ordinary business sockets emit none.
 #define LAYERCALLBACK_TESTPROGRESS 2
+#define LAYERCALLBACK_DOHTEST 3
+enum DohTestStage { DTS_CONNECTING, DTS_QUERYING };
 enum ProxyTestStage
 {
     PTS_WAITING, PTS_CONNECTING, PTS_TLS, PTS_NEGOTIATING, PTS_SSH,

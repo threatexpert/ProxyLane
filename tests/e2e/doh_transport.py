@@ -184,8 +184,10 @@ def run(binary, chain=False, failure=False, udp=True, url="https://dns.google/dn
         last = http or socks
         queries = [r for r in last.requests if len(r) == 3 and r[1] == 443]
         targets = [r for r in last.requests if len(r) == 3 and r[1] == 18888]
-        assert len(queries) == (4 if retry else 2), ("concurrent queries/cache were not shared", last.requests)
-        assert (len(targets) == 0 if failure else len(targets) == 12), last.requests
+        # One shared business query, then two independent live DoH probes.
+        assert len(queries) == (2 if failure else 6 if retry else 3), ("business sharing / fresh probes", last.requests)
+        # The probes must never connect to the answer IP (only 10 business TCP requests).
+        assert (len(targets) == 0 if failure else len(targets) == 10), last.requests
         selected = [line.strip() for line in (result.stdout + result.stderr).splitlines() if line.startswith('[Proxy]')]
         if failure:
             assert not selected, ('Failed DNS must not log a selected target', selected)

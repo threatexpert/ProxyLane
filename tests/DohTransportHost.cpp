@@ -91,13 +91,17 @@ int main(int argc, char** argv) {
         while (!result.done && GetTickCount()-since<30000) {
             MSG message;
             while (PeekMessage(&message,NULL,0,0,PM_REMOVE)) {
-                // Prove both network completion and cached completion need no timer.
+                // Every connectivity test must use fresh network I/O, without polling.
                 if (message.message != WM_TIMER) DispatchMessage(&message);
             }
             MsgWaitForMultipleObjects(0,NULL,FALSE,100,QS_ALLINPUT);
         }
         Check(result.done && (failure ? result.code==PROXYERROR_DOH_FAILED : result.code==0),
             "DoH tester completes without dispatching WM_TIMER");
+        if (!failure) {
+            Check(result.ordered && result.progress.size() == settings.chain.size(), "DoH chain progress ordered");
+            for (const auto& hop : result.progress) Check(hop.stage == PTS_PASSED, "DoH hop passed");
+        }
         tester->Release();
     }
     Check(proxy->DisableProxy() != FALSE, "stop DoH host");
