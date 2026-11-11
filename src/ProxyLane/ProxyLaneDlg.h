@@ -8,6 +8,7 @@
 #include "InstalledApplications.h"
 #include <vector>
 #include <deque>
+#include <functional>
 
 class CProxyLaneFileDropTarget;
 class CAdminDropOverlay;
@@ -22,6 +23,9 @@ public:
 	BOOL ShowBrowserNotification(const CString& name);
 	void HideBrowserNotification();
 	void NotifyShortcutLaunch(const AutomationOptions& options);
+	// Runs the normal exit confirmations, then launchInstaller; closes only
+	// when both succeed.
+	BOOL ExitForUpdate(const std::function<BOOL()>& launchInstaller);
 
 // 对话框数据
 	enum { IDD = IDD_PROXYLANE_DIALOG };
@@ -59,6 +63,7 @@ protected:
 	void StartProxyFromTaskbarProfile(LPCTSTR profileName);
 	void ShowAndActivate();
 	void FailAutomation(int exitCode);
+	BOOL PrepareExit();
 	BOOL RefreshProfileCommandServer();
 	BOOL RegisterFileDropTarget(CWnd* window);
 	void BeginFileDrag();

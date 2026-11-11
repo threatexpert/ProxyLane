@@ -1,7 +1,11 @@
 [CmdletBinding()]
 param(
     [string]$OutputDirectory,
-    [string]$BinaryDirectory = 'bin'
+    [string]$BinaryDirectory = 'bin',
+    # Also build ProxyLane-<version>-Setup.exe with Inno Setup 6.
+    [switch]$Installer,
+    # ISCC.exe; defaults to PATH, then the standard Inno Setup 6 locations.
+    [string]$InnoSetupCompiler
 )
 
 $ErrorActionPreference = 'Stop'
@@ -118,24 +122,75 @@ finally {
     $archive.Dispose()
 }
 
-$sha256 = [System.Security.Cryptography.SHA256]::Create()
-try {
-    $stream = [System.IO.File]::OpenRead($archivePath)
+function Get-FileSha256([string]$Path) {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $hash = ([System.BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '')
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            return ([System.BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '')
+        }
+        finally {
+            $stream.Dispose()
+        }
     }
     finally {
-        $stream.Dispose()
+        $sha256.Dispose()
     }
 }
-finally {
-    $sha256.Dispose()
+
+$result = [ordered]@{
+    Version = $version
+    Archive = $null
+    SizeBytes = $null
+    SHA256 = $null
+}
+$archiveInfo = Get-Item -LiteralPath $archivePath
+$result.Archive = $archiveInfo.FullName
+$result.SizeBytes = $archiveInfo.Length
+$result.SHA256 = Get-FileSha256 $archivePath
+
+if ($Installer) {
+    if ([string]::IsNullOrWhiteSpace($InnoSetupCompiler)) {
+        $command = Get-Command 'ISCC.exe' -ErrorAction SilentlyContinue
+        $candidates = @()
+        if ($command) { $candidates += $command.Source }
+        foreach ($root in @(${env:ProgramFiles(x86)}, $env:ProgramFiles, (Join-Path $env:LOCALAPPDATA 'Programs'))) {
+            if ($root) { $candidates += (Join-Path $root 'Inno Setup 6\ISCC.exe') }
+        }
+        $InnoSetupCompiler = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    }
+    if (-not $InnoSetupCompiler -or -not (Test-Path -LiteralPath $InnoSetupCompiler -PathType Leaf)) {
+        throw 'Inno Setup 6 compiler (ISCC.exe) was not found. Install Inno Setup 6 or pass -InnoSetupCompiler.'
+    }
+
+    # Stage exactly the files of the zip archive, including the combined LICENSE.
+    $stagingDirectory = Join-Path $OutputDirectory "installer-staging-$version"
+    if (Test-Path -LiteralPath $stagingDirectory) {
+        Remove-Item -LiteralPath $stagingDirectory -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
+    try {
+        foreach ($packageFile in $packageFiles) {
+            Copy-Item -LiteralPath $packageFile.Source -Destination (Join-Path $stagingDirectory $packageFile.Entry)
+        }
+        [System.IO.File]::WriteAllText((Join-Path $stagingDirectory 'LICENSE'), $combinedLicense.ToString(),
+            (New-Object System.Text.UTF8Encoding($false)))
+
+        $script = Join-Path $repositoryRoot 'installer\ProxyLane.iss'
+        & $InnoSetupCompiler '/Q' "/DAppVersion=$version" "/DSourceDir=$stagingDirectory" "/O$OutputDirectory" $script
+        if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup failed with exit code $LASTEXITCODE."
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    $setupPath = Join-Path $OutputDirectory "ProxyLane-$version-Setup.exe"
+    $setupInfo = Get-Item -LiteralPath $setupPath
+    $result.Installer = $setupInfo.FullName
+    $result.InstallerSizeBytes = $setupInfo.Length
+    $result.InstallerSHA256 = Get-FileSha256 $setupPath
 }
 
-$archiveInfo = Get-Item -LiteralPath $archivePath
-[PSCustomObject]@{
-    Version = $version
-    Archive = $archiveInfo.FullName
-    SizeBytes = $archiveInfo.Length
-    SHA256 = $hash
-}
+[PSCustomObject]$result

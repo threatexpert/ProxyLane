@@ -25,7 +25,7 @@ ProxyLane 让指定 Windows 应用使用独立的代理配置，无需修改系�
 
 ## 快速开始
 
-1. 完整解压发行包，保留程序与 DLL 在同一目录。64 位 Windows 建议运行 `ProxyLane64.exe`。
+1. 运行 `ProxyLane-版本-Setup.exe` 安装（需要管理员权限，Windows 7 SP1 及以上），或完整解压 zip 发行包，保留程序与 DLL 在同一目录。64 位 Windows 建议运行 `ProxyLane64.exe`。
 2. 在 **代理设置** 中选择或新建配置，填写代理类型、服务器地址、端口及认证信息。
 3. 按需启用 **代理 TCP**、**代理 UDP** 和 **代理子进程**，点击 **测试当前设置** 检查连接，再点击 **启动代理**。
 4. 到 **应用与进程** 页面选择应用启动，或直接拖入程序、快捷方式。也可以选中已运行的进程，点击 **代理所选进程**。
@@ -146,7 +146,7 @@ HTTPS 解密不限于 443 端口；QUIC 支持 v1，可查看 HTTP/3，以及其
 
 配置位置只由 EXE 同目录的 `portable.flag` 文件决定，空文件即可：有标志时使用同目录的 `ProxyLane.ini`，没有则使用 `%LOCALAPPDATA%\ProxyLane\ProxyLane.ini`，不读写注册表。仅有同目录 INI 不会启用便携模式；旧版用户若要继续使用它，请创建 `portable.flag`。**设置与关于** 显示实际路径，提供“改用程序目录配置”或“改用用户目录配置”，以及导入、导出。切换只创建或删除标志文件并重启，不复制、移动或覆盖任何已有 INI；目标没有 INI 时由首次启动创建默认配置。需要沿用其他配置时请自行导入。独立测试版本应使用带 `portable.flag` 的目录，避免共享正式配置。
 
-不提供日常自动备份或独立的恢复入口；仅完整配置导入保留原有的导入前备份和失败恢复。配置保存使用临时文件校验后替换，写入失败保留原配置及未保存修改。导出包含密码和 PSK，不打包引用的外部文件。检查更新由用户手动触发，在后台访问 https://10000.download/api/tools/proxylane/release 查询最新正式发布（下载站缓存 10 分钟）。发现新版后打开下载站工具页，由用户选择下载，不自动安装；客户端无需直连 GitHub。设置与关于页提供下载站入口。
+不提供日常自动备份或独立的恢复入口；仅完整配置导入保留原有的导入前备份和失败恢复。配置保存使用临时文件校验后替换，写入失败保留原配置及未保存修改。导出包含密码和 PSK，不打包引用的外部文件。检查更新由用户手动触发，在后台访问 https://10000.download/api/tools/proxylane/release 查询最新正式发布（下载站缓存 10 分钟）。发现新版后，zip 版打开下载站工具页，由用户选择下载；安装版在用户确认后下载安装包，校验 SHA-256 后退出并静默升级。代理正在运行时，检查和下载都会经过当前代理配置。客户端无需直连 GitHub，详见 [安装包与程序内更新](docs/installer-and-updates.md)。设置与关于页提供下载站入口。
 
 
 ## SSH 代理
@@ -249,6 +249,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 ```
 
 脚本检查主程序与 Hook DLL 的版本是否一致，生成 `dist/ProxyLane-版本-Windows.zip`，并输出 SHA-256。可用 `-OutputDirectory D:\releases` 指定输出目录。
+
+加上 `-Installer` 会再用 Inno Setup 6 生成 `dist/ProxyLane-版本-Setup.exe`。安装包行为和程序内更新所需的下载站字段见 [安装包与程序内更新](docs/installer-and-updates.md)。
 
 发行包包含双架构主程序和 Hook DLL、64 位安全传输与 MITM DLL、中英文 README，以及汇总第三方声明的 `LICENSE`。发行包不包含活动配置文件，首次运行自动生成 Test 和 Direct 默认配置，升级解压不会覆盖用户的 INI；测试程序和命令行辅助工具不进入发行包。
 

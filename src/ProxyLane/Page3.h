@@ -275,6 +275,10 @@ public:
 		AppLaunchElevationMode elevationMode = APP_LAUNCH_ELEVATION_AUTO,
 		const CString& initialArguments = CString(),
 		const CString& initialWorkingDirectory = CString());
+	// Starts this executable in the private update-helper mode. While a proxy is
+	// running the helper is injected (bypassing child filters) so it downloads
+	// through the active profile; *proxied reports which route was used.
+	BOOL StartUpdateHelper(const CString& arguments, HANDLE& process, BOOL* proxied = NULL);
 	AppLaunchResult LaunchPackagedAppById(LPCTSTR aumid, const CString& arguments, AppLauncherResult* outcome = NULL);
 	BOOL GetAppLauncherHostInfo(AppLauncherHostInfo* info) override;
 	BOOL LaunchAppFromShell(const AppLauncherRequest& request, AppLauncherResult& result) override;

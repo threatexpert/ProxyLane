@@ -11,6 +11,7 @@
 #include "Localization.h"
 #include "AppVersion.h"
 #include "AppLauncher.h"
+#include "UpdateHelper.h"
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -148,6 +149,14 @@ BOOL CProxyLaneApp::InitInstance()
 		m_automationExitCode=static_cast<int>(launcherExitCode);
 		return FALSE;
 	}
+	// Windowless update download, possibly injected with the active profile.
+	if (UpdateHelper::Run(GetCommandLineW(), launcherExitCode)) {
+		m_automationExitCode=static_cast<int>(launcherExitCode);
+		return FALSE;
+	}
+	// Lets the setup program wait until every ProxyLane window has exited. The
+	// handle is intentionally kept open for the lifetime of the process.
+	CreateMutex(NULL, FALSE, _T("ProxyLaneRunning"));
 	// 如果一个运行在 Windows XP 上的应用程序清单指定要
 	// 使用 ComCtl32.dll 版本 6 或更高版本来启用可视化方式，
 	//则需要 InitCommonControlsEx()。否则，将无法创建窗口。

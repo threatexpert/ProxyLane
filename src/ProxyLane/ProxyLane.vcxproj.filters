@@ -34,6 +34,7 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="LaunchShortcut.cpp"><Filter>源文件</Filter></ClCompile>
+    <ClCompile Include="UpdateHelper.cpp"><Filter>源文件</Filter></ClCompile>
     <ClCompile Include="AutomationOptions.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -118,6 +119,7 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="LaunchShortcut.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="UpdateHelper.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="AutomationOptions.h">
       <Filter>头文件</Filter>
     </ClInclude>
