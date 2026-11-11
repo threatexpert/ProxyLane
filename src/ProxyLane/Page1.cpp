@@ -10,6 +10,7 @@
 #include "ProxyTestResultDialog.h"
 #include "ProxyTestError.h"
 #include "ChainNodeEditDialog.h"
+#include "ChainProgressPresentation.h"
 #include "MainTab.h"
 #include "Page2.h"
 #include "Page3.h"
@@ -169,13 +170,6 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
  ON_BN_CLICKED(0x2402, &CPage1::OnToggleAdvanced)
 	ON_COMMAND(0x240B, &CPage1::OnNewChainProfile)
 	ON_BN_CLICKED(0x2406, &CPage1::OnChainAdd)
-	ON_BN_CLICKED(0x240A, &CPage1::OnChainEdit)
-	ON_NOTIFY(NM_DBLCLK, 0x2405, &CPage1::OnChainDoubleClick)
-	ON_BN_CLICKED(0x2407, &CPage1::OnChainUp)
-	ON_BN_CLICKED(0x2408, &CPage1::OnChainDown)
-	ON_BN_CLICKED(0x2409, &CPage1::OnChainRemove)
-	ON_NOTIFY(LVN_ITEMCHANGED, 0x2405, &CPage1::OnChainItemChanged)
-	ON_NOTIFY(NM_CUSTOMDRAW, 0x2405, &CPage1::OnChainCustomDraw)
 
 	ON_WM_SIZE()
 	ON_WM_VSCROLL()
@@ -253,32 +247,21 @@ BOOL CPage1::OnInitDialog()
 			control.SetWindowPos(after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 			after = &control;
 		};
-		m_listChain.Create(WS_CHILD | WS_TABSTOP | WS_BORDER | LVS_REPORT | LVS_SINGLESEL |
-			LVS_SHOWSELALWAYS | LVS_NOSORTHEADER, CRect(), this, 0x2405);
-		m_listChain.SetExtendedStyle(LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-		m_listChain.InsertColumn(0, L"#", LVCFMT_LEFT, UiTheme::ScaleForWindow(m_hWnd, 36));
-		m_listChain.InsertColumn(1, Localization::Get(L"page1.chain_column_profile"), LVCFMT_LEFT,
-			UiTheme::ScaleForWindow(m_hWnd, 180));
-		m_listChain.InsertColumn(2, Localization::Get(L"page1.chain_column_server"), LVCFMT_LEFT,
-			UiTheme::ScaleForWindow(m_hWnd, 320));
-		struct { CModernButton* button; UINT id; LPCWSTR key; } buttons[] = {
-			{ &m_btnChainAdd, 0x2406, L"page1.chain_add" }, { &m_btnChainEdit, 0x240A, L"chain.edit.button" },
-			{ &m_btnChainUp, 0x2407, L"page1.chain_up" },
-			{ &m_btnChainDown, 0x2408, L"page1.chain_down" }, { &m_btnChainRemove, 0x2409, L"page1.chain_remove" } };
-		m_listChain.InsertColumn(3, Localization::Get(L"chain.test.status"), LVCFMT_LEFT, UiTheme::ScaleForWindow(m_hWnd, 190));
-		m_listChain.InsertColumn(4, Localization::Get(L"chain.test.elapsed"), LVCFMT_RIGHT, UiTheme::ScaleForWindow(m_hWnd, 74));
-		m_listChain.SetFont(&m_uiFont);
-		m_listChain.Initialize();
-		order(m_listChain);
-		for (auto& entry : buttons)
-		{
-			entry.button->Create(Localization::Get(entry.key), WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
-				CRect(), this, entry.id);
-			entry.button->SetFont(&m_uiFont);
-			entry.button->SetBackdropColor(UiTheme::PageBackground());
-			entry.button->SetVisualStyle(CModernButton::STYLE_SECONDARY);
-			order(*entry.button);
-		}
+        m_chainView.Create(this, 0x2405);
+        m_chainView.SetFont(&m_uiFont);
+        m_chainView.onAction = [this](CChainRouteView::Action action, int from, int to) {
+            if (action == CChainRouteView::Selection) UpdateChainButtons();
+            else if (action == CChainRouteView::Edit) OnChainEdit();
+            else if (action == CChainRouteView::Remove) OnChainRemove();
+            else if (action == CChainRouteView::Move) OnChainMove(from, to);
+        };
+        order(m_chainView);
+        m_btnChainAdd.Create(Localization::Get(L"page1.chain_add"), WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
+            CRect(), this, 0x2406);
+        m_btnChainAdd.SetFont(&m_uiFont);
+        m_btnChainAdd.SetBackdropColor(UiTheme::PageBackground());
+        m_btnChainAdd.SetVisualStyle(CModernButton::STYLE_SECONDARY);
+        order(m_btnChainAdd);
 	}
 
 	m_OK.SetVisualStyle(CModernButton::STYLE_PRIMARY);
@@ -510,7 +493,7 @@ void CPage1::LayoutSettingsPage()
 		}
 		const UINT serverIds[] = { IDC_STATIC_TYPE_LABEL, IDC_CB_PROXYTYPE, IDC_STATIC_HOST_LABEL,
 			IDC_EDIT_ADDR, IDC_STATIC_PORT_LABEL, IDC_EDIT_PORT, 0x2402 };
-		const UINT chainIds[] = { 0x2405, 0x2406, 0x2407, 0x2408, 0x2409, 0x240A };
+		const UINT chainIds[] = { 0x2405, 0x2406 };
 		for (int i = 0; i < _countof(serverIds); ++i)
 			if (CWnd* control = GetDlgItem(serverIds[i]))
 				control->ShowWindow(m_chainMode ? SW_HIDE : SW_SHOW);
@@ -524,44 +507,13 @@ void CPage1::LayoutSettingsPage()
 			for (int i = 0; i < _countof(optionalIds); ++i)
 				if (CWnd* control = GetDlgItem(optionalIds[i]))
 					control->ShowWindow(SW_HIDE);
-			// Use the native row/header metrics: fixed logical heights can expose
-			// five or six rows depending on the font and display scaling.
-			CRect itemRect, headerRect(0, 0, 0, 0), listRect, clientRect;
-			CClientDC listDc(&m_listChain);
-			CFont* oldFont = listDc.SelectObject(m_listChain.GetFont());
-			TEXTMETRIC metrics = {}; listDc.GetTextMetrics(&metrics);
-			listDc.SelectObject(oldFont);
-			const int itemH = m_listChain.GetItemRect(0, &itemRect, LVIR_BOUNDS)
-				? itemRect.Height() : metrics.tmHeight + S(2);
-			if (CHeaderCtrl* header = m_listChain.GetHeaderCtrl()) header->GetWindowRect(&headerRect);
-			m_listChain.GetWindowRect(&listRect); m_listChain.GetClientRect(&clientRect);
-			const int headerH = headerRect.Height() > 0 ? headerRect.Height() : metrics.tmHeight + S(6);
-			const int listH = headerH + itemH * 4 + max(2, listRect.Height()-clientRect.Height());
-			place(0x2405, innerX, row, innerW, listH);
-			const int listWidth = innerW - GetSystemMetrics(SM_CXVSCROLL) - S(4);
-			const int nameWidth = min(S(140), max(S(80), listWidth / 5));
-			const int statusWidth = min(S(210), max(S(150), listWidth / 3));
-			m_listChain.SetColumnWidth(0, S(30));
-			m_listChain.SetColumnWidth(1, nameWidth);
-			m_listChain.SetColumnWidth(2, max(S(70), listWidth - S(104) - nameWidth - statusWidth));
-			m_listChain.SetColumnWidth(3, statusWidth);
-			m_listChain.SetColumnWidth(4, S(74));
-			row += listH + S(8);
-			const int addW = textWidth(0x2406) + S(30);
-			place(0x2406, innerX, row, addW, fieldH);
-			const int removeW = textWidth(0x2409) + S(24);
-			const int downW = textWidth(0x2408) + S(24);
-			const int upW = textWidth(0x2407) + S(24);
-			int x = innerX + innerW - removeW;
-			place(0x2409, x, row, removeW, fieldH);
-			x -= gap + downW;
-			place(0x2408, x, row, downW, fieldH);
-			x -= gap + upW;
-			place(0x2407, x, row, upW, fieldH);
-			const int editW = textWidth(0x240A) + S(24);
-			x -= editW + S(8);
-			place(0x240A, x, row, editW, fieldH);
-			row += fieldH + S(12);
+            // Size cards to their font/content, with Add centred on the frame's
+            // title (9..29 DIP), and retain the compact footer gap.
+            const int listH = m_chainView.PreferredHeight();
+            const int addW = textWidth(0x2406) + S(30);
+            place(0x2406, innerX + innerW - addW, serverTop + S(19) - fieldH / 2, addW, fieldH);
+            place(0x2405, innerX, row, innerW, listH);
+            row += listH + S(4);
 		}
 		const int typeW = S(92), portW = S(64), endpointGap = S(8);
 		const int advancedW = textWidth(0x2402) + S(16);
@@ -1821,7 +1773,7 @@ void CPage1::OnBnClickedTestproxy()
 		m_chainProgress.assign(m_testChain.size(), ProxyTestHopProgress());
 		m_chainErrors.resize(m_testChain.size());
 		m_chainStarted = GetTickCount(); m_chainElapsed = 0;
-		m_chainProgressRunning = true; m_listChain.followProgress = true;
+		m_chainProgressRunning = true; m_chainView.followProgress = true;
 		SetTimer(0x312, 100, NULL);
 		UpdateChainProgress();
 	}
@@ -1871,6 +1823,7 @@ void CPage1::OnBnClickedTestproxy()
 BOOL CPage1::StartProxyTestPhase(const PRCClient& client, int phase,
 	LPCTSTR statusKey)
 {
+    m_singleTestStage = PTS_WAITING;
 	if (!m_pTestProxy || m_pProxyTester)
 	{
 		WSASetLastError(WSAEINVAL);
@@ -2044,6 +1997,7 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
     if (nType == LAYERCALLBACK_DOHTEST && m_proxyTestPhase == PROXY_TEST_TCP) {
         m_testDohQuerying = nCode == DTS_QUERYING;
         if (nCode == DTS_CONNECTING) {
+            m_singleTestStage = PTS_WAITING;
             m_chainProgress.assign(m_chainProgress.size(), ProxyTestHopProgress());
             for (auto& error : m_chainErrors) error.Empty();
             m_chainFollowed = -1;
@@ -2055,11 +2009,12 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 	if (nType == LAYERCALLBACK_TESTPROGRESS)
 	{
 		const int hop = (int)wParam;
+        if (m_testChain.empty() && nCode > PTS_WAITING && nCode < PTS_PASSED) m_singleTestStage = nCode;
 		if (m_proxyTestPhase == PROXY_TEST_TCP && hop >= 0 && hop < (int)m_chainProgress.size())
 		{
 			m_chainProgress[hop].Apply(nCode, (DWORD)lParam);
 			UpdateChainProgress(true);
-			m_listChain.RedrawItems(hop, hop);
+			m_chainView.Invalidate(FALSE);
 		}
 		return;
 	}
@@ -2091,6 +2046,11 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 	}else if (nType == LAYERCALLBACK_LAYERSPECIFIC)
 	{
 		const int completedPhase = m_proxyTestPhase;
+        const int reportedHop = pTester->GetFailedHop();
+        const bool chainHop = reportedHop >= 0 && reportedHop < (int)m_testChain.size() && reportedHop < (int)m_chainProgress.size();
+        const int failedStage = chainHop ? m_chainProgress[reportedHop].lastActiveStage : m_singleTestStage;
+        const CString sshDetail = m_testDohQuerying ? CString() : ProxyTestSshErrorDescription(nCode,
+            chainHop ? m_testChain[reportedHop] : m_testProxyInfo, failedStage, (int)wParam);
         CString dohDetail;
         if (completedPhase == PROXY_TEST_TCP && m_testProxyInfo.dohEnabled && nCode && lParam &&
             nCode != PROXYERROR_SSH_HOSTKEY_UNKNOWN && nCode != PROXYERROR_SSH_HOSTKEY_CHANGED) {
@@ -2115,7 +2075,7 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 				// the failed request was actually directed at the next proxy.
 				m_chainErrors[hop] = ChainLinkFailed(hop) &&
 					(nCode == PROXYERROR_REQUESTFAILED || nCode == PROXYERROR_NOCONN)
-					? CString() : ProxyTestErrorDescription(nCode, FALSE);
+					? CString() : !sshDetail.IsEmpty() ? sshDetail : ProxyTestErrorDescription(nCode, FALSE);
             if (hop >= 0 && hop < (int)m_chainErrors.size() && !dohDetail.IsEmpty())
                 m_chainErrors[hop] += L"\r\n" + dohDetail;
 		}
@@ -2240,6 +2200,7 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 				szText = ProxyTestErrorDescription(nCode, m_testProxyInfo.GetProxyType() == PROXYTYPE_NOPROXY);
 				break;
 			}
+            if (!sshDetail.IsEmpty()) szText = sshDetail;
 			// In a chain, say which hop the failure belongs to.
 			const int failedHop = m_testChain.size() > 1 && m_pProxyTester ? m_pProxyTester->GetFailedHop() : -1;
 			if (ChainLinkFailed(failedHop))
@@ -2463,7 +2424,7 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		UpdateChildFilterEnable();
 	}
 	m_chainHops = item ? item->chainHops : std::vector<CString>();
-	RefreshChainList();
+	RefreshChainView();
 	ExpandConfiguredOptions();
 	UpdateDnsRedirectEnable();
 	UpdateTransportEnable();
@@ -2800,7 +2761,7 @@ namespace
 void CPage1::SetChainMode(BOOL chain)
 {
 	m_chainMode = chain;
-	RefreshChainList();
+	RefreshChainView();
 	UpdateTransportEnable();
 	LayoutSettingsPage();
 }
@@ -2872,15 +2833,8 @@ void CPage1::ClearChainProgress()
     m_chainProgress.clear(); m_chainErrors.clear(); m_chainConclusion.Empty();
     m_chainProgressRunning = false; m_chainFollowed = -1;
     m_chainFailureCode = 0;
-    m_listChain.ClearTips();
     if (m_staticTestProxy.GetSafeHwnd()) m_staticTestProxy.SetDetailText(CString());
-    if (!m_listChain.GetSafeHwnd()) return;
-    for (int i = 0; i < m_listChain.GetItemCount(); ++i)
-    {
-        m_listChain.SetItemText(i, 3, Localization::Get(L"status.test_not_run"));
-        m_listChain.SetItemText(i, 4, L"—");
-    }
-    m_listChain.Invalidate(FALSE);
+    if (m_chainView.GetSafeHwnd()) m_chainView.ClearProgress();
 }
 
 bool CPage1::ChainNodeNegotiated(int index) const
@@ -2934,55 +2888,55 @@ CString CPage1::ChainStageText(int index, int stage) const
 
 void CPage1::UpdateChainProgress(bool follow)
 {
-    if (!m_listChain.GetSafeHwnd() || m_chainProgress.empty() ||
-        m_listChain.GetItemCount() != (int)m_chainProgress.size()) return;
+    if (!m_chainView.GetSafeHwnd() || m_chainProgress.empty() ||
+        m_chainView.Count() != (int)m_chainProgress.size()) return;
     const DWORD now = GetTickCount();
     int passed = 0, current = -1;
     bool failed = false;
-    m_listChain.tips.resize(m_chainProgress.size());
+    std::vector<bool> negotiated(m_chainProgress.size()), linkFailed(m_chainProgress.size());
     for (int i = 0; i < (int)m_chainProgress.size(); ++i)
     {
         const auto& progress = m_chainProgress[i];
-        const bool negotiated = ChainNodeNegotiated(i);
-        const bool linkFailed = ChainLinkFailed(i);
-        if (negotiated) ++passed;
+        // Terminal progress precedes the error callback. Wait for that callback
+        // to distinguish HTTP authentication errors from next-hop failures.
+        if (ChainProgressPresentation::Failed(progress.stage) && !m_chainFailureCode) return;
+        negotiated[i] = ChainNodeNegotiated(i); linkFailed[i] = ChainLinkFailed(i);
         if (progress.Active() || progress.stage == PTS_FAILED || progress.stage == PTS_TIMED_OUT) current = i;
         if (progress.stage == PTS_FAILED || progress.stage == PTS_TIMED_OUT) failed = true;
+    }
+    const auto cards = ChainProgressPresentation::Project(m_chainProgress, negotiated, linkFailed, now);
+    for (int i = 0; i < (int)cards.size(); ++i)
+    {
+        const auto& progress = cards[i];
+        if (progress.stage == PTS_PASSED) ++passed;
+        const bool active = progress.stage > PTS_WAITING && progress.stage < PTS_PASSED;
         CString status = ChainStageText(i, progress.stage);
-        if (negotiated) status = L"\u2713 " + Localization::Get(L"chain.test.passed");
-        else if (linkFailed) status = L"\u2713 " + Localization::Get(L"chain.test.connected");
-        else if (progress.stage == PTS_SKIPPED && ChainLinkFailed(i - 1)) status = Localization::Get(L"chain.test.not_reached");
+        if (progress.connectedOnly) status = Localization::Get(L"chain.test.connected_unconfirmed");
         else if (progress.stage == PTS_FAILED || progress.stage == PTS_TIMED_OUT)
             status = L"\u00d7 " + Localization::Format(L"chain.test.stage_result",
-                (LPCTSTR)status, (LPCTSTR)ChainStageText(i,
-                    progress.lastActiveStage == PTS_OPENING ? PTS_AUTH : progress.lastActiveStage));
-        else if (progress.Active()) status = L"… " + status;
-        const CString elapsed = progress.started ? ChainDuration(progress.Elapsed(now)) : CString(L"—");
-        if (m_listChain.GetItemText(i, 3) != status)
-        {
-            m_listChain.SetItemText(i, 3, status);
-            // SetItemText invalidates only its cell. Repaint the entire row to
-            // remove the previous active background even if its time was 0 ms.
-            m_listChain.RedrawItems(i, i);
-        }
-        if (m_listChain.GetItemText(i, 4) != elapsed) m_listChain.SetItemText(i, 4, elapsed);
-        CString tip = m_listChain.GetItemText(i, 1) + L"\r\n" + m_listChain.GetItemText(i, 2) + L"\r\n" + status;
-        if (linkFailed || progress.stage == PTS_OPENING) tip += L"\r\n" + ChainLinkText(i);
-        if (progress.stage == PTS_SKIPPED && ChainLinkFailed(i - 1)) tip += L"\r\n" + ChainLinkText(i - 1);
-        if (!m_chainErrors[i].IsEmpty()) tip += L"\r\n" + m_chainErrors[i];
+                (LPCTSTR)status, (LPCTSTR)ChainStageText(i, progress.lastStage));
+        else if (progress.stage == PTS_PASSED) status = L"\u2713 " + Localization::Get(L"chain.test.passed");
+        else if (active) status = L"… " + status;
+        const CString elapsed = progress.started ? ChainDuration(progress.elapsed) : CString(L"—");
+        CString tip = m_chainView.At(i).name + L"\r\n" + m_chainView.At(i).host + L"\r\n" + status;
+        if (progress.linkSource >= 0) tip += L"\r\n" + ChainLinkText(progress.linkSource);
+        if (progress.errorSource >= 0 && !m_chainErrors[progress.errorSource].IsEmpty())
+            tip += L"\r\n" + m_chainErrors[progress.errorSource];
         tip += L"\r\n" + Localization::Format(L"chain.test.node_elapsed", (LPCTSTR)elapsed);
         for (int stage = PTS_CONNECTING; stage < PTS_PASSED; ++stage)
         {
-            DWORD duration = progress.stages[stage];
-            if (progress.Active() && progress.stage == stage) duration += now - progress.changed;
+            const DWORD duration = progress.stages[stage];
             if (duration) tip += L"\r\n" + ChainStageText(i, stage) + L": " + ChainDuration(duration);
         }
         tip += L"\r\n" + Localization::Get(L"chain.test.timing_hint");
-        m_listChain.tips[i] = tip;
+        const auto state = progress.stage == PTS_FAILED || progress.stage == PTS_TIMED_OUT ? CChainRouteView::Failed :
+            active ? CChainRouteView::Running : progress.stage == PTS_PASSED ? CChainRouteView::Passed : CChainRouteView::Idle;
+        m_chainView.SetProgress(i, state, state == CChainRouteView::Passed || state == CChainRouteView::Failed ? elapsed : CString(), tip);
     }
-    m_listChain.RefreshTip();
-    if (follow && current >= 0 && current != m_chainFollowed)
-    { m_listChain.Follow(current); m_chainFollowed = current; }
+    const bool opening = current >= 0 && (m_chainProgress[current].stage == PTS_OPENING || linkFailed[current]);
+    const int visibleCurrent = opening && current + 1 < (int)cards.size() ? current + 1 : current;
+    if ((follow || failed) && visibleCurrent >= 0 && visibleCurrent != m_chainFollowed)
+    { m_chainView.Follow(visibleCurrent); m_chainFollowed = visibleCurrent; }
     CString status;
     const CString total = ChainDuration(m_chainProgressRunning ? now - m_chainStarted : m_chainElapsed);
     if (m_chainProgressRunning)
@@ -2996,92 +2950,62 @@ void CPage1::UpdateChainProgress(bool follow)
             (LPCTSTR)activity, (LPCTSTR)total);
     }
     else status = Localization::Format(L"chain.test.finished", (LPCTSTR)m_chainConclusion, (LPCTSTR)total);
+    // Name both ends for a link failure. The source proxy must not look like
+    // the failed destination just because it reports the CONNECT error.
+    if (current >= 0) {
+        CString activity = m_chainProgress[current].stage == PTS_OPENING || ChainLinkFailed(current) ?
+            ChainLinkText(current) : ChainStageText(current, m_chainProgress[current].stage);
+        if (failed && current < (int)m_chainErrors.size() && !m_chainErrors[current].IsEmpty())
+            activity += L" · " + m_chainErrors[current];
+        activity.Replace(L'\r', L' '); activity.Replace(L'\n', L' ');
+        if (failed || (m_chainProgressRunning && m_proxyTestPhase == PROXY_TEST_TCP && !m_testDohQuerying))
+            status = (opening ? CString() : m_chainView.At(current).name + L" · ") + activity + L" · " + total;
+    }
+    m_staticTestProxy.SetDetailText(status);
     CString previous; m_staticTestProxy.GetWindowText(previous);
     if (previous != status)
         m_staticTestProxy.SetStatus(status, m_chainProgressRunning ? CStatusLabel::TONE_INFO : failed ?
             CStatusLabel::TONE_DANGER : m_testIpv6Result == IPV6_TEST_AVAILABLE ? CStatusLabel::TONE_SUCCESS : CStatusLabel::TONE_WARNING);
 }
 
-void CPage1::OnChainCustomDraw(NMHDR* header, LRESULT* result)
+CChainRouteView::Node CPage1::ChainNode(int index) const
 {
-    NMLVCUSTOMDRAW* draw = reinterpret_cast<NMLVCUSTOMDRAW*>(header);
-    *result = CDRF_DODEFAULT;
-    if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) { *result = CDRF_NOTIFYITEMDRAW; return; }
-    if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) { *result = CDRF_NOTIFYSUBITEMDRAW; return; }
-    if (draw->nmcd.dwDrawStage != (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) return;
-    const size_t row = draw->nmcd.dwItemSpec;
-    // The themed list reports CDIS_SELECTED for unselected rows as well.
-    if (row >= m_chainProgress.size() || (m_listChain.GetItemState((int)row, LVIS_SELECTED) & LVIS_SELECTED)) return;
-    const auto& progress = m_chainProgress[row];
-    draw->clrTextBk = progress.Active() ? UiTheme::AccentSoft() : m_listChain.GetBkColor();
-    draw->clrText = m_listChain.GetTextColor();
-    if (draw->iSubItem == 3 || draw->iSubItem == 4)
-        draw->clrText = ChainNodeNegotiated((int)row) || ChainLinkFailed((int)row) ? UiTheme::Success() :
-            progress.stage == PTS_FAILED || progress.stage == PTS_TIMED_OUT ? UiTheme::Danger() :
-            progress.Active() ? UiTheme::Accent() : UiTheme::TextSecondary();
+    CChainRouteView::Node node;
+    node.name = m_chainHops[index];
+    CfgProxyItem item; item.strName = node.name;
+    if (!m_profileStore.Load(item)) node.host = Localization::Get(L"page1.chain_hop_missing");
+    else if (!CProxyProfileStore::IsChainHop(item)) node.host = Localization::Get(L"page1.chain_hop_invalid");
+    else {
+        node.protocol = (CString)item.pi.strProxyType;
+        CString host = (CString)item.pi.strProxyHost;
+        if (host.Find(L':') >= 0 && host.Left(1) != L"[") host = L"[" + host + L"]";
+        node.host.Format(L"%s:%u", (LPCTSTR)host, (unsigned)item.pi.nProxyPort);
+    }
+    return node;
 }
 
-void CPage1::RefreshChainList(int select)
+void CPage1::RefreshChainView(int select)
 {
-	ClearChainProgress();
-	if (!m_listChain.GetSafeHwnd())
-		return;
-	m_listChain.SetRedraw(FALSE);
-	m_listChain.DeleteAllItems();
-	for (int i = 0; i < (int)m_chainHops.size(); ++i)
-	{
-		CfgProxyItem item;
-		item.strName = m_chainHops[i];
-		CString number;
-		number.Format(L"%d", i + 1);
-		m_listChain.InsertItem(i, number);
-		m_listChain.SetItemText(i, 1, m_chainHops[i]);
-		m_listChain.SetItemText(i, 3, Localization::Get(L"status.test_not_run"));
-		m_listChain.SetItemText(i, 4, L"—");
-		m_listChain.SetItemText(i, 2, !m_profileStore.Load(item) ? Localization::Get(L"page1.chain_hop_missing") :
-			!CProxyProfileStore::IsChainHop(item) ? Localization::Get(L"page1.chain_hop_invalid") : DescribeServer(item));
-	}
-	if (select >= 0 && select < (int)m_chainHops.size())
-		m_listChain.SetItemState(select, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-	m_listChain.SetRedraw(TRUE);
-	m_listChain.Invalidate();
-	UpdateChainButtons();
+    ClearChainProgress();
+    if (!m_chainView.GetSafeHwnd()) return;
+    std::vector<CChainRouteView::Node> nodes;
+    for (int i = 0; i < (int)m_chainHops.size(); ++i) nodes.push_back(ChainNode(i));
+    m_chainView.SetNodes(nodes, select);
+    UpdateChainButtons();
 }
 
 void CPage1::UpdateChainButtons()
 {
-	if (!m_listChain.GetSafeHwnd())
-		return;
-	const int selected = m_listChain.GetNextItem(-1, LVNI_SELECTED);
-	const int count = (int)m_chainHops.size();
-	m_btnChainAdd.EnableWindow(!m_bIsTesting);
-	m_btnChainEdit.EnableWindow(!m_bIsTesting && selected >= 0 && selected < count);
-	m_cfgls.EnableWindow(!m_bIsTesting);
-	if (GetDlgItem(IDC_BUTTON_PROFILE_MENU)) GetDlgItem(IDC_BUTTON_PROFILE_MENU)->EnableWindow(!m_bIsTesting);
-	m_btnChainUp.EnableWindow(!m_bIsTesting && selected > 0);
-	m_btnChainDown.EnableWindow(!m_bIsTesting && selected >= 0 && selected < count - 1);
-	m_btnChainRemove.EnableWindow(!m_bIsTesting && selected >= 0);
-}
-
-void CPage1::OnChainItemChanged(NMHDR*, LRESULT* result)
-{
-	UpdateChainButtons();
-	*result = 0;
-}
-
-void CPage1::OnChainDoubleClick(NMHDR* header, LRESULT* result)
-{
-    *result = 0;
-    const int row = reinterpret_cast<NMITEMACTIVATE*>(header)->iItem;
-    if (m_bIsTesting || row < 0 || row >= (int)m_chainHops.size()) return;
-    m_listChain.SetItemState(-1, 0, LVIS_SELECTED | LVIS_FOCUSED);
-    m_listChain.SetItemState(row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-    OnChainEdit();
+    if (!m_chainView.GetSafeHwnd()) return;
+    m_btnChainAdd.EnableWindow(!m_bIsTesting);
+    m_chainView.SetEditable(!m_bIsTesting);
+    m_cfgls.EnableWindow(!m_bIsTesting);
+    if (GetDlgItem(IDC_BUTTON_PROFILE_MENU)) GetDlgItem(IDC_BUTTON_PROFILE_MENU)->EnableWindow(!m_bIsTesting);
 }
 
 void CPage1::OnChainEdit()
 {
-    const int selected = m_listChain.GetNextItem(-1, LVNI_SELECTED);
+    const int selected = m_chainView.Selected();
     if (m_bIsTesting || !m_chainMode || selected < 0 || selected >= (int)m_chainHops.size()) return;
     CfgProxyItem item; item.strName = m_chainHops[selected];
     if (!m_profileStore.Load(item) || !CProxyProfileStore::IsChainHop(item))
@@ -3091,11 +3015,11 @@ void CPage1::OnChainEdit()
     }
     CChainNodeEditDialog dialog(m_profileStore, g_ini, item, this);
     if (dialog.DoModal() != IDOK) return;
-    // Change cells in place: rebuilding the list would lose its scroll offset,
+    // Update the node in place: rebuilding would lose its page offset,
     // selection, and the user's place in a long chain. Never save the chain draft.
     for (int i = 0; i < (int)m_chainHops.size(); ++i)
         if (m_chainHops[i].CompareNoCase(item.strName) == 0)
-            m_listChain.SetItemText(i, 2, DescribeServer(dialog.Profile()));
+            m_chainView.UpdateNode(i, ChainNode(i));
     ClearChainProgress();
     RefreshProfileEntries();
     SetRuntimeDirty(TRUE);
@@ -3106,12 +3030,13 @@ void CPage1::OnChainEdit()
 
 void CPage1::OnChainAdd()
 {
+    if (m_bIsTesting) return;
 	// Offer saved Server-mode SOCKS5/HTTP/SSH profiles that are not already hops
 	// (and not this profile itself).
 	std::vector<CString> names, offered;
 	m_profileStore.ListNames(names);
 	const CString self = GetCurrentProfileName();
-	CMenu menu;
+	CModernPopupMenu menu;
 	if (!menu.CreatePopupMenu()) return;
 	for (const CString& name : names)
 	{
@@ -3133,33 +3058,26 @@ void CPage1::OnChainAdd()
 	if (!selected || selected > offered.size())
 		return;
 	m_chainHops.push_back(offered[selected - 1]);
-	RefreshChainList((int)m_chainHops.size() - 1);
+	RefreshChainView((int)m_chainHops.size() - 1);
 	OnProfileFieldChanged();
 }
 
-void CPage1::OnChainUp()
+void CPage1::OnChainMove(int from, int to)
 {
-	const int selected = m_listChain.GetNextItem(-1, LVNI_SELECTED);
-	if (selected <= 0) return;
-	std::swap(m_chainHops[selected], m_chainHops[selected - 1]);
-	RefreshChainList(selected - 1);
-	OnProfileFieldChanged();
-}
-
-void CPage1::OnChainDown()
-{
-	const int selected = m_listChain.GetNextItem(-1, LVNI_SELECTED);
-	if (selected < 0 || selected >= (int)m_chainHops.size() - 1) return;
-	std::swap(m_chainHops[selected], m_chainHops[selected + 1]);
-	RefreshChainList(selected + 1);
-	OnProfileFieldChanged();
+    if (m_bIsTesting || from < 0 || to < 0 || from >= (int)m_chainHops.size() || to >= (int)m_chainHops.size() || from == to) return;
+    const CString node = m_chainHops[from];
+    m_chainHops.erase(m_chainHops.begin() + from);
+    m_chainHops.insert(m_chainHops.begin() + to, node);
+    RefreshChainView(to);
+    OnProfileFieldChanged();
 }
 
 void CPage1::OnChainRemove()
 {
-	const int selected = m_listChain.GetNextItem(-1, LVNI_SELECTED);
+    if (m_bIsTesting) return;
+	const int selected = m_chainView.Selected();
 	if (selected < 0) return;
 	m_chainHops.erase(m_chainHops.begin() + selected);
-	RefreshChainList(min(selected, (int)m_chainHops.size() - 1));
+	RefreshChainView(min(selected, (int)m_chainHops.size() - 1));
 	OnProfileFieldChanged();
 }

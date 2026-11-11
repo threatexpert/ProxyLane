@@ -76,6 +76,17 @@ namespace UiTheme
 		}
 	}
 
+    void DrawSpinner(HDC dc, const CRect& rect, COLORREF color, float angle, float strokePx)
+    {
+        EnsureGdiplus();
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        Gdiplus::Pen pen(ToColor(color), strokePx);
+        pen.SetStartCap(Gdiplus::LineCapRound); pen.SetEndCap(Gdiplus::LineCapRound);
+        const float inset = strokePx / 2;
+        graphics.DrawArc(&pen, rect.left + inset, rect.top + inset,
+            max(1.0f, rect.Width() - strokePx), max(1.0f, rect.Height() - strokePx), angle, 270.0f);
+    }
 	void DrawElevationBadge(HDC dc, const CRect& rect)
 	{
 		if (!dc || rect.Width() < 4 || rect.Height() < 4) return;

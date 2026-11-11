@@ -117,12 +117,12 @@ try {
     Wait-Check { [ChainUiProbe]::Text($test) -ne $idleCaption } 'chain test starts'
     Wait-Check { $listener.Pending() } 'first local handshake connects'
     $peer = $listener.AcceptTcpClient()
-    foreach ($id in @(0x2406, 0x2407, 0x2408, 0x2409, 0x240a)) {
+    foreach ($id in @(0x2406)) {
         if ([ChainUiProbe]::IsWindowEnabled([ChainUiProbe]::GetDlgItem($page, $id))) {
             throw "Chain editing control $id remains enabled during testing"
         }
     }
-    Write-Output 'PASS: all chain editing actions are disabled during testing'
+    Write-Output 'PASS: adding nodes is disabled during testing (card actions covered by native and MSAA tests)'
     [ChainUiProbe]::Command($page, 1008)
     Wait-Check { [ChainUiProbe]::Text($test) -eq $idleCaption -and [ChainUiProbe]::IsWindowEnabled($add) } 'cancellation restores chain editing'
     $peer.Close(); $peer = $null

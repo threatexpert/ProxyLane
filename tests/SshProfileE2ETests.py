@@ -88,6 +88,19 @@ BlockIPv6=1
     process,main,page = launch()
     assert field(page,1070) == ports['fingerprint'] and field(page,1004) == 'test-user'
     print('PASS SSH trust persists across restart in SshHostKey',flush=True)
+    locale = json.loads(Path('src/ProxyLane/locales/zh-CN.json').read_text(encoding='utf-8'))
+    for password, expected in [('wrong-password', 'test.ssh_password_auth_failed'),
+                               ('disconnect-during-auth', 'test.ssh_password_auth_interrupted')]:
+        secret = ctypes.create_unicode_buffer(password)
+        assert USER.SendMessageW(USER.GetDlgItem(page,1003),0x000c,0,ctypes.addressof(secret))
+        command(page,1008)
+        prompt = modal(process,main)
+        result = text(USER.GetDlgItem(prompt,1201))
+        assert locale[expected] in result, result
+        dismiss(prompt,2)
+    secret = ctypes.create_unicode_buffer('test-password')
+    assert USER.SendMessageW(USER.GetDlgItem(page,1003),0x000c,0,ctypes.addressof(secret))
+    print('PASS standalone SSH distinguishes rejected credentials from authentication disconnect',flush=True)
     # Changing protocols drops a fingerprint instead of reusing it as a PSK.
     combo = USER.GetDlgItem(page,1001)
     protocol = ctypes.create_unicode_buffer('SOCKS5')
@@ -96,6 +109,23 @@ BlockIPv6=1
     assert field(page,1070) == ''
     assert USER.SendMessageW(USER.GetDlgItem(page,1070),0xd2,0,0) != 0
     print('PASS changing protocol separates fingerprint from TLS PSK',flush=True)
+    process.terminate(); process.wait(timeout=15)
+    for password, expected in [('wrong-password', 'test.ssh_password_auth_failed'),
+                               ('disconnect-during-auth', 'test.ssh_password_auth_interrupted')]:
+        saved['options']['lastselected'] = 'SSH-chain'
+        saved['proxy_SSH-test']['Pass'] = password
+        saved['proxy_First'] = {'Type':'SOCKS5', 'Host':'127.0.0.1', 'Port':str(ports['socks'])}
+        saved['proxy_SSH-chain'] = {'Type':'CHAIN', 'Hop1':'First', 'Hop2':'SSH-test', 'HookTCP':'1', 'BlockUDP':'1'}
+        with ini.open('w',encoding='utf-16') as output: saved.write(output)
+        process,main,page = launch()
+        command(page,1008)
+        prompt = modal(process,main)
+        result = text(USER.GetDlgItem(prompt,1201))
+        assert locale[expected] in result and 'SSH-test' in result, result
+        assert locale[expected] in text(USER.GetDlgItem(page,1017)), text(USER.GetDlgItem(page,1017))
+        dismiss(prompt,2)
+        process.terminate(); process.wait(timeout=15)
+    print('PASS chain SSH preserves authentication-stage detail in result and shared status',flush=True)
 finally:
     for process in reversed(processes):
         if process.poll() is None:

@@ -14,7 +14,8 @@ import uuid
 
 from ExitWarningE2ETests import USER, CALLBACK, wait_for, windows, settings_page, text, capture_dialog
 from HookRebindE2ETests import exact
-from ProcessListE2ETests import Item, open_process, allocate, release, write, read, close, send
+from ProcessListE2ETests import send
+from ChainViewProbe import ChainView
 
 
 class Relay:
@@ -25,6 +26,7 @@ class Relay:
         self.link_gate = threading.Event()
         self.link_gate.set()
         self.link_seen = threading.Event()
+        self.refused = threading.Event()
         self.auth_gate = threading.Event()
         self.ipv6_gate = threading.Event()
         self.ipv6_seen = threading.Event()
@@ -93,7 +95,15 @@ class Relay:
                 return
             if self.number != 6:
                 assert host == '127.0.0.1'
-                upstream = socket.create_connection((host, port), 3)
+                if self.mode == 'observe_link':
+                    self.link_seen.set()
+                    self.link_gate.wait(35)
+                try:
+                    upstream = socket.create_connection((host, port), 3)
+                except ConnectionRefusedError:
+                    self.refused.set()
+                    peer.sendall(b'HTTP/1.1 502 Bad Gateway\r\n\r\n' if self.protocol == 'HTTP' else b'\x05\x05\x00\x01' + bytes(6))
+                    return
             peer.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n' if self.protocol == 'HTTP' else b'\x05\x00\x00\x01' + bytes(6))
             while not self.stopped.is_set():
                 sockets = [peer, upstream] if upstream else [peer]
@@ -152,57 +162,12 @@ def run(language, capture, http=False, allow_udp=False):
         send(navigation, 0x202, 0, point)
         wait_for(lambda: USER.IsWindowVisible(page), 'profiles visible')
         view, status, button = (USER.GetDlgItem(page, control) for control in (0x2405, 1017, 1008))
-        wait_for(lambda: send(view, 0x1004) == 7, 'seven rows')
-        handle = open_process(0x38, False, process.pid)
-        memory = allocate(handle, None, 4096, 0x3000, 4)
-        assert handle and memory
-
-        def cell(row, column=3):
-            item = Item(column=column, text=memory + 256, capacity=1024)
-            assert write(handle, memory, C.byref(item), C.sizeof(item), None)
-            send(view, 0x1073, row, memory)
-            result = C.create_unicode_buffer(1024)
-            assert read(handle, memory + 256, result, C.sizeof(result), None)
-            return result.value
-
+        probe = ChainView(view, locale)
+        wait_for(lambda: probe.count() == 7, 'seven cards')
+        cell = probe.cell
         def rows():
             return [(cell(i), cell(i, 4)) for i in range(7)]
-
-        def tooltip(row):
-            # Drive the owned window's message queue, then read the custom
-            # tooltip text without moving the user's desktop pointer.
-            rect = W.RECT(left=0, top=3)  # LVIR_BOUNDS, status subitem
-            assert write(handle, memory, C.byref(rect), C.sizeof(rect), None)
-            send(view, 0x1038, row, memory)  # LVM_GETSUBITEMRECT
-            assert read(handle, memory, C.byref(rect), C.sizeof(rect), None)
-            USER.PostMessageW(view, 0x200, 0, (rect.left + 10) | ((rect.top + 5) << 16))
-            class ToolInfo(C.Structure):
-                _fields_ = [('size', W.UINT), ('flags', W.UINT), ('window', W.HWND),
-                            ('id', C.c_size_t), ('rect', W.RECT), ('instance', W.HANDLE),
-                            ('text', C.c_void_p), ('data', C.c_ssize_t), ('reserved', C.c_void_p)]
-            def inspect():
-                found = []
-                @CALLBACK
-                def visit(window, _):
-                    name = C.create_unicode_buffer(80)
-                    USER.GetClassNameW(window, name, len(name))
-                    owner = W.DWORD()
-                    USER.GetWindowThreadProcessId(window, C.byref(owner))
-                    if name.value == 'tooltips_class32' and owner.value == process.pid:
-                        info = ToolInfo(size=C.sizeof(ToolInfo), window=view, id=1)
-                        assert write(handle, memory, C.byref(info), C.sizeof(info), None)
-                        if send(window, 0x435, 0, memory):  # TTM_GETTOOLINFOW
-                            found.append(window)
-                    return True
-                USER.EnumWindows(visit, 0)
-                return found
-            tip = wait_for(inspect, 'row tooltip tool')[0]
-            info = ToolInfo(size=C.sizeof(ToolInfo), window=view, id=1, text=memory + 256)
-            assert write(handle, memory, C.byref(info), C.sizeof(info), None)
-            send(tip, 0x438, 0, memory)  # TTM_GETTEXTW
-            result = C.create_unicode_buffer(1024)
-            assert read(handle, memory + 256, result, C.sizeof(result), None)
-            return result.value
+        tooltip = probe.description
 
         def start():
             USER.PostMessageW(page, 0x111, 1008, 0)
@@ -210,12 +175,12 @@ def run(language, capture, http=False, allow_udp=False):
             wait_for(lambda: locale['chain.test.auth'] in cell(3), 'fourth node authentication')
             assert all(locale['chain.test.passed'] in cell(i) for i in range(3)), rows()
             assert all(locale['chain.test.waiting'] in cell(i) and cell(i, 4) == '—' for i in range(4, 7)), rows()
-            assert send(view, 0x1027) <= 3 < send(view, 0x1027) + send(view, 0x1028), 'active node follows into view'
+            assert probe.visible(3), 'active node follows into view'
             before = rows()
             time.sleep(.35)
             after = rows()
             assert before[:3] == after[:3] and before[3][1] != after[3][1], (before, after)
-            assert not USER.IsWindowEnabled(USER.GetDlgItem(page, 0x2407))
+            assert probe.state(3) & 0x40, 'test mode exposes read-only nodes'
 
         def finish(tcp_passed, failed_link=None, image_name=None):
             dialog = wait_for(lambda: next((w for w in windows(process.pid)
@@ -243,10 +208,10 @@ def run(language, capture, http=False, allow_udp=False):
         wait_for(lambda: USER.IsWindowVisible(page), 'profiles visible')
         if capture:
             capture_dialog(main, folder / 'active.png')
-        send(view, 0x115, 6, 0)  # Manual scroll suspends following later nodes.
+        probe.first_page()  # Manual scroll suspends following later nodes.
         relays[3].auth_gate.set()
         wait_for(relays[6].ipv6_seen.is_set, 'IPv6 supplemental probe')
-        assert send(view, 0x1027) == 0, 'user scroll is preserved while later nodes complete'
+        assert probe.top() == 0, 'user scroll is preserved while later nodes complete'
         assert all(locale['chain.test.passed'] in cell(i) for i in range(7)), rows()
         before = rows()
         time.sleep(.4)
@@ -266,7 +231,7 @@ def run(language, capture, http=False, allow_udp=False):
         relays[3].auth_gate.clear()
         relays[3].mode = 'failure'
         start()
-        send(view, 0x115, 6, 0)  # SB_TOP: user navigation suspends automatic following.
+        probe.first_page()  # SB_TOP: user navigation suspends automatic following.
         relays[3].auth_gate.set()
         finish(False)
         assert all(locale['chain.test.passed'] in cell(i) for i in range(3)), rows()
@@ -278,8 +243,8 @@ def run(language, capture, http=False, allow_udp=False):
             capture_dialog(main, folder / 'failed.png')
         print(f'PASS {language}: authentication failure preserves preceding nodes and skips later nodes', flush=True)
 
-        # A node that negotiated successfully must remain green when its outgoing
-        # CONNECT fails. Attribute the failure to the edge, including the last edge.
+        # Next-hop waits and errors belong to the destination card. Confirmed
+        # proxies remain successful; the final target has no proxy card.
         for failed_node in (4, 6):
             relay = relays[failed_node]
             relay.mode = 'link_failure'
@@ -289,30 +254,35 @@ def run(language, capture, http=False, allow_udp=False):
             start()
             relays[3].auth_gate.set()
             wait_for(relay.link_seen.is_set, 'pending next-hop connection')
-            if relay.protocol == 'SOCKS5':
-                assert locale['chain.test.passed'] in cell(failed_node), rows()
-            else:
-                assert locale['chain.test.passed'] not in cell(failed_node), 'HTTP cannot confirm negotiation before CONNECT reply'
+            source_status = locale['chain.test.auth'] if relay.protocol == 'HTTP' else locale['chain.test.passed']
+            assert source_status in cell(failed_node), rows()
             before_time = cell(failed_node, 4)
+            if failed_node < 6:
+                assert locale['chain.test.connecting'] in cell(failed_node + 1), rows()
+                destination_time = cell(failed_node + 1, 4)
+                assert probe.visible(failed_node + 1), 'follow the destination being connected'
             time.sleep(.3)
-            assert before_time != cell(failed_node, 4), 'next-hop wait remains included in node elapsed'
+            assert before_time == cell(failed_node, 4), 'outgoing wait must not increase source card time'
+            if failed_node < 6:
+                assert destination_time != cell(failed_node + 1, 4), 'inbound wait increases destination time'
             source = locale['chain.test.node'] % (failed_node + 1)
             target = locale['chain.test.node'] % (failed_node + 2) if failed_node < 6 else locale['chain.test.target']
             failed_link = locale['chain.test.link'] % (source, target, locale['chain.test.link_failed'])
             relay.link_gate.set()
             finish(False, failed_link, f'result-link-{failed_node + 1}.png')
             assert all(locale['chain.test.passed'] in cell(i) for i in range(failed_node)), rows()
-            assert locale['chain.test.connected' if relay.protocol == 'HTTP' else 'chain.test.passed'] in cell(failed_node), rows()
+            assert locale['chain.test.connected_unconfirmed' if relay.protocol == 'HTTP' else 'chain.test.passed'] in cell(failed_node), rows()
             assert locale['chain.test.failed'] not in cell(failed_node), rows()
             if failed_node < 6:
-                assert cell(failed_node + 1) == locale['chain.test.not_reached'], rows()
-                assert cell(6) == locale['chain.test.skipped'] and cell(5, 4) == '—', rows()
-            tip = tooltip(failed_node)
-            assert failed_link in tip, tip
+                assert locale['chain.test.failed'] in cell(failed_node + 1), rows()
+                assert cell(6) == locale['chain.test.skipped'] and cell(6, 4) == '—', rows()
+                assert failed_link in tooltip(failed_node + 1), tooltip(failed_node + 1)
+            else:
+                assert all(locale['chain.test.failed'] not in cell(i) for i in range(7)), rows()
             if capture:
                 capture_dialog(main, folder / f'link-{failed_node + 1}-failed.png')
             relay.mode = 'success'
-        print(f'PASS {language}: negotiated nodes remain successful; list and dialog identify failed edges', flush=True)
+        print(f'PASS {language}: destination owns link errors/time; final target does not fail successful proxies', flush=True)
 
         if http:
             relays[4].mode = 'auth_failure'
@@ -338,19 +308,56 @@ def run(language, capture, http=False, allow_udp=False):
         assert all(locale['chain.test.passed'] in cell(i) for i in range(3)), rows()
         assert all(cell(i) == locale['chain.test.skipped'] for i in range(4, 7)), rows()
         # Reorder selects node 2 and moves it up; every previous result becomes stale.
-        item = Item(state=3, stateMask=3)
-        assert write(handle, memory, C.byref(item), C.sizeof(item), None)
-        send(view, 0x102b, 1, memory)
-        USER.PostMessageW(page, 0x111, 0x2407, 0)
+        probe.move_to(1, 0, right_half=True,
+                      preview=(lambda: capture_dialog(main, folder / 'reorder-first.png')) if capture else None)
         wait_for(lambda: cell(0, 1) == 'Node2', 'reorder')
-        assert all(cell(i) == locale['status.test_not_run'] and cell(i, 4) == '—' for i in range(7)), rows()
+        assert all(cell(i) == '' and cell(i, 4) == '—' for i in range(7)), rows()
         print(f'PASS {language}: cancellation freezes state/time; reorder clears stale results', flush=True)
+        probe.move_to(5, 6,
+                      preview=(lambda: capture_dialog(main, folder / 'reorder-last.png')) if capture else None)
+        wait_for(lambda: cell(6, 1) == 'Node6', 'penultimate node moves to last across pages')
+        assert [cell(i, 1) for i in range(7)] == ['Node2', 'Node1', 'Node3', 'Node4', 'Node5', 'Node7', 'Node6']
+        probe.move_to(6, 5, right_half=True)
+        wait_for(lambda: cell(5, 1) == 'Node6', 'last node moves back across pages')
+        assert [cell(i, 1) for i in range(7)] == ['Node2', 'Node1', 'Node3', 'Node4', 'Node5', 'Node6', 'Node7']
+        print(f'PASS {language}: first/last reorder accepts whole target cards, including both cross-page directions', flush=True)
+        # Restore the original route, then close the REAL third listener. The
+        # second relay must actually attempt TCP and receive connection refused.
+        probe.move_to(0, 1)
+        assert [cell(i, 1) for i in range(7)] == [f'Node{i+1}' for i in range(7)]
+        relays[2].stop()
+        time.sleep(.2)  # Let the listener's bounded accept finish releasing the socket.
+        relays[1].mode = 'observe_link'
+        relays[1].link_seen.clear()
+        relays[1].link_gate.clear()
+        USER.PostMessageW(page, 0x111, 1008, 0)
+        wait_for(relays[1].link_seen.is_set, 'second proxy connecting to third closed port')
+        wait_for(lambda: locale['chain.test.connecting'] in cell(2), 'third card connecting')
+        assert all(locale['chain.test.passed'] in cell(i) for i in (0, 1)), rows()
+        assert all(cell(i, 4) == '—' for i in range(3, 7)), rows()
+        assert probe.visible(2), 'third destination is followed'
+        source_before, destination_before = cell(1, 4), cell(2, 4)
+        time.sleep(.35)
+        assert cell(1, 4) == source_before and cell(2, 4) != destination_before, rows()
+        if capture:
+            capture_dialog(main, folder / 'third-port-connecting.png')
+        relays[1].link_gate.set()
+        wait_for(relays[1].refused.is_set, 'real TCP connection to third port refused')
+        failed_link = locale['chain.test.link'] % (locale['chain.test.node'] % 2,
+                        locale['chain.test.node'] % 3, locale['chain.test.link_failed'])
+        finish(False, failed_link, 'third-port-result.png')
+        assert all(locale['chain.test.passed'] in cell(i) for i in (0, 1)), rows()
+        assert cell(1, 4) == source_before, 'second card freezes before third connection'
+        assert locale['chain.test.failed'] in cell(2) and locale['chain.test.connecting'] in cell(2), rows()
+        assert failed_link in tooltip(2) and failed_link not in tooltip(1)
+        assert all(cell(i) == locale['chain.test.skipped'] and cell(i, 4) == '—' for i in range(3, 7)), rows()
+        if capture:
+            capture_dialog(main, folder / 'third-port-failed.png')
+        print(f'PASS {language}: REAL third-port refusal keeps second green/frozen, third failed, later nodes skipped', flush=True)
         print(folder, flush=True)
     finally:
-        if memory:
-            release(handle, memory, 0, 0x8000)
-        if handle:
-            close(handle)
+        if 'probe' in locals():
+            probe.close()
         process.terminate()
         process.wait(10)
         for relay in relays:

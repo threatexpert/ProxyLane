@@ -138,6 +138,9 @@ class SshServer(paramiko.ServerInterface):
         return paramiko.AUTH_SUCCESSFUL if username == 'key-user' and offered in authorized_keys else paramiko.AUTH_FAILED
     def check_auth_password(self, username, password):
         count('auth_' + self.name)
+        if password == 'disconnect-during-auth':
+            self.transport.close()  # No authentication rejection packet is sent.
+            return paramiko.AUTH_FAILED
         return paramiko.AUTH_SUCCESSFUL if (username,password) == ('test-user','test-password') else paramiko.AUTH_FAILED
     def check_channel_direct_tcpip_request(self, channel, origin, destination):
         count('channels_' + self.name)
@@ -153,6 +156,7 @@ class SshServer(paramiko.ServerInterface):
 def ssh(s, name, modern=False):
     server = SshServer(name)
     transport = paramiko.Transport(s)
+    server.transport = transport
     if modern:
         options = transport.get_security_options()
         options.kex = ('curve25519-sha256@libssh.org',)

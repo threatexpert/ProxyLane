@@ -12,6 +12,7 @@ CString CurrentLanguage() { return _T("en-US"); }
 }
 CWinApp application;
 void TestLaunchPanelInteractions();
+void TestChainRouteView();
 static void Check(bool ok, const char* name) {
     if (!ok) throw std::runtime_error(name);
     std::cout << "PASS: " << name << '\n';
@@ -116,6 +117,7 @@ int wmain() {
         resourceDialog.DestroyWindow();
         std::cout << "PASS: resource wrappers destroyed with their windows\n";
         TestLaunchPanelInteractions();
+        TestChainRouteView();
     } catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }
     return 0;
 }

@@ -1,6 +1,22 @@
 #pragma once
 #include "Localization.h"
 #include "../ProxyLaneHook/ProxyModule.h"
+#include "../ProxyLaneHook/ProxyTestProgress.h"
+
+// Add context without changing transport error codes or assuming every close
+// during authentication proves that the supplied credentials were rejected.
+inline CString ProxyTestSshErrorDescription(int error, ProxyInfo info, int stage, int socketError = 0)
+{
+    if (info.GetProxyType() != PROXYTYPE_SSH) return CString();
+    if (!info.sshAuth && (error == PROXYERROR_AUTHFAILED || error == PROXYERROR_AUTHNOLOGON))
+        return Localization::Get(L"test.ssh_password_auth_failed");
+    if (stage != PTS_AUTH) return CString();
+    if (error == WSAETIMEDOUT || (error == PROXYERROR_NOCONN && socketError == WSAETIMEDOUT))
+        return Localization::Get(L"test.ssh_auth_timeout");
+    if (error == PROXYERROR_NOCONN || error == WSAECONNRESET || error == WSAECONNABORTED || error == WSAENETRESET)
+        return Localization::Get(info.sshAuth ? L"test.ssh_key_auth_interrupted" : L"test.ssh_password_auth_interrupted");
+    return CString();
+}
 
 inline CString ProxyTestErrorDescription(int error, BOOL direct)
 {

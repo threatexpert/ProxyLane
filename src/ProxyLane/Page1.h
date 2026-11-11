@@ -1,5 +1,5 @@
 ﻿#pragma once
-#include "ChainTestList.h"
+#include "ChainRouteView.h"
 
 #include "..\ProxyLaneHook\ProxyModule.h"
 #include "..\ProxyLaneHook\ProxyDataHandle.h"
@@ -50,21 +50,15 @@ public:
 	// of saved server profiles in order.
 	BOOL m_chainMode = FALSE;
 	std::vector<CString> m_chainHops;
-	CChainTestList m_listChain;
+	CChainRouteView m_chainView;
 	CModernButton m_btnChainAdd;
-	CModernButton m_btnChainEdit;
-	CModernButton m_btnChainUp;
-	CModernButton m_btnChainDown;
-	CModernButton m_btnChainRemove;
 	afx_msg void OnChainAdd();
 	afx_msg void OnChainEdit();
-	afx_msg void OnChainDoubleClick(NMHDR* header, LRESULT* result);
-	afx_msg void OnChainUp();
-	afx_msg void OnChainDown();
 	afx_msg void OnChainRemove();
-	afx_msg void OnChainItemChanged(NMHDR* header, LRESULT* result);
+	void OnChainMove(int from, int to);
+	CChainRouteView::Node ChainNode(int index) const;
 	void SetChainMode(BOOL chain);
-	void RefreshChainList(int select = -1);
+	void RefreshChainView(int select = -1);
 	void UpdateChainButtons();
 	void ClearChainProgress();
 	void UpdateChainProgress(bool follow = false);
@@ -72,13 +66,13 @@ public:
 	bool ChainNodeNegotiated(int index) const;
 	bool ChainLinkFailed(int index) const;
 	CString ChainLinkText(int index) const;
-	afx_msg void OnChainCustomDraw(NMHDR* header, LRESULT* result);
 	std::vector<ProxyTestHopProgress> m_chainProgress;
 	std::vector<CString> m_chainErrors;
 	DWORD m_chainStarted = 0, m_chainElapsed = 0;
 	bool m_chainProgressRunning = false;
 	int m_chainFollowed = -1;
 	int m_chainFailureCode = 0;
+    int m_singleTestStage = PTS_WAITING;
 	CString m_chainConclusion;
 	// The current UI's route: the first hop in `first`; chain is empty for one server.
 	BOOL GetRoute(LPProxyInfo first, ProxyChain* chain);

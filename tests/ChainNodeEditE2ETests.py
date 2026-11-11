@@ -14,7 +14,8 @@ import uuid
 from ChainProgressE2ETests import Relay
 from Ipv6ConfigTestE2E import Endpoint, KERNEL
 from ExitWarningE2ETests import USER, wait_for, windows, settings_page, text, capture_dialog
-from ProcessListE2ETests import Item, open_process, allocate, release, write, read, close, send
+from ProcessListE2ETests import send
+from ChainViewProbe import ChainView
 
 
 def run(language, capture):
@@ -62,49 +63,23 @@ def run(language, capture):
         send(navigation, 0x201, 1, point); send(navigation, 0x202, 0, point)
         wait_for(lambda: USER.IsWindowVisible(page), 'profiles visible')
         view = USER.GetDlgItem(page, 0x2405)
-        edit = USER.GetDlgItem(page, 0x240a)
-        handle = open_process(0x38, False, process.pid)
-        memory = allocate(handle, None, 4096, 0x3000, 4)
-        assert handle and memory
-
-        def cell(row, column):
-            item = Item(column=column, text=memory + 256, capacity=1024)
-            assert write(handle, memory, C.byref(item), C.sizeof(item), None)
-            send(view, 0x1073, row, memory)
-            result = C.create_unicode_buffer(1024)
-            assert read(handle, memory + 256, result, C.sizeof(result), None)
-            return result.value
-
+        cards = ChainView(view, locale)
+        cell = cards.cell
         def rows():
             return [(cell(i, 3), cell(i, 4)) for i in range(7)]
-
-        def select(row):
-            item = Item(state=0, stateMask=3)
-            assert write(handle, memory, C.byref(item), C.sizeof(item), None)
-            send(view, 0x102b, -1, memory)
-            if row >= 0:
-                item.state = 3
-                assert write(handle, memory, C.byref(item), C.sizeof(item), None)
-                send(view, 0x102b, row, memory)
-                send(view, 0x1013, row, 0)  # LVM_ENSUREVISIBLE
-
+        select = cards.select
         def double_click(row):
-            rect = W.RECT(left=0)
-            assert write(handle, memory, C.byref(rect), C.sizeof(rect), None)
-            send(view, 0x100e, row, memory)
-            assert read(handle, memory, C.byref(rect), C.sizeof(rect), None)
-            point = (rect.left + 60 * dpi // 96) | ((rect.top + 5) << 16)
-            USER.PostMessageW(view, 0x203, 1, point)
-            USER.PostMessageW(view, 0x202, 0, point)
+            cards.select(row)
+            cards.edit(double=True)
 
         def opened():
             return next((w for w in windows(process.pid) if w != main and USER.GetDlgItem(w, 1301)), None)
 
         def open_editor(double=False):
             if double:
-                double_click(send(view, 0x100c, -1, 2))
+                double_click(cards.selected())
             else:
-                USER.PostMessageW(page, 0x111, 0x240a, 0)
+                cards.edit()
             dialog = wait_for(opened, 'node editor')
             wait_for(lambda: USER.IsWindowVisible(dialog) and USER.GetDlgItem(dialog, 1), 'editor ready')
             return dialog
@@ -141,18 +116,18 @@ def run(language, capture):
                 raise AssertionError((value, USER.IsWindow(dialog), [(w, text(w)) for w in windows(process.pid)]))
             assert USER.IsWindow(dialog) and config()['proxy_Node7']['port'] == str(relays[6].port)
 
-        select(-1)
-        assert not USER.IsWindowEnabled(edit), 'no selection disables Edit'
+        assert cards.selected() == -1, 'no initial selection'
+        cards.edit()
+        time.sleep(.1)
+        assert not opened(), 'no selection cannot edit'
         select(6)
-        assert USER.IsWindowEnabled(edit), 'selected node enables Edit'
+        assert not (cards.state(6) & 0x40), 'selected node is editable'
         left, right = W.RECT(), W.RECT()
-        USER.GetWindowRect(edit, C.byref(left)); USER.GetWindowRect(USER.GetDlgItem(page, 0x2407), C.byref(right))
-        assert left.right < right.left, 'Edit precedes Move Up'
 
         USER.PostMessageW(page, 0x111, 1008, 0)
         wait_for(lambda: locale['chain.test.auth'] in cell(3, 3), 'test authenticating')
         select(3)
-        assert not USER.IsWindowEnabled(edit), 'testing disables Edit'
+        assert cards.state(3) & 0x40, 'testing disables Edit'
         double_click(3)
         time.sleep(.15)
         assert not opened(), 'double click cannot edit during a test'
@@ -161,7 +136,7 @@ def run(language, capture):
         relays[3].auth_gate.set()
 
         select(6)
-        top, frozen = send(view, 0x1027), rows()
+        top, frozen = cards.top(), rows()
         assert top > 0, 'fixture is scrolled'
         original_disk = ini.read_bytes()
         dialog = open_editor(double=True)
@@ -220,7 +195,7 @@ def run(language, capture):
         set_field(dialog, 1303, 'cancelled.example')
         dismiss(dialog, 2)
         assert rows() == frozen and ini.read_bytes() == original_disk, 'Cancel preserves configuration and test results'
-        assert send(view, 0x1027) == top and send(view, 0x100c, -1, 2) == 6
+        assert cards.top() == top and cards.selected() == 6
         print(f'PASS {language}: Edit placement/enabling, double click, test lock and cancellation', flush=True)
 
         dialog = open_editor()
@@ -231,9 +206,9 @@ def run(language, capture):
         if capture:
             capture_dialog(dialog, folder / 'edit-plain.png')
         dismiss(dialog, 1)
-        assert send(view, 0x1027) == top and send(view, 0x100c, -1, 2) == 6, 'Save preserves scroll and selection'
+        assert cards.top() == top and cards.selected() == 6, 'Save preserves scroll and selection'
         assert '127.0.0.2:18080' in cell(6, 2), cell(6, 2)
-        assert all(state == locale['status.test_not_run'] and elapsed == '—' for state, elapsed in rows())
+        assert all(state == '' and elapsed == '—' for state, elapsed in rows())
         saved = config()
         assert saved['options']['lastselected'] == 'Chain'
         assert dict(saved['proxy_Chain']) == dict(initial['proxy_Chain'])
@@ -281,7 +256,7 @@ def run(language, capture):
         print(f'PASS {language}: compact TLS/SSH fields, secret separation, fingerprint validation and UTF-8 persistence', flush=True)
 
         # Editing a shared node must not commit an unsaved chain reordering.
-        USER.PostMessageW(page, 0x111, 0x2407, 0)
+        cards.move_before(6, 5)
         wait_for(lambda: cell(5, 1) == 'Node7', 'unsaved chain order')
         assert USER.IsWindowEnabled(USER.GetDlgItem(page, 1052)), 'chain draft is dirty'
         dialog = open_editor()
@@ -313,6 +288,16 @@ def run(language, capture):
         assert locale['test.result.passed'] in text(USER.GetDlgItem(report, 1201))
         assert locale['test.result.unsupported'] in text(USER.GetDlgItem(report, 1202))
         dismiss(report, 2)
+        for password, expected in [('wrong-password', 'test.ssh_password_auth_failed'),
+                                   ('disconnect-during-auth', 'test.ssh_password_auth_interrupted')]:
+            set_field(dialog, 1306, password)
+            report = test_result(dialog)
+            assert locale[expected] in text(USER.GetDlgItem(report, 1201)), text(USER.GetDlgItem(report, 1201))
+            if capture:
+                capture_dialog(report, folder / (password + '.png'))
+            dismiss(report, 2)
+        set_field(dialog, 1306, 'test-password')
+        print(f'PASS {language}: SSH wrong password is distinct from authentication-stage disconnect', flush=True)
         set_field(dialog, 1307, fingerprint)
         report = test_result(dialog)
         assert locale['test.ssh_changed_key'] in text(USER.GetDlgItem(report, 1201))
@@ -323,10 +308,8 @@ def run(language, capture):
         print(f'PASS {language}: independent SSH testing, draft-only trust, fingerprint transmission and changed-key rejection', flush=True)
         print(folder, flush=True)
     finally:
-        if memory:
-            release(handle, memory, 0, 0x8000)
-        if handle:
-            close(handle)
+        if 'cards' in locals():
+            cards.close()
         process.terminate(); process.wait(10)
         for relay in relays:
             relay.stop()

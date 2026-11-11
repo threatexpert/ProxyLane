@@ -283,6 +283,8 @@ private:
     {
         m_phase = phase;
         m_phaseError = 0;
+        m_lastTestStage = PTS_WAITING;
+        m_phaseErrorDetail.Empty();
         PRCClient client; client.zero();
         client.sType = phase == 1 ? SOCK_DGRAM : SOCK_STREAM;
         if (phase == 0)
@@ -329,10 +331,17 @@ private:
             PostMessage(WM_APP + 51, m_testGeneration);
         }
     }
-    void OnProxyTesterCallback(IProxyTester* tester, int error, WPARAM, LPARAM detail) override
+    void OnProxyTesterCallback(IProxyTester* tester, int error, WPARAM socketError, LPARAM detail) override
     {
-        if (!m_testing || tester != m_tester || HIWORD(error) != LAYERCALLBACK_LAYERSPECIFIC) return;
+        if (!m_testing || tester != m_tester) return;
+        if (HIWORD(error) == LAYERCALLBACK_TESTPROGRESS) {
+            const int stage = LOWORD(error);
+            if (stage > PTS_WAITING && stage < PTS_PASSED) m_lastTestStage = stage;
+            return;
+        }
+        if (HIWORD(error) != LAYERCALLBACK_LAYERSPECIFIC) return;
         m_phaseError = LOWORD(error);
+        m_phaseErrorDetail = ProxyTestSshErrorDescription(m_phaseError, m_testInfo, m_lastTestStage, (int)socketError);
         if (detail && (m_phaseError == PROXYERROR_SSH_HOSTKEY_UNKNOWN || m_phaseError == PROXYERROR_SSH_HOSTKEY_CHANGED))
             m_fingerprint = SshProfile::Decode(reinterpret_cast<LPCSTR>(detail));
         tester->Stop();
@@ -345,7 +354,7 @@ private:
         auto& row = m_rows[m_phase];
         row.state = m_phaseError ? CProxyTestResultRow::Failed : CProxyTestResultRow::Passed;
         row.status = Localization::Get(m_phaseError ? L"test.result.failed" : L"test.result.passed");
-        if (m_phaseError) row.detail = ProxyTestErrorDescription(m_phaseError, FALSE);
+        if (m_phaseError) row.detail = m_phaseErrorDetail.IsEmpty() ? ProxyTestErrorDescription(m_phaseError, FALSE) : m_phaseErrorDetail;
         if (m_phase == 1 && m_phaseError == PROXYERROR_UDP_UNSUPPORTED)
         {
             row.state = CProxyTestResultRow::Skipped;
@@ -385,6 +394,8 @@ private:
     bool m_testing = false, m_udpRequested = false;
     UINT_PTR m_testGeneration = 0;
     int m_phase = 0, m_phaseError = 0;
+    int m_lastTestStage = PTS_WAITING;
+    CString m_phaseErrorDetail;
     CString m_fingerprint;
     std::vector<CProxyTestResultDialog::Row> m_rows;
     CProxyProfileStore& m_store;

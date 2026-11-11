@@ -23,6 +23,7 @@ namespace UiTheme
 	// fill/border may be CLR_NONE to skip that part. `radius` is in pixels.
 	void FillRoundRect(HDC dc, const CRect& rect, int radius, COLORREF fill, COLORREF border);
 	void DrawElevationBadge(HDC dc, const CRect& rect);
+    void DrawSpinner(HDC dc, const CRect& rect, COLORREF color, float angle, float strokePx);
 	// Round "remove" badge: a red disc with a white ring and cross, drawn over a
 	// tile corner. `pressed` darkens it while the pointer is held on it.
 	void DrawRemoveBadge(HDC dc, const CRect& rect, BOOL pressed);

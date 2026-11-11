@@ -79,6 +79,7 @@
     <ClCompile Include="Page4.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ChainRouteView.cpp"><Filter>源文件</Filter></ClCompile>
     <ClCompile Include="LaunchPanel.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -155,7 +156,8 @@
     <ClInclude Include="ProxyTestError.h">
         <Filter>Header Files</Filter>
       </ClInclude>
-    <ClInclude Include="ChainTestList.h">
+    <ClInclude Include="ChainProgressPresentation.h"><Filter>头文件</Filter></ClInclude>
+    <ClInclude Include="ChainRouteView.h">
         <Filter>Header Files</Filter>
       </ClInclude>
     <ClInclude Include="Page1.h">

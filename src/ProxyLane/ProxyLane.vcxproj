@@ -272,6 +272,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="LaunchPanel.cpp" />
+    <ClCompile Include="ChainRouteView.cpp" />
     <ClCompile Include="Page5.cpp" />
 	<ClCompile Include="ProfileCommandBroker.cpp" />
     <ClCompile Include="ProxyLane.cpp" />
@@ -293,7 +294,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(SolutionDir)..\scripts\bu
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="ChainTestList.h" />
+    <ClInclude Include="ChainRouteView.h" />
+    <ClInclude Include="ChainProgressPresentation.h" />
     <ClInclude Include="..\ProxyLaneHook\token.h" />
     <ClInclude Include="AppVersion.h" />
     <ClInclude Include="LaunchShortcut.h" />
