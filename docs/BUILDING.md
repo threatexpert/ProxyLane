@@ -11,7 +11,7 @@
 1. 安装 VS 2019 或 Build Tools 2019，选择“使用 C++ 的桌面开发”（Build Tools 中为 C++ 生成工具）。在 Visual Studio Installer 中对 2019 实例选择“更多 → 导入配置”，导入仓库根目录的 [`.vsconfig`](../.vsconfig)，补齐全部架构所需的单独组件。
 2. 安装 Git for Windows、Python 3.8+、Rustup，确保 `git`、`python`、`rustup`、`cargo` 能从新开的 PowerShell 运行。Windows 自带的 `tar.exe` 也必须可用。Python 的 Microsoft Store 占位别名不能代替实际解释器。
 3. 安装 CMake 3.15+ 并加入 PATH；也可使用上述 VS 配置提供的 CMake，统一入口会自动定位它。
-4. 构建 ARM64 时准备 LLVM/Clang，令 `clang.exe` 在 PATH、默认 `C:\Program Files\LLVM\bin`，或通过 `-ClangBinDirectory` 指定。已验证的 Clang 是 18.0.3（Android NDK 27.2 随附）；它在这里以 Windows MSVC 目标编译，不生成 Android 二进制。其他版本须通过脚本的引导字节一致性检查。
+4. 构建 ARM64 时安装 LLVM/Clang，具体操作见下面的“安装 Clang”。只构建 Intel 包不需要安装它。Android NDK 不是项目的构建依赖。
 
 | VS 组件 | 用途 |
 | --- | --- |
@@ -33,6 +33,30 @@ rustup target add aarch64-pc-windows-msvc --toolchain 1.88.0-x86_64-pc-windows-m
 ```
 
 安全传输和 MITM 后端都显式使用该版本及提交的 Cargo.lock（`--locked`）。Clang、MSVC、SDK 并非完全锁定，因此不承诺跨机器逐字节相同的二进制。
+
+### 安装 Clang（构建 ARM64 时需要）
+
+在上述 **x64 Windows 构建机**上，安装的是 Windows **x64 版** LLVM/Clang。同一个编译器可以生成 ARM64 目标代码；无需下载运行在 ARM64 主机上的编译器。Clang 用于 ARM64 引导汇编和 `ring` 的 C/汇编依赖，主程序和 Hook 的 C++ 部分仍使用 MSVC，因此它不能替代前面的 VS ARM64 工具和 SDK。
+
+1. 打开 [LLVM 18.1.8 官方发布页](https://github.com/llvm/llvm-project/releases/tag/llvmorg-18.1.8)，在 Assets 中下载 **`LLVM-18.1.8-win64.exe`**（[直接下载](https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/LLVM-18.1.8-win64.exe)）。这是一个明确的独立安装示例，不要求安装 Android Studio 或 NDK。
+2. 运行安装器，保留默认安装目录 `C:\Program Files\LLVM`。如需从命令行直接运行 `clang`，可以选择安装器的加入 PATH 选项，完成后重开 PowerShell。**统一构建入口也能自动找到默认目录，不加 PATH 同样可用。**
+3. 从仓库根目录执行以下验证。引导检查会在临时目录编译一小段 ARM64 汇编，并与提交的字节比较；`--check` 不修改源码：
+
+```powershell
+& 'C:\Program Files\LLVM\bin\clang.exe' --version
+python scripts/generate-arm64-bootstrap.py --clang 'C:\Program Files\LLVM\bin\clang.exe' --check
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Architecture All -CheckEnvironmentOnly -ClangBinDirectory 'C:\Program Files\LLVM\bin'
+```
+
+确认检查通过后，运行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Architecture All -Package -ClangBinDirectory 'C:\Program Files\LLVM\bin'
+```
+
+若使用自定义安装目录，将参数改为包含 `clang.exe` 的 **bin 目录**，而不是 EXE 文件路径。已安装多个 Clang 时也建议显式指定，避免 PATH 中另一个版本被优先选中。
+
+验证范围：本项目目前完整实跑过的是 Android NDK 27.2 随附的 **Clang 18.0.3**，以 `aarch64-pc-windows-msvc` 为目标生成 Windows 二进制。上述官方 **18.1.8 独立安装包的下载地址已核实，但尚未在本项目完成整套构建验收**；它与 NDK 版不能标记为同一份已验证工具链。使用独立版本时应保留引导检查并完成全架构构建，不跳过失败。若已有 NDK，可直接将其 `toolchains\llvm\prebuilt\windows-x86_64\bin` 传给 `-ClangBinDirectory`，无需再安装另一份。
 
 ## 2. 克隆并检查环境
 
