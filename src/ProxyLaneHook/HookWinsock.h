@@ -41,7 +41,6 @@ typedef enum
 	HOOKAPI_CreateProcessInternalW,
 	HOOKAPI_CreateProcessWithLogonW,
 	HOOKAPI_CreateProcessW,
-	HOOKAPI_KernelBaseCreateProcessW,
 
 	HOOKAPI_LoadLibraryExW,
 	HOOKAPI_send,
@@ -670,8 +669,6 @@ public:
 	BOOL SetHookFailure(DWORD error, const char* stage, const char* module, const char* api);
 	BOOL ReportHookFailure(CPRCPipeClient* client);
 	BOOL HookAPI(eHOOKMODUDLE ehm, eHOOKFUN ehf, char *exportfunc, LPVOID myfuncaddr, PVOID* original);
-	BOOL HookExport(const char* moduleName, eHOOKFUN ehf, const char* exportfunc,
-		LPVOID myfuncaddr, PVOID* original);
 
 	BOOL IsHostNameReserved(const char *name);
 

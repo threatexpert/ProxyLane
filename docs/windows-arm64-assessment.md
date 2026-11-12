@@ -485,3 +485,10 @@ ARM64 包增加同版 Hook32/64，保留原生后端；Intel 包仍不带 ARM64�
 用户报告 Windows 11 ARM 上兼容模式 PowerShell 内的 curl 别名可代理，但启动 System32/curl.exe 时没有子进程接管；原生 PowerShell 正常。仅 Hook CreateProcessInternalW 的导出入口不能覆盖混合系统模块内部直接调用路径。本次在 Hook32/64 中增加 Kernel32/KernelBase 的公开 CreateProcessW 入口，仍调用各自原始 trampoline，保持原 API 行为；动态 TLS 抑制嵌套入口的重复注入/恢复。按 Detours 实际解析入口去重，避免导出别名重复 patch。XP 没有 KernelBase，保留既有入口组合；原生 ARM64 Hook 继续使用内部 ARM 入口。
 
 矩阵增加直接 KernelBase 创建、附加后再创建子进程/孙进程、调用者挂起保留、失败后再次创建。ARM 设备运行与该 PowerShell 个案的修复效果仍待用户复测，不能由 Intel 回归替代。
+
+
+### 进程创建 API 模块映射清理
+
+用户复测确认 x64 PowerShell 附加后的子进程接管已恢复。后续审查发现 HOOKMODULE_KERNEL32 在 Windows 8+ 已映射为 KernelBase.dll，原先额外查询 KernelBase!CreateProcessW 的分支既重复，也会在 Windows 7 缺少该导出时使安装失败。
+
+现仅通过已有模块映射安装一次 CreateProcessW，删除第二个回调、绑定项及专用去重/导出包装函数。保留动态 TLS 防重复处理、XP 原有行为和原生 ARM64 内部入口。DLL 存在性检查只维持原先额外 Hook 的启用范围，不再推断导出归属。LoadLibraryExW 等其他 API 的路径未随此次清理改变。Windows 7 与 XP 的实机运行未在本次环境验证。

@@ -621,12 +621,7 @@ BOOL CHookWinsock::ApplyHooks(bool attach)
 BOOL CHookWinsock::HookAPI(eHOOKMODUDLE ehm, eHOOKFUN ehf, char *exportfunc,
 	LPVOID myfuncaddr, PVOID* original)
 {
-	return HookExport(m_ModuleName[ehm], ehf, exportfunc, myfuncaddr, original);
-}
-
-BOOL CHookWinsock::HookExport(const char* moduleName, eHOOKFUN ehf, const char* exportfunc,
-	LPVOID myfuncaddr, PVOID* original)
-{
+	const char* moduleName = m_ModuleName[ehm];
 	HMODULE module = GetModuleHandleA(moduleName);
 	if (!module)
 		return SetHookFailure(::GetLastError(), "resolve-module", moduleName, exportfunc);
@@ -1964,7 +1959,7 @@ MyDetourProc(has_Return, BOOL, WINAPI, CreateProcessInternalW, (HANDLE hToken, L
 
 // ARM64EC system code can call the internal ARM implementation directly,
 // bypassing CreateProcessInternalW's x64 export/FFS. Intercept the public
-// boundary as well. Preserve each public API's own implementation/trampoline.
+// boundary as well, preserving its original implementation/trampoline.
 MyDetourProc(has_Return, BOOL, WINAPI, CreateProcessW, (
 	LPCWSTR application, LPWSTR command, LPSECURITY_ATTRIBUTES processAttributes,
 	LPSECURITY_ATTRIBUTES threadAttributes, BOOL inheritHandles, DWORD flags,
@@ -1974,17 +1969,6 @@ MyDetourProc(has_Return, BOOL, WINAPI, CreateProcessW, (
 	return g_pHookWinsock->inhook_CreateProcessInternalW(NULL, application, command,
 		processAttributes, threadAttributes, inheritHandles, flags, environment,
 		directory, startup, process, NULL, CallTrampoline(CreateProcessW));
-}
-
-MyDetourProc(has_Return, BOOL, WINAPI, KernelBaseCreateProcessW, (
-	LPCWSTR application, LPWSTR command, LPSECURITY_ATTRIBUTES processAttributes,
-	LPSECURITY_ATTRIBUTES threadAttributes, BOOL inheritHandles, DWORD flags,
-	LPVOID environment, LPCWSTR directory, LPSTARTUPINFOW startup,
-	LPPROCESS_INFORMATION process))
-{
-	return g_pHookWinsock->inhook_CreateProcessInternalW(NULL, application, command,
-		processAttributes, threadAttributes, inheritHandles, flags, environment,
-		directory, startup, process, NULL, CallTrampoline(KernelBaseCreateProcessW));
 }
 
 static BOOL WINAPI CreateProcessWithoutProxyLaneHook(
@@ -2746,20 +2730,13 @@ BOOL CHookWinsock::HookWinsock()
 #if defined(_M_IX86) || (defined(_M_X64) && !defined(_M_ARM64EC))
 			// Intel Hooks need the public emulation boundary. Native ARM64
 			// continues to intercept the internal ARM implementation directly.
-			// KernelBase is absent on XP: leave its existing internal hook path
-			// unchanged. On newer systems cover both public export namespaces.
-			HMODULE kernelBase = GetModuleHandleW(L"kernelbase.dll");
-			if (kernelBase)
-			{
-				if (!HookAPI(HOOKMODULE_KERNEL32, _EHF(CreateProcessW), "CreateProcessW",
+			// Retain the existing pre-KernelBase behavior (including XP).
+			// DLL presence only enables the extra hook; the established module
+			// mapping selects its provider: Kernel32 on Win7, KernelBase on Win8+.
+			// Do not require a second export from KernelBase on Windows 7.
+			if (GetModuleHandleW(L"kernelbase.dll") &&
+				!HookAPI(HOOKMODULE_KERNEL32, _EHF(CreateProcessW), "CreateProcessW",
 					_HOOKFUNC(CreateProcessW), _TRAMPFUNC(CreateProcessW))) break;
-				// Forwarded exports can resolve to the same address. Attach once;
-				// installing two detours there would corrupt the trampoline chain.
-				if (ResolveDetourHookTarget(reinterpret_cast<PVOID>(GetProcAddress(kernelBase, "CreateProcessW"))) !=
-					ResolveDetourHookTarget(reinterpret_cast<PVOID>(Original_CreateProcessW)) &&
-					!HookExport("kernelbase.dll", _EHF(KernelBaseCreateProcessW), "CreateProcessW",
-						_HOOKFUNC(KernelBaseCreateProcessW), _TRAMPFUNC(KernelBaseCreateProcessW))) break;
-			}
 #endif
 		}
 
