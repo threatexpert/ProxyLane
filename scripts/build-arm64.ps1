@@ -23,6 +23,15 @@ $previousEnvironment = @{}
 Get-ChildItem Env: | ForEach-Object { $previousEnvironment[$_.Name] = $_.Value }
 Push-Location $repositoryRoot
 try {
+    # The ARM package uses the same release Intel Hooks as the Intel package.
+    # Build them before importing the ARM compiler environment, including when
+    # building a Debug ARM host. Never copy stale Hooks from an older package.
+    foreach ($intelPlatform in @('Win32', 'x64')) {
+        & $msbuild src/ProxyLaneHook/ProxyLaneHook.vcxproj /m /p:Configuration=Release "/p:Platform=$intelPlatform" "/p:SolutionDir=$repositoryRoot\src\" /v:minimal
+        if ($LASTEXITCODE) { throw "$intelPlatform companion Hook build failed." }
+    }
+    & python tests/HookStaticTlsTests.py
+    if ($LASTEXITCODE) { throw 'Companion Hook static TLS verification failed.' }
     $compilerEnvironment = & $env:ComSpec /d /s /c ('call "{0}" amd64_arm64 >nul && set' -f $vcvars)
     if ($LASTEXITCODE) { throw 'Cannot initialize the x64-to-ARM64 compiler environment.' }
     foreach ($line in $compilerEnvironment) {
@@ -79,11 +88,11 @@ try {
         Configuration = $Configuration
         Clang = $clang.Source
         RuntimeTested = $false
-        InjectionImplemented = 'ARM64-to-ARM64 only; runtime validation pending'
+        InjectionImplemented = 'ARM64/x64/x86 routing via system rundll32; ARM runtime matrix pending'
         Files = @($verified)
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $qa 'verification.json') -Encoding UTF8
     Write-Host "ARM64 cross-build verified: $output"
-    Write-Host 'ARM64-to-ARM64 injection is implemented. Runtime tests were not executed.'
+    Write-Host 'ARM64/x64/x86 routes and Intel companion Hooks built. ARM runtime tests were not executed.'
 }
 finally {
     # Do not leave the caller's shell configured for ARM64 compilation.

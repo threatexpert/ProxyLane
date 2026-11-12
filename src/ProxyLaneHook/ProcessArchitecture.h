@@ -69,6 +69,7 @@ namespace ProcessArchitecture
         Wow64ProcessFn wow64Process;
         NativeSystemInfoFn nativeSystemInfo;
         VersionFn version;
+        ProcessInformationFn processInformation;
     };
 
     inline Api SystemApi()
@@ -78,7 +79,8 @@ namespace ProcessArchitecture
             reinterpret_cast<Wow64Process2Fn>(GetProcAddress(kernel, "IsWow64Process2")),
             reinterpret_cast<Wow64ProcessFn>(GetProcAddress(kernel, "IsWow64Process")),
             reinterpret_cast<NativeSystemInfoFn>(GetProcAddress(kernel, "GetNativeSystemInfo")),
-            reinterpret_cast<VersionFn>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion"))
+            reinterpret_cast<VersionFn>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion")),
+            reinterpret_cast<ProcessInformationFn>(GetProcAddress(kernel, "GetProcessInformation"))
         };
         return api;
     }
@@ -95,6 +97,15 @@ namespace ProcessArchitecture
             ProcessInfo detected;
             detected.native = FromMachine(nativeMachine);
             detected.process = FromMachine(machine ? machine : nativeMachine);
+            // ARM64X's on-disk machine and the caller's emulation view do not
+            // identify the target ABI. Windows 11 reports its active machine.
+            if (detected.native == Arm64)
+            {
+                if (!api.processInformation) { SetLastError(ERROR_NOT_SUPPORTED); return FALSE; }
+                MachineInformation active = {};
+                if (!api.processInformation(process, 9, &active, sizeof(active))) return FALSE;
+                detected.process = FromMachine(active.machine);
+            }
             if (detected.process != Unknown && detected.native != Unknown)
             {
                 result = detected;
@@ -193,10 +204,13 @@ namespace ProcessArchitecture
     enum InjectionRoute { Unsupported, Direct, Helper };
     inline InjectionRoute Route(Architecture source, const ProcessInfo& target)
     {
-        // Only native ARM64 -> ARM64 is implemented on Windows on ARM.
-        // For ARM64X the injector additionally confirms the active ARM64 ABI.
-        if (source == Arm64 && target.process == Arm64 && target.native == Arm64)
-            return Direct;
+        if (target.native == Arm64)
+        {
+            if ((source != X86 && source != X64 && source != Arm64) ||
+                (target.process != X86 && target.process != X64 && target.process != Arm64))
+                return Unsupported;
+            return source == target.process ? Direct : Helper;
+        }
         if ((source != X86 && source != X64) ||
             (target.process != X86 && target.process != X64) ||
             (target.native != X86 && target.native != X64) ||
@@ -207,12 +221,14 @@ namespace ProcessArchitecture
 
     inline LPCTSTR SystemRundllDirectory(const ProcessInfo& target)
     {
-        // Native ARM64 uses the system DLL host just like native x64.
-        // This selects a host path only; Route still rejects emulated targets
-        // and cross-architecture injection on Windows ARM.
-        if (target.process == Arm64 && target.native == Arm64) return _T("System32");
         if (Route(X86, target) == Unsupported) return NULL;
-        return target.process == target.native ? _T("System32") : _T("SysWOW64");
+        return target.process == X86 && target.native != X86 ? _T("SysWOW64") : _T("System32");
+    }
+
+    inline WORD RundllMachine(const ProcessInfo& target)
+    {
+        if (target.native != Arm64 || Route(X86, target) == Unsupported) return 0;
+        return target.process == Arm64 ? 0xaa64 : target.process == X64 ? 0x8664 : 0x014c;
     }
 
     inline BOOL RequireDirectInjection(HANDLE process)

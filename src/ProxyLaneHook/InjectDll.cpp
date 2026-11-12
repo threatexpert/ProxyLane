@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "InjectDll.h"
 #include "InjectDllArm64.h"
 #include "ProcessArchitecture.h"
@@ -29,7 +29,15 @@ FARPROC get_proc_address2(void* hDll, LPCSTR fname)
 		{
 			PCHAR name = ((PCHAR)(pb + pNamesRVA[i]));
 			if (!strcmp(fname, name))
-				return (FARPROC)(pb + pFuncRVA[ord[i]]);
+			{
+				const DWORD rva = pFuncRVA[ord[i]];
+				const DWORD exportSize = pOptionalHeader->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size;
+				// A forwarded export is text, not executable code. Let the loader
+				// resolve its API-set/architecture view in this matching-ABI host.
+				if (rva >= dwExpRVA && rva - dwExpRVA < exportSize)
+					return GetProcAddress(static_cast<HMODULE>(hDll), fname);
+				return (FARPROC)(pb + rva);
+			}
 		}
 	}
 
@@ -51,6 +59,8 @@ int InjectDll(HANDLE process, HANDLE thread, LPCWSTR dll, LPCSTR pipe)
 
 int InjectDll(HANDLE hProc, HANDLE hThread, LPCWSTR lpMyDll, LPCSTR lpszPipeName)
 {
+    if (!lpszPipeName || !lpszPipeName[0] || strlen(lpszPipeName) >= MAX_PATH)
+    { SetLastError(ERROR_INVALID_PARAMETER); return -1; }
 	if (!ProcessArchitecture::RequireDirectInjection(hProc)) return -1;
 	int bOK(-1);
 	myapi param_myapi;
@@ -65,6 +75,10 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCWSTR lpMyDll, LPCSTR lpszPipeName
 	*(FARPROC*)&param_myapi.GetLastError = get_proc_address2(hKernel, "GetLastError");
 	*(FARPROC*)&param_myapi.FormatMessageA = get_proc_address2(hKernel, "FormatMessageA");
 	*(FARPROC*)&param_myapi.OutputDebugStringA = get_proc_address2(hKernel, "OutputDebugStringA");
+    if (!param_myapi.LoadLibraryW || !param_myapi.GetProcAddress || !param_myapi.Sleep ||
+        !param_myapi.SetEvent || !param_myapi.CloseHandle || !param_myapi.GetLastError ||
+        !param_myapi.FormatMessageA || !param_myapi.OutputDebugStringA)
+    { SetLastError(ERROR_PROC_NOT_FOUND); return -1; }
     strcpy_s(param_myapi.loadFailureFormat,
         "[ProxyLane.Loader.v1] stage=LoadLibraryW error=%1!08X!\n");
     if (!lpMyDll || wcslen(lpMyDll) >= _countof(param_myapi.szMyDll))
@@ -129,10 +143,9 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCWSTR lpMyDll, LPCSTR lpszPipeName
 		goto __CleanUp;
 	}
 
-	if (WriteProcessMemory(hProc, lpROnldParam, lpszPipeName, strlen(lpszPipeName) + 1, NULL))
-	{
-		param_myapi.EntryParam = lpROnldParam;
-	}
+	if (!WriteProcessMemory(hProc, lpROnldParam, lpszPipeName, strlen(lpszPipeName) + 1, NULL))
+		goto __CleanUp;
+	param_myapi.EntryParam = lpROnldParam;
 
 	if (!WriteProcessMemory(hProc, lpParam, &param_myapi, sizeof(myapi), NULL))
 	{
@@ -156,6 +169,8 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCWSTR lpMyDll, LPCSTR lpszPipeName
 		goto __CleanUp;
 	}
 
+	if (!FlushInstructionCache(hProc, lpSC, sizeof(sc_ldr)) ||
+		!FlushInstructionCache(hProc, lpJmper, sizeof(lvJmper))) goto __CleanUp;
 	ctx.Rip = (DWORD_PTR)lpJmper;
 
 	if (!SetThreadContext(hThread, &ctx))
@@ -166,7 +181,8 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCWSTR lpMyDll, LPCSTR lpszPipeName
 	bOK = 1;
 
 __CleanUp:
-	if (!bOK)
+	const DWORD injectionError = GetLastError();
+	if (bOK != 1)
 	{
 		if (lpSC)
 			VirtualFreeEx(hProc, lpSC, 0, MEM_RELEASE);
@@ -178,6 +194,7 @@ __CleanUp:
 			VirtualFreeEx(hProc, lpJmper, 0, MEM_RELEASE);
 	}
 
+	SetLastError(injectionError);
 	return bOK;
 }
 
@@ -189,6 +206,8 @@ __CleanUp:
 
 int InjectDll(HANDLE hProc, HANDLE hThread, LPCWSTR lpMyDll, LPCSTR lpszPipeName)
 {
+    if (!lpszPipeName || !lpszPipeName[0] || strlen(lpszPipeName) >= MAX_PATH)
+    { SetLastError(ERROR_INVALID_PARAMETER); return -1; }
 	if (!ProcessArchitecture::RequireDirectInjection(hProc)) return -1;
 	int bOK(-1);
 	myapi param_myapi;
@@ -203,6 +222,10 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCWSTR lpMyDll, LPCSTR lpszPipeName
 	*(FARPROC*)&param_myapi.GetLastError = get_proc_address2(hKernel, "GetLastError");
 	*(FARPROC*)&param_myapi.FormatMessageA = get_proc_address2(hKernel, "FormatMessageA");
 	*(FARPROC*)&param_myapi.OutputDebugStringA = get_proc_address2(hKernel, "OutputDebugStringA");
+    if (!param_myapi.LoadLibraryW || !param_myapi.GetProcAddress || !param_myapi.Sleep ||
+        !param_myapi.SetEvent || !param_myapi.CloseHandle || !param_myapi.GetLastError ||
+        !param_myapi.FormatMessageA || !param_myapi.OutputDebugStringA)
+    { SetLastError(ERROR_PROC_NOT_FOUND); return -1; }
     strcpy_s(param_myapi.loadFailureFormat,
         "[ProxyLane.Loader.v1] stage=LoadLibraryW error=%1!08X!\n");
     if (!lpMyDll || wcslen(lpMyDll) >= _countof(param_myapi.szMyDll))
@@ -263,10 +286,9 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCWSTR lpMyDll, LPCSTR lpszPipeName
 		goto __CleanUp;
 	}
 
-	if (WriteProcessMemory(hProc, lpROnldParam, lpszPipeName, strlen(lpszPipeName) + 1, NULL))
-	{
-		param_myapi.EntryParam = lpROnldParam;
-	}
+	if (!WriteProcessMemory(hProc, lpROnldParam, lpszPipeName, strlen(lpszPipeName) + 1, NULL))
+		goto __CleanUp;
+	param_myapi.EntryParam = lpROnldParam;
 
 	if (!WriteProcessMemory(hProc, lpParam, &param_myapi, sizeof(myapi), NULL))
 	{
@@ -318,6 +340,8 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCWSTR lpMyDll, LPCSTR lpszPipeName
 		goto __CleanUp;
 	}
 
+	if (!FlushInstructionCache(hProc, lpSC, sizeof(sc_ldr)) ||
+		!FlushInstructionCache(hProc, lpJmper, sizeof(lvJmper))) goto __CleanUp;
 	ctx.Eip = (DWORD)lpJmper;
 
 	if (!SetThreadContext(hThread, &ctx))
@@ -328,7 +352,8 @@ int InjectDll(HANDLE hProc, HANDLE hThread, LPCWSTR lpMyDll, LPCSTR lpszPipeName
 	bOK = 1;
 
 __CleanUp:
-	if (!bOK)
+	const DWORD injectionError = GetLastError();
+	if (bOK != 1)
 	{
 		if (lpSC)
 			VirtualFreeEx(hProc, lpSC, 0, MEM_RELEASE);
@@ -340,6 +365,7 @@ __CleanUp:
 			VirtualFreeEx(hProc, lpJmper, 0, MEM_RELEASE);
 	}
 
+	SetLastError(injectionError);
 	return bOK;
 }
 

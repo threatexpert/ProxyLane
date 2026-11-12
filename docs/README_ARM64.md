@@ -1,59 +1,53 @@
 # ProxyLane Windows ARM64 开发测试包
 
-本包面向 Windows 11 ARM64，尚未完成 Windows ARM64 实机验收，不代表正式 ARM64 支持已经发布。
+本包面向 Windows 11 ARM64。原生命令行程序的 ARM64X 修复已获用户实机反馈；新增跨架构注入仍待 ARM 设备完整验收，不代表全部兼容性已经验证。
 
 ## 文件与启动
 
-完整解压后直接运行 `ProxyLaneARM64.exe`，保持以下文件在同一目录：
+完整解压后运行 `ProxyLaneARM64.exe`，保持以下 7 个产品二进制在同一目录：
 
 - `ProxyLaneARM64.exe`：原生界面与代理宿主。
-- `ProxyLaneHookARM64.dll`：原生注入、Hook 和本地代理组件。
+- `ProxyLaneHookARM64.dll`：原生注入、Hook 和代理组件。
+- `ProxyLaneHook32.dll`：x86 仿真目标的注入和 Hook。
+- `ProxyLaneHook64.dll`：x64 仿真目标的注入和 Hook。
 - `ProxyLaneSecureTransportARM64.dll`：安全传输后端。
 - `ProxyLaneMitmARM64.dll`：MITM、协议分析与 DoH 后端。
-- `ProxyLaneSshARM64.dll`：按需加载的原生 SSH 后端，使用同一版本 libssh2 / OpenSSL。
+- `ProxyLaneSshARM64.dll`：按需加载的原生 SSH 后端。
 
-这些文件均已通过 Release 交叉构建和 PE ARM64 架构检查。运行时需要 ARM64 的 Microsoft Visual C++ 运行库。
-本包仅包含上述 5 个产品二进制，不含 x86/x64 程序、CA 命令行工具、调试符号或测试探针。
+Hook32/64 与 Intel 包来自同一版本构建，不能用旧版本 DLL 替换。后端在 ARM64 代理宿主内运行，不需要为了仿真目标再打包 Intel 后端或 Intel 主程序。运行时需要 ARM64 的 Microsoft Visual C++ 运行库。
+本包不含独立提权 helper、MITM CA 命令行工具、调试符号或测试探针。Intel 包继续不包含 ARM64 模块。
 
-## 当前代理范围
+## 注入与子进程
 
-| Windows ARM 上的目标 | 当前状态 |
-| --- | --- |
-| 纯 ARM64 进程：启动时注入、附加运行中进程 | 已实现，待 ARM64 实机验收 |
-| 已代理的 ARM64 父进程创建 ARM64 子进程/孙进程 | 已接入现有子进程流程，待 ARM64 实机验收 |
-| x86 / x64 仿真进程及跨架构子进程 | 当前不支持注入 |
-| ARM64X 程序以原生 ARM64 模式运行（如系统命令行程序） | 已修复误拒绝判断，须由 Windows 11 运行时接口确认架构，待实机复测 |
-| ARM64EC / x64 兼容模式目标 | 不在当前支持范围 |
+- 以 Windows 11 报告的实际进程架构选择 Hook，不以文件名、父进程架构或 ARM64X 的磁盘 PE 头猜测。
+- 原生 ARM64 目标使用 HookARM64；x64 兼容模式目标使用 Hook64；x86 目标使用 Hook32。
+- 同架构直接执行注入；跨架构使用系统 `rundll32.exe`。x86 使用 SysWOW64，ARM64/x64 使用 System32 并显式选择运行模式。启动后核对宿主架构，再允许它执行注入。
+- GUI 启动/附加、提权启动以及已代理父进程创建的子进程均接入上述路由。三种架构之间的九种父子组合已实现路由，实际 ARM 运行验收待完成。
+- ARM64EC/x64 兼容模式使用已有 x64 Hook 路径，未单独承诺任意混合模块或非导出函数 Hook 都兼容。
+- 注入排队成功不等于 Hook 初始化成功；应检查 PL 中的初始化结果和实际代理流量。
 
-Windows 11 ARM 能仿真运行 x86/x64 应用，但这不等于本包能够代理它们。
-当前普通子进程创建流程在注入失败后会释放 ProxyLane 自己增加的挂起；
-因此 ARM64 父进程启动 x86/x64 子进程时，子进程可能继续运行而未被代理，不能依赖父进程代理设置保护其流量。
-调用者原本要求的挂起不由 ProxyLane 取消。
-
-SSH 后端和 GUI 提权启动已接入并完成交叉构建；“以管理员身份启动”与 x64 一样使用系统 `rundll32.exe`，不再需要单独的 helper 文件。
-SSH 实际通信、UAC 确认/取消、系统宿主加载 ARM64 Hook、提权目标的代理与子进程仍待 ARM64 实机验收。
-提权启动只支持原生 ARM64 执行模式目标；注入失败时终止本次创建的目标，不让它绕过代理继续运行。
-浏览器 QUIC 策略 Hook 尚未适配。
-不要把其他发行包中的 x86/x64 DLL 改名后放入本目录。
-
+普通子进程流程在注入失败后会释放 PL 自己增加的挂起，子进程可能继续运行而未被代理；调用者原本要求的挂起不由 PL 取消。严格“启动并代理”以及提权启动失败时终止本次创建的目标。
+SSH、UAC 和全部跨架构网络/子进程组合仍需 ARM 设备验证。浏览器 QUIC 策略 Hook 的 ARM 原生适配不属于本次跨架构修改。
 DoH 的本地 UDP 回包保留实际中继来源地址，不提供原 DNS 服务器来源地址透明性。
 
-## 初次测试
+## ARM 真机矩阵验收
 
-先使用纯 ARM64 的自有测试程序验证普通 TCP/UDP 代理，再检查原生子进程继承。
-主程序能启动、或 ARM64 文件编译成功，都不能代替 Hook、注入和网络流量的实际验收。
+开发机运行 `tests/run-cross-architecture-tests.ps1 -BuildOnly` 生成三种架构的测试探针。
+在 Windows 11 ARM 上，以原生 64 位 Python（安装 psutil）运行：
+
+```powershell
+python tests/CrossArchitectureE2ETests.py --bin <完整解压的ARM64包目录> --probes <三个CrossArchitectureProbe程序所在目录>
+```
+
+测试覆盖 9 种父子组合及孙进程、9 种调用方/目标架构的运行中附加；验证实际加载的 Hook 和 SOCKS5 数据收发，预期 37 次成功代理连接。测试只管理自己创建的进程并使用临时便携配置，不改动现有 PL 配置。它不代替 UAC、不同用户、浏览器、UDP 和混合模块的专项验证。
 
 ## English
 
-This is an experimental native Windows 11 ARM64 package, cross-built but not yet runtime-tested on Windows ARM64.
-Run `ProxyLaneARM64.exe` with the bundled DLLs in the same directory. An ARM64 Visual C++ runtime is required.
-Native ARM64 injection and native child-process routing are implemented but await device validation.
-Native SSH is included. Elevated launch uses system `rundll32.exe`, as on x64, with no separate helper executable.
-SSH, UAC and loading the ARM64 Hook into the system host still require ARM64 device validation.
-Elevated launch only supports targets executing natively as ARM64 and terminates its newly created target if injection fails.
-ARM64X executables in native ARM64 mode are accepted only after Windows 11 confirms their active architecture; device retesting is pending.
-x86/x64 emulated targets, mixed-architecture children, ARM64EC/x64-compatible targets and the browser QUIC policy hook
-are not supported. An unsupported child created by an ordinary proxied parent can continue without proxy interception.
-This package contains five ARM64 product binaries; the CA command-line tool, test probes and x86/x64 binaries are excluded.
+Experimental Windows 11 ARM64 package. Native ARM64X shell injection has user-reported device success; the new cross-architecture matrix still requires Windows ARM device validation.
+Run `ProxyLaneARM64.exe` with all seven bundled binaries. The ARM64 host uses native transport/MITM/SSH backends. Matching-version Hook32 and Hook64 support the x86/x64 target paths; no Intel GUI or backend binaries are needed for these targets.
+Injection selects the target's active ABI. Cross-architecture routes use system rundll32 with explicit machine selection and verify the helper before execution. Startup, running-process attachment, elevated launch and child injection share this routing. ARM64EC/x64 mode uses Hook64; arbitrary mixed-module hooks are not separately certified.
+An injection scheduling result is not a Hook initialization acknowledgment. On ordinary child injection failure, PL releases only its own suspension, so that child may continue without interception. Strict and elevated launch terminate the newly created target on injection failure.
+The package contains no standalone elevation helper, CA executable, debug symbols or test probes. Intel releases remain free of ARM64 binaries. Hook32 retains its XP static-TLS check; XP runtime validation has not been performed here.
+For device tests, run the Python command above using native 64-bit Python with psutil and all three probes. Expected results: 9 startup pairs, 9 attachment pairs, 37 proxied connections. UAC, SSH and broader application compatibility need separate device checks.
 
 [Windows on Arm emulation reference](https://learn.microsoft.com/en-us/windows/arm/apps-on-arm-x86-emulation)

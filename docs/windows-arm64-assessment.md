@@ -469,3 +469,12 @@ dumpbin /headers build/qa/arm64-assessment/bin/DetoursBuildProbe.exe
 - ARM64 安全传输 DLL 的实际 TLS/PSK 连接，并保持现有 x86/x64 回归通过。
 
 已完成共享架构识别、原生交叉构建和 ARM64 同架构注入实现；ARM 设备运行验收仍未完成。
+
+
+## Windows 11 跨架构路由实现更新
+
+ARM64/x64/x86 已接入共享架构路由：Windows 11 ProcessMachineTypeInfo 确认实际 ABI；同架构直接注入，跨架构用系统 rundll32，并设置机器类型、处理 x86 文件系统重定向、在恢复宿主前核对其实际架构。GUI 附加和子进程使用同一启动组件。子进程继续仅继承授权的进程/线程句柄，保持既有挂起恢复语义。
+
+ARM64 包增加同版 Hook32/64，保留原生后端；Intel 包仍不带 ARM64。Intel 引导代码补充转发导出解析、指令缓存刷新和失败分配释放。
+
+新增 `tests/CrossArchitectureE2ETests.py` 与三种架构的 CrossArchitectureProbe：ARM 主机验收九种启动/父子组合及孙进程、九种运行中附加组合，要求实际 SOCKS5 流量。Intel 主机运行其四种组合子集，不能代替 ARM 设备运行。完整范围与运行方法见 README_ARM64.md。

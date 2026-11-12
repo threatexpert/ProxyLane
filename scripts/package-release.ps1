@@ -1,7 +1,8 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$OutputDirectory,
     [string]$BinaryDirectory,
+    [string]$IntelBinaryDirectory = 'bin',
     [ValidateSet('x86-x64', 'ARM64')]
     [string]$Architecture = 'x86-x64'
 )
@@ -17,6 +18,11 @@ if (-not [System.IO.Path]::IsPathRooted($BinaryDirectory)) {
 }
 $binaryDirectory = [System.IO.Path]::GetFullPath($BinaryDirectory)
 
+if (-not [IO.Path]::IsPathRooted($IntelBinaryDirectory)) {
+    $IntelBinaryDirectory = Join-Path $repositoryRoot $IntelBinaryDirectory
+}
+$IntelBinaryDirectory = [IO.Path]::GetFullPath($IntelBinaryDirectory)
+
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $repositoryRoot 'dist'
 }
@@ -30,6 +36,8 @@ if ($Architecture -eq 'ARM64') {
     $packageFiles = @(
         @{ Source = (Join-Path $binaryDirectory 'ProxyLaneARM64.exe'); Entry = 'ProxyLaneARM64.exe'; Versioned = $true; Machine = 0xaa64 },
         @{ Source = (Join-Path $binaryDirectory 'ProxyLaneHookARM64.dll'); Entry = 'ProxyLaneHookARM64.dll'; Versioned = $true; Machine = 0xaa64 },
+        @{ Source = (Join-Path $IntelBinaryDirectory 'ProxyLaneHook32.dll'); Entry = 'ProxyLaneHook32.dll'; Versioned = $true; Machine = 0x14c },
+        @{ Source = (Join-Path $IntelBinaryDirectory 'ProxyLaneHook64.dll'); Entry = 'ProxyLaneHook64.dll'; Versioned = $true; Machine = 0x8664 },
         @{ Source = (Join-Path $binaryDirectory 'ProxyLaneSecureTransportARM64.dll'); Entry = 'ProxyLaneSecureTransportARM64.dll'; Versioned = $false; Machine = 0xaa64 },
         @{ Source = (Join-Path $binaryDirectory 'ProxyLaneMitmARM64.dll'); Entry = 'ProxyLaneMitmARM64.dll'; Versioned = $false; Machine = 0xaa64 },
         @{ Source = (Join-Path $binaryDirectory 'ProxyLaneSshARM64.dll'); Entry = 'ProxyLaneSshARM64.dll'; Versioned = $false; Machine = 0xaa64 },
@@ -87,10 +95,9 @@ foreach ($packageFile in $packageFiles) {
         throw ('Wrong PE architecture in {0}: expected 0x{1:X4}, found 0x{2:X4}' -f $packageFile.Entry, $packageFile.Machine, $machine)
     }
 }
-if ($Architecture -eq 'x86-x64') {
-    & python (Join-Path $repositoryRoot 'tests/HookStaticTlsTests.py') --bin $binaryDirectory | Out-Host
-    if ($LASTEXITCODE) { throw 'Hook static TLS verification failed; package was not created.' }
-}
+$tlsDirectory = if ($Architecture -eq 'ARM64') { $IntelBinaryDirectory } else { $binaryDirectory }
+& python (Join-Path $repositoryRoot 'tests/HookStaticTlsTests.py') --bin $tlsDirectory | Out-Host
+if ($LASTEXITCODE) { throw 'Hook static TLS verification failed; package was not created.' }
 
 # Generate only the archive's LICENSE; keep upstream license files unchanged.
 $separator = '=' * 72

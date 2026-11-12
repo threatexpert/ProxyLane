@@ -1,7 +1,8 @@
-// Page3.cpp : 实现文件
+﻿// Page3.cpp : 实现文件
 //
 
 #include "stdafx.h"
+#include "../ProxyLaneHook/RundllHost.h"
 #include "ProxyLane.h"
 #include "Page3.h"
 #include "MainTab.h"
@@ -514,31 +515,21 @@ BOOL CPage3::GetRunningHookedProcesses(std::vector<_myPROCESSINFO>& processes)
 
 BOOL InjectDll2(HANDLE hProc, DWORD dwPid, DWORD dwTid, LPCSTR lpszPipeName)
 {
-	STARTUPINFO si = { 0 };
-	PROCESS_INFORMATION pi;
-	PVOID WowRedirOldValue = NULL;
-
-	si.cb = sizeof(si);
-
-	BOOL bOK;
-	CString strInjectCmd;
-	CString strProxyLaneHook, strRundll;
-
-	strProxyLaneHook = ChooseProxyLaneHookModule(hProc);
-	strRundll = ChooseRundll32(hProc);
+	ProcessArchitecture::ProcessInfo target;
+	if (!ProcessArchitecture::Query(hProc, target)) return FALSE;
+	CString strProxyLaneHook = ChooseProxyLaneHookModule(hProc);
+	CString strRundll = ChooseRundll32(hProc);
 	if (strProxyLaneHook.IsEmpty() || strRundll.IsEmpty()) return FALSE;
-
-	strInjectCmd.Format(_T("\"%s\" \"%s\",AttachTo --pid=%lu --tid=%lu --pipe=%s"),
-		strRundll, strProxyLaneHook, dwPid, dwTid, (LPCTSTR)(CString)lpszPipeName);
-
-	myWow64DisableWow64FsRedirection(&WowRedirOldValue);
-
-	bOK = CreateProcess(NULL, (LPTSTR)(LPCTSTR)strInjectCmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
-
-	myWow64RevertWow64FsRedirection(WowRedirOldValue);
-
-	if (!bOK)
-		return FALSE;
+	CStringW command;
+	command.Format(L"\"%s\" \"%s\",AttachTo --pid=%lu --tid=%lu --pipe=%s",
+		(LPCWSTR)CStringW(strRundll), (LPCWSTR)CStringW(strProxyLaneHook), dwPid, dwTid,
+		(LPCWSTR)CStringW(lpszPipeName));
+	RundllHost::Attributes attributes;
+	if (!attributes.Initialize(target)) return FALSE;
+	PROCESS_INFORMATION pi = {};
+	BOOL created = RundllHost::Create(target, command.GetBuffer(), attributes, pi);
+	command.ReleaseBuffer();
+	if (!created) return FALSE;
 
 	DWORD dwEC = 0;
 
@@ -548,7 +539,9 @@ BOOL InjectDll2(HANDLE hProc, DWORD dwPid, DWORD dwTid, LPCSTR lpszPipeName)
 	CloseHandle(pi.hProcess);
 	CloseHandle(pi.hThread);
 
-	return dwEC == 0xFF01;
+	if (dwEC == 0xFF01) return TRUE;
+	SetLastError(ERROR_DLL_INIT_FAILED);
+	return FALSE;
 }
 
 BOOL InjectDll(HANDLE hProc, DWORD dwPid, DWORD dwTid, LPCSTR lpszPipeName)

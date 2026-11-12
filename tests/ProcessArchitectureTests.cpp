@@ -46,7 +46,8 @@ int ProcessArchitectureTestsMain()
 #define CHECK(expression) do { if (!(expression)) { \
     std::cerr << "Architecture check failed at line " << __LINE__ << ": " << #expression << std::endl; \
     ++failures; } } while (0)
-    Api api = { Modern, Legacy, System, Version };
+    Api api = { Modern, Legacy, System, Version, MachineInfo };
+    machineQuerySuccess = TRUE; activeMachine = 0xaa64;
     modernSuccess = legacySuccess = TRUE;
     major = 6; build = 7601; processor = PROCESSOR_ARCHITECTURE_AMD64;
     ProcessInfo info;
@@ -63,10 +64,23 @@ int ProcessArchitectureTestsMain()
     nativeMachine = 0xaa64;
     for (int process = 0; process < 2; ++process)
     {
-        processMachine = machines[process];
+        processMachine = machines[process]; activeMachine = machines[process];
         CHECK(Query(GetCurrentProcess(), info, api));
         CHECK(info.process == architectures[process] && info.native == Arm64);
     }
+    // Active ABI wins over ambiguous ARM64X/IsWow64Process2 reports.
+    processMachine = 0; activeMachine = 0x8664;
+    CHECK(Query(GetCurrentProcess(), info, api) && info.process == X64);
+    activeMachine = 0xaa64;
+    CHECK(Query(GetCurrentProcess(), info, api) && info.process == Arm64);
+    activeMachine = 0xa641;
+    CHECK(!Query(GetCurrentProcess(), info, api) && GetLastError() == ERROR_NOT_SUPPORTED);
+    machineQuerySuccess = FALSE;
+    CHECK(!Query(GetCurrentProcess(), info, api) && GetLastError() == ERROR_ACCESS_DENIED);
+    machineQuerySuccess = TRUE; activeMachine = 0xaa64;
+    api.processInformation = NULL;
+    CHECK(!Query(GetCurrentProcess(), info, api) && GetLastError() == ERROR_NOT_SUPPORTED);
+    api.processInformation = MachineInfo;
     nativeMachine = 0x8664; processMachine = 0x014c;
     CHECK(Query(GetCurrentProcess(), info, api));
     CHECK(info.process == X86 && info.native == X64);
@@ -131,18 +145,17 @@ int ProcessArchitectureTestsMain()
     info.process = X86;
     CHECK(Route(X86, info) == Direct);
     CHECK(_tcscmp(SystemRundllDirectory(info), _T("System32")) == 0);
-    // Enable only the native same-architecture route on Windows on ARM.
+    // All nine Windows 11 ARM routes; only matching ABIs inject directly.
     info.native = Arm64;
     for (int source = 0; source < 3; ++source)
         for (int target = 0; target < 3; ++target)
         {
             info.process = architectures[target];
             CHECK(Route(architectures[source], info) ==
-                (source == 2 && target == 2 ? Direct : Unsupported));
-            if (info.process == Arm64)
-                CHECK(_tcscmp(SystemRundllDirectory(info), _T("System32")) == 0);
-            else
-                CHECK(SystemRundllDirectory(info) == NULL);
+                (source == target ? Direct : Helper));
+            CHECK(_tcscmp(SystemRundllDirectory(info),
+                info.process == X86 ? _T("SysWOW64") : _T("System32")) == 0);
+            CHECK(RundllMachine(info) == (info.process == X86 ? 0x14c : info.process == X64 ? 0x8664 : 0xaa64));
         }
     info.native = X64; info.process = Unknown;
     CHECK(Route(X64, info) == Unsupported);
