@@ -61,7 +61,7 @@ try {
 
     $files = @('ProxyLaneARM64.exe', 'ProxyLaneHookARM64.dll', 'ProxyLaneSecureTransportARM64.dll',
         'ProxyLaneTrafficARM64.exe', 'DetoursBuildProbe.exe', 'InjectionTestsARM64.exe', 'InjectionFixtureARM64.dll', 'ProxyLaneMitmARM64.dll', 'ProxyLaneMitmARM64.exe',
-        'ProxyLaneSshARM64.dll', 'ProxyLaneElevatedARM64.exe', 'SshTransportTestsARM64.exe')
+        'ProxyLaneSshARM64.dll', 'SshTransportTestsARM64.exe')
     $verified = foreach ($name in $files) {
         $path = Join-Path $output $name
         $bytes = [IO.File]::ReadAllBytes($path)

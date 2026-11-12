@@ -121,7 +121,7 @@ namespace
 			return FALSE;
 		}
 
-		const WCHAR* systemFolder = ProcessArchitecture::LegacyRundllDirectory(target);
+		const WCHAR* systemFolder = ProcessArchitecture::SystemRundllDirectory(target);
 		if (!systemFolder) { SetLastError(ERROR_NOT_SUPPORTED); return FALSE; }
 		if (FAILED(StringCchPrintfW(
 			rundllPath,

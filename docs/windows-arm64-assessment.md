@@ -4,6 +4,46 @@
 开发分支：`codex/windows-arm64-assessment`。
 本分支正在分阶段适配，尚不能发布为支持 ARM64 的完整产品。下文旧阶段记录保留为历史，当前状态以最新章节为准。
 
+## 2026-11-12：统一使用系统 rundll32，精简打包
+
+本次按用户要求撤销独立 ARM64 提权宿主，ARM64 与 x64 共用现有启动流程：
+GUI 通过 `ShellExecuteEx` 的 `runas` 动词启动系统 `rundll32.exe`，传入完整 Hook DLL 路径、
+`ElevatedLaunch` 导出名及 Base64URL 请求。原生 ARM64 选择 `System32`；
+传统 x86/x64 的 `System32`/`SysWOW64` 选择保持原样。
+
+- `SystemRundllDirectory` 替代原先只允许 Intel 的路径函数，单元测试覆盖原生 ARM64、
+  ARM 仿真目标、未知和不一致架构。注入 `Route` 未放宽，ARM 宿主仍仅允许 ARM64→ARM64。
+- 删除 `ProxyLaneElevated` 项目、源文件、项目引用、文件名映射及构建/打包清单项。
+  不再构建或分发 `ProxyLaneElevatedARM64.exe`。
+- `ProxyLaneMitmARM64.exe` 仍可作为开发用 CA 工具交叉构建，但从发行包移除。
+  ARM64 包现在是 1 个 GUI EXE + 4 个 DLL（Hook、安全传输、MITM、SSH），共 5 个产品二进制，
+  另含 `README.md` 和 `LICENSE`。英文说明仍在 ARM64 README 的 English 小节。
+- 将 helper 测试替换为 `tests/ElevatedRundllTests.py`，直接启动系统 rundll32 和真实 Hook 导出。
+  使用带中文/空格的 DLL 路径，验证有效非管理员请求、损坏请求、UTF-8、长度和参数校验。
+  测试不触发 UAC，也不创建成功目标。ARM64 测试要求原生 ARM64 Python，防止仿真进程影响宿主选择。
+
+在 Windows ARM64 设备上复现入口回归：
+
+```powershell
+python tests/ElevatedRundllTests.py --platform ARM64 --hook bin/ARM64/Release/ProxyLaneHookARM64.dll
+```
+
+还需从普通权限的 ARM64 GUI 实测 UAC 确认/取消、系统 rundll32 的实际加载行为、
+原生目标代理与子进程，以及注入失败后的清理。当前 x64 构建主机不能替代这些验收；
+Windows XP 动态加载也尚未重测。下节独立 helper 的描述仅保留为历史记录。
+
+验证通过（日志 `build/qa/arm64-rundll-*.log`）：
+
+- ARM64 Release/Debug 均使用 `-Rebuild` 重建成功，每种配置 11 个构建产物的架构与 SHA256 已核对，
+  `RuntimeTested=false`。其中包含仅用于开发的 CA 工具和测试探针，发行包仅取 5 个产品二进制。
+- Win32/x64 Release 构建、单元测试、TCP/UDP 统计与启停、四种父子/孙进程组合、
+  8 次代理连接、PRC 重绑定及 IPv6/DNS 回归通过；32 位宿主真实 UI/限制/启动/注入回归通过。
+- 系统 rundll32 的 Win32/x64 入口回归各 17 项通过；ARM64 原生运行环境和错架构 DLL 的拒绝检查通过。
+- x64 SSH `-Full` 共 99 项通过；ARM64 bootstrap 两组 9 条路径通过；最终 Hook32/64 无静态 TLS 目录。
+- 两种 ZIP 的固定文件清单、CRC、PE 架构及包内二进制与当前源产物一致性通过。
+  ARM64 包在额外 EXE 存在和不存在两种输入目录下都成功，两个 EXE 均不入包。
+  包清单与 SHA256 见 `build/qa/arm64-rundll-package-{intel,arm64}.json`。
+
 ## 2026-11-12：SSH 后端与原生提权 helper
 
 本次完成代码与交叉构建接入；Windows ARM64 实机验收仍未完成。

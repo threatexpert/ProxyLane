@@ -171,12 +171,6 @@ namespace ProcessArchitecture
         }
     }
 
-    inline LPCTSTR ElevatedHelperFileName(Architecture arch)
-    {
-        // Intel hosts retain their existing system rundll32 route.
-        return arch == Arm64 ? _T("ProxyLaneElevatedARM64.exe") : NULL;
-    }
-
     enum InjectionRoute { Unsupported, Direct, Helper };
     inline InjectionRoute Route(Architecture source, const ProcessInfo& target)
     {
@@ -192,8 +186,12 @@ namespace ProcessArchitecture
         return source == target.process ? Direct : Helper;
     }
 
-    inline LPCTSTR LegacyRundllDirectory(const ProcessInfo& target)
+    inline LPCTSTR SystemRundllDirectory(const ProcessInfo& target)
     {
+        // Native ARM64 uses the system DLL host just like native x64.
+        // This selects a host path only; Route still rejects emulated targets
+        // and cross-architecture injection on Windows ARM.
+        if (target.process == Arm64 && target.native == Arm64) return _T("System32");
         if (Route(X86, target) == Unsupported) return NULL;
         return target.process == target.native ? _T("System32") : _T("SysWOW64");
     }

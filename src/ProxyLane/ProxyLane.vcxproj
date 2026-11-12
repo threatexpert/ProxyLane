@@ -495,12 +495,6 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\..\scri
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
     </ProjectReference>
   </ItemGroup>
-  <ItemGroup Condition="'$(Platform)'=='ARM64'">
-    <ProjectReference Include="..\ProxyLaneElevated\ProxyLaneElevated.vcxproj">
-      <Project>{86D83301-BEF8-4C88-9E9C-D319224B1045}</Project>
-      <ReferenceOutputAssembly>false</ReferenceOutputAssembly><LinkLibraryDependencies>false</LinkLibraryDependencies>
-    </ProjectReference>
-  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

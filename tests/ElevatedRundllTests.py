@@ -1,6 +1,6 @@
-"""Run the real native helper and Hook entry point without requesting UAC.
+"""Run system rundll32 and the production ElevatedLaunch entry without UAC.
 
-Build the helper's x64 test configuration or use the ARM64 product on a device.
+Use --platform Win32/x64 on Intel Windows, or native ARM64 Python on ARM Windows.
 No successful launch is requested: valid requests name a nonexistent target.
 """
 import argparse
@@ -50,29 +50,55 @@ def elevated():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--helper", type=Path, required=True)
+    parser.add_argument("--platform", choices=("Win32", "x64", "ARM64"), required=True)
     parser.add_argument("--hook", type=Path, required=True)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    qa = root / "build/qa/elevated-helper"
+    # Match the native GUI's launch environment; an emulated Python process
+    # on ARM must not stand in for the ARM64 UAC/loader acceptance test.
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel.IsWow64Process2.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.WORD), ctypes.POINTER(wintypes.WORD)]
+    process, native = wintypes.WORD(), wintypes.WORD()
+    if not kernel.IsWow64Process2(kernel.GetCurrentProcess(), ctypes.byref(process), ctypes.byref(native)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if args.platform == "ARM64":
+        if native.value != 0xaa64 or process.value != 0:
+            raise RuntimeError("ARM64 runtime tests require native ARM64 Python on Windows ARM64")
+    elif native.value not in (0x14c, 0x8664):
+        raise RuntimeError("Intel runtime tests require Intel Windows")
+    elif args.platform == "x64" and native.value != 0x8664:
+        raise RuntimeError("x64 runtime tests require Windows x64")
+    machine = {"Win32": 0x14c, "x64": 0x8664, "ARM64": 0xaa64}[args.platform]
+    blob = args.hook.read_bytes()
+    pe = struct.unpack_from("<I", blob, 0x3c)[0]
+    if struct.unpack_from("<H", blob, pe + 4)[0] != machine:
+        raise RuntimeError("Hook DLL architecture does not match --platform")
+    folder = "SysWOW64" if args.platform == "Win32" and native.value == 0x8664 else "System32"
+    if folder == "System32" and process.value == 0x14c and native.value == 0x8664:
+        folder = "Sysnative"
+    rundll = Path(os.environ["SystemRoot"]) / folder / "rundll32.exe"
+    if not rundll.is_file():
+        raise RuntimeError(f"System rundll32 missing: {rundll}")
+    qa = root / "build/qa/elevated-rundll"
     qa.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="host test 中文, ", dir=qa) as temp:
+    with tempfile.TemporaryDirectory(prefix="host test 中文 ", dir=qa) as temp:
         work = Path(temp)
-        helper = work / args.helper.name
-        shutil.copy2(args.helper, helper)
+        hook = work / args.hook.name
+        shutil.copy2(args.hook, hook)
         missing_target = str(work / "不存在 target.exe")
         valid = request(missing_target, directory=str(work).encode("utf-8"))
         count = 0
 
         def check(name, arguments, expected, cwd=work):
             nonlocal count
-            result = subprocess.run([str(helper), *arguments], cwd=cwd, timeout=20)
+            # Match the GUI's quoting: the comma/export are outside DLL quotes.
+            command = f'"{rundll}" "{hook}",ElevatedLaunch ' + " ".join(arguments)
+            result = subprocess.run(command, cwd=cwd, timeout=20)
             assert result.returncode == expected, f"{name}: expected {expected}, got {result.returncode}"
             count += 1
 
-        # A different current directory must not supply the Hook DLL.
-        check("missing companion", [valid], 16, args.hook.resolve().parent)
-        shutil.copy2(args.hook, work / args.hook.name)
         check("no request", [], 10)
         check("unknown argument", ["--launch=x"], 10)
         check("empty envelope", ["--request="], 10)
@@ -92,7 +118,7 @@ def main():
         # Shows the envelope and Unicode fields reached production validation.
         # A standard token must be refused before any target is created.
         check("valid Unicode request", [valid], 12 if elevated() else 11)
-        print(f"Elevated helper: {count} checks passed; UAC and successful launch were not exercised.")
+        print(f"Elevated system rundll32 ({args.platform}): {count} checks passed; UAC and successful launch were not exercised.")
 
 
 if __name__ == "__main__":

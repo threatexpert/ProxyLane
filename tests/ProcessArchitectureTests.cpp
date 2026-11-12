@@ -113,15 +113,15 @@ int ProcessArchitectureTestsMain()
     info.native = X64;
     info.process = X86;
     CHECK(Route(X86, info) == Direct && Route(X64, info) == Helper);
-    CHECK(_tcscmp(LegacyRundllDirectory(info), _T("SysWOW64")) == 0);
+    CHECK(_tcscmp(SystemRundllDirectory(info), _T("SysWOW64")) == 0);
     info.process = X64;
     CHECK(Route(X64, info) == Direct && Route(X86, info) == Helper);
-    CHECK(_tcscmp(LegacyRundllDirectory(info), _T("System32")) == 0);
+    CHECK(_tcscmp(SystemRundllDirectory(info), _T("System32")) == 0);
     info.native = X86;
-    CHECK(Route(X64, info) == Unsupported && LegacyRundllDirectory(info) == NULL);
+    CHECK(Route(X64, info) == Unsupported && SystemRundllDirectory(info) == NULL);
     info.process = X86;
     CHECK(Route(X86, info) == Direct);
-    CHECK(_tcscmp(LegacyRundllDirectory(info), _T("System32")) == 0);
+    CHECK(_tcscmp(SystemRundllDirectory(info), _T("System32")) == 0);
     // Enable only the native same-architecture route on Windows on ARM.
     info.native = Arm64;
     for (int source = 0; source < 3; ++source)
@@ -130,7 +130,10 @@ int ProcessArchitectureTestsMain()
             info.process = architectures[target];
             CHECK(Route(architectures[source], info) ==
                 (source == 2 && target == 2 ? Direct : Unsupported));
-            CHECK(LegacyRundllDirectory(info) == NULL);
+            if (info.process == Arm64)
+                CHECK(_tcscmp(SystemRundllDirectory(info), _T("System32")) == 0);
+            else
+                CHECK(SystemRundllDirectory(info) == NULL);
         }
     info.native = X64; info.process = Unknown;
     CHECK(Route(X64, info) == Unsupported);
@@ -152,8 +155,12 @@ int ProcessArchitectureTestsMain()
     CHECK(SshFileName(Unknown) == NULL && SshFileName(X86) == NULL);
     CHECK(_tcscmp(SshFileName(X64), _T("ProxyLaneSsh64.dll")) == 0);
     CHECK(_tcscmp(SshFileName(Arm64), _T("ProxyLaneSshARM64.dll")) == 0);
-    CHECK(ElevatedHelperFileName(Unknown) == NULL && ElevatedHelperFileName(X86) == NULL && ElevatedHelperFileName(X64) == NULL);
-    CHECK(_tcscmp(ElevatedHelperFileName(Arm64), _T("ProxyLaneElevatedARM64.exe")) == 0);
+    info.process = Arm64; info.native = X64;
+    CHECK(SystemRundllDirectory(info) == NULL);
+    info.native = Unknown;
+    CHECK(SystemRundllDirectory(info) == NULL);
+    info.process = Unknown; info.native = Arm64;
+    CHECK(SystemRundllDirectory(info) == NULL);
 
     // Exercise the actual dynamically-resolved Windows API as well as mocks.
     CHECK(Query(GetCurrentProcess(), info));
