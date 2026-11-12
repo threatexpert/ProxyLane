@@ -187,7 +187,7 @@ Replace `YOUR_PSK` with your own key. TLS 1.3 is supported with TLS 1.2 server c
 
 ## Building
 
-For a new fork, start with the [complete build guide](docs/BUILDING_EN.md) ([简体中文](docs/BUILDING.md)). Install the VS 2019 components from `.vsconfig` and the documented Rust/Python tools. The standard entry works in ordinary PowerShell, discovers VS, checks prerequisites, builds incrementally and runs basic checks:
+For a new fork, start with the [complete build guide](docs/BUILDING_EN.md) ([简体中文](docs/BUILDING.md)). Import `vs2019-intel.vsconfig` for Intel-only builds, which need no ARM64 tools or Clang; use the full `.vsconfig` when including ARM64. Also install the documented Rust/Python tools. The standard entry works in ordinary PowerShell, discovers VS, checks prerequisites, builds incrementally and runs basic checks:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -CheckEnvironmentOnly

@@ -8,7 +8,7 @@
 
 当前验证基线为 **Windows 10/11 x64 + Visual Studio 2019 16.11**。ARM64 是在该主机上交叉编译；这不代表已验证在 ARM64 主机或 VS 2022 上构建。
 
-1. 安装 VS 2019 或 Build Tools 2019，选择“使用 C++ 的桌面开发”（Build Tools 中为 C++ 生成工具）。在 Visual Studio Installer 中对 2019 实例选择“更多 → 导入配置”，导入仓库根目录的 [`.vsconfig`](../.vsconfig)，补齐全部架构所需的单独组件。
+1. 安装 VS 2019 或 Build Tools 2019，选择“使用 C++ 的桌面开发”（Build Tools 中为 C++ 生成工具）。在 Visual Studio Installer 中对 2019 实例选择“更多 → 导入配置”：只构建 Intel 版本导入 [`vs2019-intel.vsconfig`](../vs2019-intel.vsconfig)；包含 ARM64 的构建导入 [`.vsconfig`](../.vsconfig)。两份清单均位于仓库根目录。
 2. 安装 Git for Windows、Python 3.8+、Rustup，确保 `git`、`python`、`rustup`、`cargo` 能从新开的 PowerShell 运行。Windows 自带的 `tar.exe` 也必须可用。Python 的 Microsoft Store 占位别名不能代替实际解释器。
 3. 安装 CMake 3.15+ 并加入 PATH；也可使用上述 VS 配置提供的 CMake，统一入口会自动定位它。
 4. 构建 ARM64 时安装 LLVM/Clang，具体操作见下面的“安装 Clang”。只构建 Intel 包不需要安装它。Android NDK 不是项目的构建依赖。
@@ -20,6 +20,31 @@
 | v142 ARM64 工具、ARM64 ATL/MFC、Windows 10 SDK ARM64 库 | ARM64 原生主程序、Hook、后端和探针 |
 
 ARM 包也需要 Intel 工具：它包含 Hook32/64 以支持仿真进程。不要为解决缺依赖而把项目重定向到其他工具集，或移除 XP 兼容选项。
+
+### 只在 x64 Windows 上开发和发布 Intel 版本
+
+如果目标是普通 x64 Windows，不考虑 ARM64，请选择 **`-Architecture x86-x64`（默认值）**，使用 `vs2019-intel.vsconfig`，无需导入包含 ARM64 组件的全量 `.vsconfig`。
+
+| 依赖 | 只构建 Intel 包 | 额外构建 ARM64 包 |
+| --- | --- | --- |
+| VS 2019、MSBuild、v141 x86/x64、v141 ATL/MFC、XP 支持 / Windows 7.1A SDK | 需要 | 同样需要 |
+| v142 x86/x64、Windows 10 SDK、CMake、Git、Python、tar | 需要 | 同样需要 |
+| Rust 1.88.0 MSVC 工具链及 `x86_64-pc-windows-msvc` 目标 | 需要 | 同样需要 |
+| v142 ARM64、ARM64 ATL/MFC、SDK ARM64 库 | 不需要单独安装 | 需要 |
+| Rust `aarch64-pc-windows-msvc` 目标 | 不需要 | 需要 |
+| LLVM/Clang、`-ClangBinDirectory` 参数、ARM64 引导代码检查 | 不需要 | 需要 |
+| Android Studio / Android NDK | 不需要 | 不需要；已有 NDK 时可复用其 Clang |
+
+**当前标准 Intel 发布包同时包含 x86 和 x64 产品**，所以即使使用者只运行 x64 Windows，完整构建打包仍需 x86 工具。它不是纯 x64 单架构包。项目仍使用 `v141_xp`，因此仅面向 Windows 10/11 也不能直接省略 XP 工具组件；无需安装 XP 操作系统或 ARM64 运行环境来编译。
+
+只安装上表 Intel 所需依赖和 x64 Rust 目标后，在普通 PowerShell 执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Architecture x86-x64 -CheckEnvironmentOnly
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Architecture x86-x64 -Package
+```
+
+该模式不会调用 ARM64 构建脚本，不检查 Clang 或 ARM64 工具，不下载 ARM64 Rust 目标。产物写入 `bin/`，只生成 `dist/ProxyLane-版本-Windows.zip` 和对应校验文件。省略 `-Package` 可只编译并运行基础检查。
 
 依赖安装入口：[VS 历史版本](https://visualstudio.microsoft.com/vs/older-downloads/)、[Git](https://git-scm.com/downloads/win)、[Python](https://www.python.org/downloads/windows/)、[Rustup](https://rustup.rs/)、[CMake](https://cmake.org/download/)、[LLVM](https://github.com/llvm/llvm-project/releases)。VS 组件 ID 依据 [Microsoft 的 VS 2019 清单](https://github.com/MicrosoftDocs/visualstudio-docs/blob/main/docs/install/includes/vs-2019/workload-component-id-vs-community.md)。安装器可用性和历史版本访问要求以各官网为准。
 

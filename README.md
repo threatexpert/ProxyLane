@@ -194,7 +194,7 @@ gonc -e ":s5s -u -http" -l -k -psk YOUR_PSK -tls 1083
 
 ## 编译
 
-新 fork 请先阅读 [完整构建指南](docs/BUILDING.md)（[English](docs/BUILDING_EN.md)），按根目录 `.vsconfig` 准备 VS 2019 组件及 Rust、Python 等工具。统一入口可从普通 PowerShell 执行，自动定位 VS、预检依赖、增量编译并运行基础检查：
+新 fork 请先阅读 [完整构建指南](docs/BUILDING.md)（[English](docs/BUILDING_EN.md)）。只构建 Intel 包时导入根目录 `vs2019-intel.vsconfig`，无需 ARM64 工具或 Clang；包含 ARM64 时使用全量 `.vsconfig`。另按指南准备 Rust、Python 等工具。统一入口可从普通 PowerShell 执行，自动定位 VS、预检依赖、增量编译并运行基础检查：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -CheckEnvironmentOnly

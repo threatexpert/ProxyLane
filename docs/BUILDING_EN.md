@@ -8,7 +8,7 @@ Use `scripts/build-release.ps1` as the standard entry point. It discovers VS 201
 
 The validated build host is **Windows 10/11 x64 with Visual Studio 2019 16.11**. ARM64 binaries are cross-compiled on this host; building on an ARM64 host or with VS 2022 has not been validated.
 
-1. Install VS 2019 or Build Tools 2019 with the Desktop development with C++ workload (C++ build tools in Build Tools). In Visual Studio Installer, select **More → Import configuration** for the 2019 instance and import the repository [`.vsconfig`](../.vsconfig) to add the individual components for all architectures.
+1. Install VS 2019 or Build Tools 2019 with the Desktop development with C++ workload (C++ build tools in Build Tools). In Visual Studio Installer, select **More → Import configuration** for the 2019 instance. Import [`vs2019-intel.vsconfig`](../vs2019-intel.vsconfig) for Intel-only builds, or [`.vsconfig`](../.vsconfig) for builds including ARM64. Both files are in the repository root.
 2. Install Git for Windows, Python 3.8+ and Rustup. Ensure `git`, `python`, `rustup`, `cargo` and Windows `tar.exe` work in a new PowerShell. The Python Microsoft Store placeholder is not an interpreter.
 3. Install CMake 3.15+ on PATH, or use the VS CMake component; the standard entry point discovers the bundled CMake automatically.
 4. For ARM64, install LLVM/Clang using the instructions below. Intel-only builds do not require it. Android NDK is not a project build dependency.
@@ -20,6 +20,31 @@ The validated build host is **Windows 10/11 x64 with Visual Studio 2019 16.11**.
 | v142 ARM64 tools, ARM64 ATL/MFC, Windows 10 SDK ARM64 libraries | Native ARM64 products and probes |
 
 ARM packages also need Intel tools for the companion Hooks. Do not retarget projects or remove XP compatibility options to work around missing components.
+
+### Developing and releasing only Intel products on x64 Windows
+
+If you target ordinary x64 Windows without ARM64, select **`-Architecture x86-x64` (the default)** and import `vs2019-intel.vsconfig`. You do not need the full `.vsconfig` containing ARM64 components.
+
+| Dependency | Intel-only package | Additional ARM64 package |
+| --- | --- | --- |
+| VS 2019, MSBuild, v141 x86/x64, v141 ATL/MFC, XP support / Windows 7.1A SDK | Required | Also required |
+| v142 x86/x64, Windows 10 SDK, CMake, Git, Python, tar | Required | Also required |
+| Rust 1.88.0 MSVC toolchain and `x86_64-pc-windows-msvc` target | Required | Also required |
+| v142 ARM64, ARM64 ATL/MFC, SDK ARM64 libraries | No separate installation needed | Required |
+| Rust `aarch64-pc-windows-msvc` target | Not needed | Required |
+| LLVM/Clang, `-ClangBinDirectory`, ARM64 bootstrap check | Not needed | Required |
+| Android Studio / Android NDK | Not needed | Not needed; an existing NDK's Clang can be reused |
+
+**The standard Intel release contains both x86 and x64 products**, so its full build/package still requires x86 tools even when users only run x64 Windows. It is not a pure x64 package. Projects still use `v141_xp`, so targeting only Windows 10/11 does not make the XP tool components optional. Neither an XP operating system nor an ARM64 runtime environment is required to compile.
+
+After installing the Intel dependencies above and the x64 Rust target, run in ordinary PowerShell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Architecture x86-x64 -CheckEnvironmentOnly
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Architecture x86-x64 -Package
+```
+
+This mode does not invoke the ARM64 build script, check Clang/ARM64 tools or download the ARM64 Rust target. Products go to `bin/`; only `dist/ProxyLane-version-Windows.zip` and its checksum are produced. Omit `-Package` to build and run basic checks without packaging.
 
 Official downloads: [older Visual Studio versions](https://visualstudio.microsoft.com/vs/older-downloads/), [Git](https://git-scm.com/downloads/win), [Python](https://www.python.org/downloads/windows/), [Rustup](https://rustup.rs/), [CMake](https://cmake.org/download/), [LLVM](https://github.com/llvm/llvm-project/releases). Component IDs follow [Microsoft's VS 2019 catalog](https://github.com/MicrosoftDocs/visualstudio-docs/blob/main/docs/install/includes/vs-2019/workload-component-id-vs-community.md). Historical installer availability and access requirements are controlled by the providers.
 
