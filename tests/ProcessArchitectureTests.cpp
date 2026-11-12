@@ -8,6 +8,15 @@ namespace
     DWORD major, build;
     BOOL modernSuccess, legacySuccess, wow;
     int legacyCalls;
+    USHORT activeMachine;
+    BOOL machineQuerySuccess;
+    BOOL WINAPI MachineInfo(HANDLE, int infoClass, void* output, DWORD size)
+    {
+        if (infoClass != 9 || size != 8 || !machineQuerySuccess)
+        { SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
+        static_cast<MachineInformation*>(output)->machine = activeMachine;
+        return TRUE;
+    }
     BOOL WINAPI Modern(HANDLE, USHORT* process, USHORT* native)
     {
         if (!modernSuccess) { SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
@@ -161,6 +170,22 @@ int ProcessArchitectureTestsMain()
     CHECK(SystemRundllDirectory(info) == NULL);
     info.process = Unknown; info.native = Arm64;
     CHECK(SystemRundllDirectory(info) == NULL);
+
+    // An ARM64X PE is acceptable only with positive native-ABI confirmation.
+    machineQuerySuccess = TRUE; activeMachine = 0xaa64;
+    CHECK(RequireNativeArm64Hybrid(GetCurrentProcess(), MachineInfo));
+    const USHORT incompatibleViews[] = { 0, 0x8664, 0x014c, 0xa641, 0xa64e, 0xffff };
+    for (int i = 0; i < _countof(incompatibleViews); ++i)
+    {
+        activeMachine = incompatibleViews[i];
+        CHECK(!RequireNativeArm64Hybrid(GetCurrentProcess(), MachineInfo));
+        CHECK(GetLastError() == ERROR_EXE_MACHINE_TYPE_MISMATCH);
+    }
+    machineQuerySuccess = FALSE; activeMachine = 0xaa64;
+    CHECK(!RequireNativeArm64Hybrid(GetCurrentProcess(), MachineInfo));
+    CHECK(GetLastError() == ERROR_ACCESS_DENIED);
+    CHECK(!RequireNativeArm64Hybrid(GetCurrentProcess(), NULL));
+    CHECK(GetLastError() == ERROR_NOT_SUPPORTED);
 
     // Exercise the actual dynamically-resolved Windows API as well as mocks.
     CHECK(Query(GetCurrentProcess(), info));

@@ -4,6 +4,42 @@
 开发分支：`codex/windows-arm64-assessment`。
 本分支正在分阶段适配，尚不能发布为支持 ARM64 的完整产品。下文旧阶段记录保留为历史，当前状态以最新章节为准。
 
+## 2026-11-12：系统命令行程序的 ARM64X 判断与错误反馈
+
+用户在 Windows 11 原生 ARM64 系统反馈：非管理员普通启动 Edge 成功，但 cmd.exe / powershell.exe 提示注入失败，
+没有进一步错误信息。本机检查发现两处问题；尚未在用户设备上确认修复后的行为。
+
+- 原 `PureArm64Image` 看到非零 `CHPEMetadataPointer` 即返回 `ERROR_NOT_SUPPORTED`。
+  这会拒绝 ARM64X 程序的原生 ARM64 执行视图。
+  [Linaro 的实测 PE 文件头](https://linaro.atlassian.net/wiki/spaces/WOAR/pages/28869623809/Identify+CPU+architecture)
+  列出了系统 cmd.exe 和 Windows PowerShell 的 ARM64X 版本；用户尚未提供其实际文件头/错误码，
+  因此该判断是与现象吻合的代码缺陷，不是已完成实机复现的根因结论。
+- 保留进程架构、目标内存 PE 的 ARM64/PE32+、load-config 边界及 ntdll 一致性检查。
+  对有混合元数据的目标，动态调用 Windows 11 的
+  [GetProcessInformation / ProcessMachineTypeInfo](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-process_machine_information)，
+  仅在运行时 `ProcessMachine == 0xAA64` 时放行。API 缺失、调用失败、未知架构及 x64/ARM64EC 模式仍拒绝。
+  这没有开放 ARM 宿主上的跨架构注入，也不以磁盘文件名判断执行架构。
+- `InjectNewProcess` 原先在记录结果和关闭句柄后丢失 Win32 错误。现在保存并恢复该错误，
+  普通严格启动在终止目标之前记录它。弹窗显示十进制/十六进制错误码及系统说明，
+  日志记录目标路径、PID 和错误码；无 PRC 管道/子进程过滤拒绝也设置明确错误。
+  这次错误详情针对普通启动路径，尚未改变提权子进程回传协议。
+- 单元测试覆盖混合视图的原生 ARM64 确认、x86/x64/ARM64EC/未知拒绝，以及 API 缺失/失败。
+  ARM64 `InjectionTestsARM64.exe` 增加系统 cmd.exe 和 Windows PowerShell 的挂起启动、fixture DLL 回调、
+  正常退出检查。该测试在构建机仅交叉编译，须在 ARM64 设备运行。
+
+设备复测：解压新包，普通启动系统 cmd.exe / Windows PowerShell，再确认进程和网络代理。
+如果仍失败，请记录新的弹窗错误码与 `Injection failed: PID ... target=... Win32=...` 日志。
+完整构建输出中的 `InjectionTestsARM64.exe` 与 `InjectionFixtureARM64.dll` 可单独验证原生引导，
+测试不会修改系统程序文件。其余阶段记录中的“所有 ARM64X 均不支持”属于旧限制，以本节为准。
+
+本机验证通过（`build/qa/arm64-shell-fix-*.log`）：ARM64 Release/Debug 构建及 11 项产物架构/哈希、
+Win32/x64 完整解决方案与单元测试、TCP/UDP 统计/卸载、四种父子/孙进程组合（8 次代理连接）、
+PRC 重绑定、IPv6/DNS、32 位宿主真实 UI 与启动注入、Hook 静态 TLS 检查、ARM64 bootstrap 仿真。
+Hook32/64 导入表没有新增 `GetProcessInformation` 或 `IsWow64Process2` 静态依赖。
+新包位于 `dist/arm64-shell-fix/ProxyLane-1.3.10-Windows-ARM64.zip`，固定 5 个产品二进制，
+已验证 ZIP CRC、每个 PE 的架构和包内文件与源产物一致性；不含 helper 或 MITM EXE。
+新增系统 shell 注入用例尚未在 ARM64 上执行，用户设备上的修复效果仍需复测。
+
 ## 2026-11-12：统一使用系统 rundll32，精简打包
 
 本次按用户要求撤销独立 ARM64 提权宿主，ARM64 与 x64 共用现有启动流程：

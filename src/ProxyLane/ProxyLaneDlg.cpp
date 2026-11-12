@@ -1566,7 +1566,7 @@ void CProxyLaneDlg::LaunchDroppedApplication(const InstalledApplications::Applic
 	else if (result == APP_LAUNCH_UAC_CANCELLED)
 		message = Localization::Get(_T("dialog.drop_uac_cancelled"));
 	else if (result == APP_LAUNCH_INJECTION_FAILED)
-		message = Localization::Get(_T("dialog.drop_inject_failed"));
+		message = page3->InjectionFailureMessage();
 	else if (result == APP_LAUNCH_PACKAGED_INJECTION_FAILED)
 		message = Localization::Get(_T("apps.packaged_injection_failed"));
 	else if (result == APP_LAUNCH_ELEVATED_HELPER_FAILED)

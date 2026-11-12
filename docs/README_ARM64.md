@@ -22,7 +22,8 @@
 | 纯 ARM64 进程：启动时注入、附加运行中进程 | 已实现，待 ARM64 实机验收 |
 | 已代理的 ARM64 父进程创建 ARM64 子进程/孙进程 | 已接入现有子进程流程，待 ARM64 实机验收 |
 | x86 / x64 仿真进程及跨架构子进程 | 当前不支持注入 |
-| ARM64EC / ARM64X 混合目标 | 不在当前支持范围 |
+| ARM64X 程序以原生 ARM64 模式运行（如系统命令行程序） | 已修复误拒绝判断，须由 Windows 11 运行时接口确认架构，待实机复测 |
+| ARM64EC / x64 兼容模式目标 | 不在当前支持范围 |
 
 Windows 11 ARM 能仿真运行 x86/x64 应用，但这不等于本包能够代理它们。
 当前普通子进程创建流程在注入失败后会释放 ProxyLane 自己增加的挂起；
@@ -31,7 +32,7 @@ Windows 11 ARM 能仿真运行 x86/x64 应用，但这不等于本包能够代�
 
 SSH 后端和 GUI 提权启动已接入并完成交叉构建；“以管理员身份启动”与 x64 一样使用系统 `rundll32.exe`，不再需要单独的 helper 文件。
 SSH 实际通信、UAC 确认/取消、系统宿主加载 ARM64 Hook、提权目标的代理与子进程仍待 ARM64 实机验收。
-提权启动只支持纯 ARM64 目标；注入失败时终止本次创建的目标，不让它绕过代理继续运行。
+提权启动只支持原生 ARM64 执行模式目标；注入失败时终止本次创建的目标，不让它绕过代理继续运行。
 浏览器 QUIC 策略 Hook 尚未适配。
 不要把其他发行包中的 x86/x64 DLL 改名后放入本目录。
 
@@ -49,8 +50,9 @@ Run `ProxyLaneARM64.exe` with the bundled DLLs in the same directory. An ARM64 V
 Native ARM64 injection and native child-process routing are implemented but await device validation.
 Native SSH is included. Elevated launch uses system `rundll32.exe`, as on x64, with no separate helper executable.
 SSH, UAC and loading the ARM64 Hook into the system host still require ARM64 device validation.
-Elevated launch only supports pure ARM64 targets and terminates its newly created target if injection fails.
-x86/x64 emulated targets, mixed-architecture children, ARM64EC/ARM64X targets and the browser QUIC policy hook
+Elevated launch only supports targets executing natively as ARM64 and terminates its newly created target if injection fails.
+ARM64X executables in native ARM64 mode are accepted only after Windows 11 confirms their active architecture; device retesting is pending.
+x86/x64 emulated targets, mixed-architecture children, ARM64EC/x64-compatible targets and the browser QUIC policy hook
 are not supported. An unsupported child created by an ordinary proxied parent can continue without proxy interception.
 This package contains five ARM64 product binaries; the CA command-line tool, test probes and x86/x64 binaries are excluded.
 

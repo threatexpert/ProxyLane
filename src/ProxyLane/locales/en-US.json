@@ -408,6 +408,7 @@
   "dialog.admin_drop_hot_hint_xp": "Windows will open Run As",
   "dialog.drop_invalid": "The dropped target was not recognized or no longer exists.",
   "dialog.drop_uac_cancelled": "Windows permission confirmation was cancelled; the application was not started.",
+  "dialog.injection_error_detail": "Windows error %lu (0x%08lX): %s",
   "dialog.drop_inject_failed": "Proxy injection failed. The target was cancelled instead of continuing without the proxy.",
   "dialog.drop_elevated_failed": "Elevated launch or proxy injection did not complete; the target was cancelled.",
   "dialog.drop_launch_failed": "The dropped application could not start. Check the file and its permissions.",

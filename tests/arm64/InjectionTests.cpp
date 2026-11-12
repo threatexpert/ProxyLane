@@ -37,7 +37,8 @@ struct Child
         if (hook) CloseHandle(hook);
         if (finish) CloseHandle(finish);
     }
-    void Start(int sequence, bool suspended, LONG result, LONG expectedAtMain)
+    void Start(int sequence, bool suspended, LONG result, LONG expectedAtMain,
+        LPCWSTR application = NULL, LPCWSTR arguments = NULL)
     {
         name = "Local\\ProxyLaneArm64Injection-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(sequence);
         mapping = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(*state), name.c_str());
@@ -54,8 +55,9 @@ struct Child
         DWORD length = GetModuleFileNameW(NULL, self, _countof(self));
         Check(length && length < _countof(self), "GetModuleFileName");
         std::wstring command = L"\"" + std::wstring(self) + L"\" --child " + std::wstring(name.begin(), name.end());
+        if (application) command = L"\"" + std::wstring(application) + L"\" " + (arguments ? arguments : L"");
         STARTUPINFOW si = { sizeof(si) };
-        Check(CreateProcessW(self, &command[0], NULL, NULL, FALSE, suspended ? CREATE_SUSPENDED : 0,
+        Check(CreateProcessW(application ? application : self, &command[0], NULL, NULL, FALSE, suspended ? CREATE_SUSPENDED : 0,
             NULL, NULL, &si, &pi) != FALSE, "CreateProcess");
         if (!suspended) WaitReady();
     }
@@ -152,6 +154,24 @@ int main(int argc, char** argv)
                 child.Complete();
                 std::cout << (startup ? "startup" : "running") << " case " << failure << " passed\n";
             }
+        }
+        // Regress the real system ARM64X executables in their native ARM64
+        // execution mode, not merely a pure-ARM64 test executable. The fixture
+        // signals from gp_HookWinsock; both shells must then exit normally.
+        const wchar_t* shells[] = { L"\\cmd.exe", L"\\WindowsPowerShell\\v1.0\\powershell.exe" };
+        const wchar_t* arguments[] = { L"/d /c exit /b 0", L"-NoLogo -NoProfile -NonInteractive -Command \"exit 0\"" };
+        for (int i = 0; i < 2; ++i)
+        {
+            std::wstring shell = std::wstring(system) + shells[i];
+            Child child;
+            child.Start(++sequence, true, TRUE, 0, shell.c_str(), arguments[i]);
+            Check(InjectDllArm64W(child.pi.hProcess, child.pi.hThread, dll.c_str(), child.name.c_str()) == 1,
+                "Schedule native system shell injection");
+            Check(ResumeThread(child.pi.hThread) == 1, "System shell suspension changed");
+            Check(WaitForSingleObject(child.hook, 15000) == WAIT_OBJECT_0, "System shell hook callback timeout");
+            Check(child.state->calls == 1, "System shell callback count");
+            child.Complete();
+            std::cout << (i ? "powershell.exe" : "cmd.exe") << " native injection passed\n";
         }
         // A thread belonging to another process must not redirect either child.
         Child first, second;

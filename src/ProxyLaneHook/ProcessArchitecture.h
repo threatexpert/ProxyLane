@@ -40,6 +40,25 @@ namespace ProcessArchitecture
 #endif
     }
 
+    // Windows 11 ProcessMachineTypeInfo (9). Keep the wire layout local so
+    // v141_xp / older SDK builds add no static import of GetProcessInformation.
+    struct MachineInformation { USHORT machine, reserved; DWORD attributes; };
+    typedef BOOL (WINAPI* ProcessInformationFn)(HANDLE, int, void*, DWORD);
+    inline BOOL RequireNativeArm64Hybrid(HANDLE process, ProcessInformationFn query)
+    {
+        if (!query) { SetLastError(ERROR_NOT_SUPPORTED); return FALSE; }
+        MachineInformation info = {};
+        if (!query(process, 9, &info, sizeof(info))) return FALSE;
+        // ARM64X in native ARM64 mode is compatible. ARM64EC/x64 mode is not.
+        if (info.machine != 0xaa64) { SetLastError(ERROR_EXE_MACHINE_TYPE_MISMATCH); return FALSE; }
+        return TRUE;
+    }
+    inline BOOL RequireNativeArm64Hybrid(HANDLE process)
+    {
+        return RequireNativeArm64Hybrid(process, reinterpret_cast<ProcessInformationFn>(
+            GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetProcessInformation")));
+    }
+
     typedef BOOL (WINAPI* Wow64Process2Fn)(HANDLE, USHORT*, USHORT*);
     typedef BOOL (WINAPI* Wow64ProcessFn)(HANDLE, PBOOL);
     typedef VOID (WINAPI* NativeSystemInfoFn)(LPSYSTEM_INFO);
@@ -174,8 +193,8 @@ namespace ProcessArchitecture
     enum InjectionRoute { Unsupported, Direct, Helper };
     inline InjectionRoute Route(Architecture source, const ProcessInfo& target)
     {
-        // Only pure native ARM64 -> ARM64 is implemented on Windows on ARM.
-        // The injector additionally checks the target PE for hybrid metadata.
+        // Only native ARM64 -> ARM64 is implemented on Windows on ARM.
+        // For ARM64X the injector additionally confirms the active ARM64 ABI.
         if (source == Arm64 && target.process == Arm64 && target.native == Arm64)
             return Direct;
         if ((source != X86 && source != X64) ||

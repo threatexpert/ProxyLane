@@ -282,6 +282,10 @@ public:
 		const RecentApplications::Entry* saved = NULL);
 	void LaunchRecentApplication(const RecentApplications::Entry& entry);
 	void ShowApplicationLaunchResult(const CString& name, AppLaunchResult result);
+	CString InjectionFailureMessage() const;
+private:
+	DWORD m_launchInjectionError = ERROR_SUCCESS;
+public:
 	AppLaunchResult LaunchPackagedAppAndProxy(
 		LPCTSTR fileName,
 		const CString& manifestDir,

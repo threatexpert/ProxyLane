@@ -59,10 +59,12 @@ namespace
         return true;
     }
 
-    bool PureArm64Image(HANDLE process, ULONG_PTR base, const IMAGE_NT_HEADERS64& nt)
+    bool CompatibleArm64Image(HANDLE process, ULONG_PTR base, const IMAGE_NT_HEADERS64& nt)
     {
-        // IsWow64Process2 alone does not distinguish every hybrid image.
-        // A native ARM64X/EC application is outside this injector's scope.
+        // ARM64X metadata describes the file's dual ABI, not the process's
+        // active ABI. cmd.exe and Windows PowerShell can run its native view.
+        // Keep the in-memory ARM64 PE check, and require a positive runtime
+        // machine query for hybrids instead of rejecting all metadata.
         if (nt.OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG) return true;
         const IMAGE_DATA_DIRECTORY& dir = nt.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG];
         if (!dir.VirtualAddress || !dir.Size) return true;
@@ -78,8 +80,7 @@ namespace
         ULONG64 chpe = 0;
         if (!Read(process, base + dir.VirtualAddress + offset, &chpe, sizeof(chpe))) return false;
         if (!chpe) return true;
-        SetLastError(ERROR_NOT_SUPPORTED);
-        return false;
+        return ProcessArchitecture::RequireNativeArm64Hybrid(process) != FALSE;
     }
 
     bool ResolveNativeApis(HANDLE process, Parameters& params)
@@ -112,7 +113,7 @@ namespace
                 if (!_wcsicmp(mappedPath, imagePath))
                 {
                     IMAGE_NT_HEADERS64 nt = {};
-                    if (!Headers(process, base, nt) || !PureArm64Image(process, base, nt)) return false;
+                    if (!Headers(process, base, nt) || !CompatibleArm64Image(process, base, nt)) return false;
                     mainVerified = true;
                 }
                 if (!_wcsicmp(mappedPath, localPath))

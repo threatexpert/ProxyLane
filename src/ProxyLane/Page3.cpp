@@ -1752,6 +1752,7 @@ void CPage3::OnBnClickedSelectApp()
 AppLaunchResult CPage3::LaunchInteractiveApplication(const InstalledApplications::Application& app,
 	AppLaunchElevationMode elevationMode, const RecentApplications::Entry* saved)
 {
+	m_launchInjectionError = ERROR_SUCCESS;
 	if (!g_MainTab || !g_MainTab->IsProxyRunning()) return APP_LAUNCH_CREATE_PROCESS_FAILED;
 	const CString runningProfile = g_MainTab->GetRunningProfileName();
 	const CString runningIdentity = g_MainTab->GetRunningRecentProfileId();
@@ -1818,6 +1819,23 @@ void CPage3::LaunchRecentApplication(const RecentApplications::Entry& entry)
 	ShowApplicationLaunchResult(entry.app.name, result);
 }
 
+CString CPage3::InjectionFailureMessage() const
+{
+	CString message = Localization::Get(L"dialog.drop_inject_failed");
+	if (m_launchInjectionError)
+	{
+		WCHAR description[512] = {};
+		FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+			NULL, m_launchInjectionError, 0, description, _countof(description), NULL);
+		CString detail(description);
+		detail.Trim();
+		message += L"\r\n\r\n";
+		message += Localization::Format(L"dialog.injection_error_detail", m_launchInjectionError,
+			m_launchInjectionError, static_cast<LPCTSTR>(detail));
+	}
+	return message;
+}
+
 void CPage3::ShowApplicationLaunchResult(const CString& name, AppLaunchResult result)
 {
 	if (result == APP_LAUNCH_CANCELLED || result == APP_LAUNCH_FORWARDED) return;
@@ -1836,8 +1854,8 @@ void CPage3::ShowApplicationLaunchResult(const CString& name, AppLaunchResult re
 		messageKey = _T("dialog.drop_inject_failed");
 	else if (result == APP_LAUNCH_PACKAGED_INJECTION_FAILED)
 		messageKey = _T("apps.packaged_injection_failed");
-	MessageBox(Localization::Get(messageKey), Localization::Get(_T("dialog.drop_failed_title")),
-		MB_OK | MB_ICONERROR);
+	MessageBox(result == APP_LAUNCH_INJECTION_FAILED ? InjectionFailureMessage() : Localization::Get(messageKey),
+		Localization::Get(_T("dialog.drop_failed_title")), MB_OK | MB_ICONERROR);
 }
 
 static BOOL ResolveWindowFinderTarget(
@@ -3536,10 +3554,12 @@ BOOL CPage3::InjectNewProcess(LPHookNewProcessInfo lphnpi)
 
 	if(!g_GlobalProxy || !(pPRC = g_GlobalProxy->GetPRCInstance()))
 	{
+		SetLastError(ERROR_PIPE_NOT_CONNECTED);
 		return FALSE;
 	}
 	if(!pPRC->GetPRCPipeName(szPipeName, MAX_PATH))
 	{
+		SetLastError(ERROR_PIPE_NOT_CONNECTED);
 		return FALSE;
 	}
 
@@ -3550,14 +3570,24 @@ BOOL CPage3::InjectNewProcess(LPHookNewProcessInfo lphnpi)
 	if (!ShouldProxyChildProcess(&hnpi))
 	{
 		CloseHandle(hProcess);
+		SetLastError(ERROR_CANCELLED);
 		return FALSE;
 	}
 
 	CPage2 *pPage2 = g_MainTab->GetPage2();
+	SetLastError(ERROR_SUCCESS);
 	bRet = InjectDll(hProcess, hnpi.dwProcessId, hnpi.dwThreadId, szPipeName);
+	const DWORD injectionError = bRet > 0 ? ERROR_SUCCESS : GetLastError();
 	pPage2->OnChildInjectionResult(&hnpi, bRet > 0);
-
+	if (bRet <= 0)
+	{
+		CString text;
+		text.Format(L"Injection failed: PID %lu, target=\"%s\", Win32=%lu (0x%08lX).\r\n",
+			hnpi.dwProcessId, hnpi.szAppPath, injectionError, injectionError);
+		g_GlobalProxy->GetLogInstance()->LogText(text);
+	}
 	CloseHandle(hProcess);
+	SetLastError(injectionError);
 	return bRet > 0;
 }
 
@@ -3636,6 +3666,7 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 	const CString& initialArguments,
 	const CString& initialWorkingDirectory)
 {
+	m_launchInjectionError = ERROR_SUCCESS;
 	if (!fileName || !fileName[0])
 		return APP_LAUNCH_INVALID_TARGET;
 
@@ -3851,6 +3882,7 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 	BOOL injectionSucceeded = InjectNewProcess(&hnpi);
 	if (!injectionSucceeded && strictInjection)
 	{
+		m_launchInjectionError = GetLastError();
 		TerminateProcess(pi.hProcess, AUTOMATION_EXIT_INJECTION_FAILED);
 		CloseHandle(pi.hProcess);
 		CloseHandle(pi.hThread);

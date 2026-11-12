@@ -408,6 +408,7 @@
   "dialog.admin_drop_hot_hint_xp": "Windows 将打开“运行身份”",
   "dialog.drop_invalid": "无法识别拖入的目标，或目标文件已经不存在。",
   "dialog.drop_uac_cancelled": "已取消 Windows 权限确认，程序未启动。",
+  "dialog.injection_error_detail": "系统错误 %lu（0x%08lX）：%s",
   "dialog.drop_inject_failed": "代理注入失败，目标程序已取消启动，未在无代理状态下继续运行。",
   "dialog.drop_elevated_failed": "提权启动或代理注入未完成，目标程序已取消启动。",
   "dialog.drop_launch_failed": "无法启动拖入的程序，请检查文件状态和运行权限。",
