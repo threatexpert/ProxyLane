@@ -161,6 +161,22 @@ namespace ProcessArchitecture
         }
     }
 
+    inline LPCTSTR SshFileName(Architecture arch)
+    {
+        switch (arch)
+        {
+        case X64: return _T("ProxyLaneSsh64.dll");
+        case Arm64: return _T("ProxyLaneSshARM64.dll");
+        default: return NULL;
+        }
+    }
+
+    inline LPCTSTR ElevatedHelperFileName(Architecture arch)
+    {
+        // Intel hosts retain their existing system rundll32 route.
+        return arch == Arm64 ? _T("ProxyLaneElevatedARM64.exe") : NULL;
+    }
+
     enum InjectionRoute { Unsupported, Direct, Helper };
     inline InjectionRoute Route(Architecture source, const ProcessInfo& target)
     {

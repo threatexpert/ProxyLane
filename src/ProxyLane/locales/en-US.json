@@ -631,7 +631,7 @@
   "page1.ssh_hint": "SSH tunnels TCP only. Sessions connect on demand and are reused, with 15-second keepalives. Test first to verify the host key.",
   "ssh.host_key": "SSH host key (SHA256)",
   "profile.ssh_invalid": "SSH requires a username, a valid SHA256 host key (leave empty for the first test), and native transport. UTF-8 credentials must not exceed 127 bytes each.",
-  "test.ssh_unavailable": "SSH requires 64-bit ProxyLane on Windows 10 / Server 2016 or later, with ProxyLaneSsh64.dll beside the application.",
+  "test.ssh_unavailable": "SSH requires Windows 10 or later on native x64/ARM64 and the matching SSH backend DLL.",
   "test.ssh_unknown_key": "The SSH server host key is not trusted yet. No login password was sent.",
   "test.ssh_changed_key": "The SSH host key differs from the saved key. The connection was rejected without sending a password.",
   "test.ssh_trust_key": "Verify the server address and fingerprint above through a trusted channel. Trust this key?\nTest again after confirming; a single-server profile must also be saved and applied.",

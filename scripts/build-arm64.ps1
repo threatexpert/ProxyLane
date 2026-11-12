@@ -55,10 +55,13 @@ try {
     if ($LASTEXITCODE) { throw 'ARM64 Detours/architecture probe build failed.' }
     & $msbuild tests/arm64/InjectionTests.vcxproj /m "/t:$target" "/p:Configuration=$Configuration" /p:Platform=ARM64 /v:minimal "/flp:logfile=$qa\injection.log;verbosity=normal"
     if ($LASTEXITCODE) { throw 'ARM64 injection test build failed.' }
+    & $msbuild tests/arm64/SshTransportTests.vcxproj /m "/t:$target" "/p:Configuration=$Configuration" /p:Platform=ARM64 /v:minimal "/flp:logfile=$qa\ssh.log;verbosity=normal"
+    if ($LASTEXITCODE) { throw 'ARM64 SSH test build failed.' }
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'build\qa\arm64-assessment\bin\DetoursBuildProbe.exe') -Destination $output -Force
 
     $files = @('ProxyLaneARM64.exe', 'ProxyLaneHookARM64.dll', 'ProxyLaneSecureTransportARM64.dll',
-        'ProxyLaneTrafficARM64.exe', 'DetoursBuildProbe.exe', 'InjectionTestsARM64.exe', 'InjectionFixtureARM64.dll', 'ProxyLaneMitmARM64.dll', 'ProxyLaneMitmARM64.exe')
+        'ProxyLaneTrafficARM64.exe', 'DetoursBuildProbe.exe', 'InjectionTestsARM64.exe', 'InjectionFixtureARM64.dll', 'ProxyLaneMitmARM64.dll', 'ProxyLaneMitmARM64.exe',
+        'ProxyLaneSshARM64.dll', 'ProxyLaneElevatedARM64.exe', 'SshTransportTestsARM64.exe')
     $verified = foreach ($name in $files) {
         $path = Join-Path $output $name
         $bytes = [IO.File]::ReadAllBytes($path)

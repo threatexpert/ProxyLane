@@ -4,6 +4,58 @@
 开发分支：`codex/windows-arm64-assessment`。
 本分支正在分阶段适配，尚不能发布为支持 ARM64 的完整产品。下文旧阶段记录保留为历史，当前状态以最新章节为准。
 
+## 2026-11-12：SSH 后端与原生提权 helper
+
+本次完成代码与交叉构建接入；Windows ARM64 实机验收仍未完成。
+
+- SSH 使用既有固定版本 libssh2 1.11.1、并发通道补丁及 openssl-native 3.5.9，
+  不更换密码学依赖或包哈希。该包同时含 x64/ARM64 的 v142 MT 静态 libcrypto。
+  `prepare-openssl.ps1 -Platform ARM64` 提取 ARM64 库，架构缓存隔离，共享下载包加锁。
+  `build-ssh.ps1 -Platform ARM64 [-OutputDirectory ...]` 输出 `ProxyLaneSshARM64.dll`。
+- Hook 按当前模块架构选择 SSH DLL，保持按需加载；x86、ARM64EC 和旧系统不开放后端。
+  ARM64 Hook 的 Release/Debug 构建均准备 SSH Release 后端，x64 保留既有 Release 构建路径。
+- 新增纯 ARM64 `ProxyLaneElevatedARM64.exe`。GUI 使用 `runas` 启动它，复用既有
+  Base64URL/UTF-8 请求协议和 `ElevatedLaunch` 校验、令牌检查、挂起创建、注入、恢复逻辑。
+  helper 以绝对路径从自身目录加载 Hook，依赖搜索限制为自身目录及系统目录。
+  非 ASCII 外层请求、过长请求、缺失 DLL/入口返回失败，不通过代码页转换接受歧义输入。
+- Intel GUI 保留系统 rundll32 路径；辅助项目的 x64 配置仅用于同源宿主回归，不加入 Intel 发行包。
+  不开放 ARM 宿主上的 x86/x64 注入，不修改 ARM64EC/ARM64X 边界，也不适配浏览器 QUIC 策略 Hook。
+- ARM64 包现含 7 个产品二进制：原 5 个文件加 SSH DLL、提权 helper。
+  额外的 SSH 测试程序仅存在于构建目录；固定打包清单继续排除测试程序及其他架构文件。
+
+ARM64 本机构建后，在设备上运行 SSH 测试（Python + Paramiko >= 3.5；无需编译器）：
+
+```powershell
+.\tests\run-ssh-transport-tests.ps1 -Platform ARM64 -Full
+python tests/ElevatedHelperTests.py --helper bin/ARM64/Release/ProxyLaneElevatedARM64.exe --hook bin/ARM64/Release/ProxyLaneHookARM64.dll
+```
+
+SSH runner 使用 `scripts/build-arm64.ps1` 生成的 `SshTransportTestsARM64.exe`，
+并拒绝在 x64 主机冒充 ARM64 运行验收。`-BinaryDirectory` 可指定设备上的完整构建输出。
+`-PythonExecutable` 可指定隔离环境中的 Python；runner 启动前检查 Paramiko >= 3.5，避免旧版服务器在 AES-GCM 用例中崩溃后表现为客户端超时。
+helper 自动测试仅验证协议和失败路径，不触发 UAC，也不请求成功创建目标。
+还须在标准用户下从 GUI 选择纯 ARM64 测试程序，分别确认/取消 UAC；
+确认代理流量、目标 PID、原生子进程继承，以及不支持目标注入失败后不遗留运行进程。
+这些实机项和 Windows XP 动态加载均尚未执行。
+
+本机验证记录（`build/qa/arm64-ssh-helper-*`）：
+
+- ARM64 Release/Debug 全量构建通过，每种配置 12 个产物均为原生 `0xAA64`；
+  校验清单与 SHA256 在 `arm64-build/{Release,Debug}/verification.json`，`RuntimeTested=false`。
+- ARM64 SSH DLL 已检查 `libssh2_init`、三项并发通道扩展和 `plssh_pump` 导出；
+  只依赖 Windows 系统 DLL，没有额外 OpenSSL / CRT DLL。
+- Win32/x64 Release 构建、单元测试、TCP/UDP 统计/重启/卸载、四种父子/孙进程组合、
+  8 次代理连接、重绑定及 IPv6/DNS 通过（`intel-regression.log`）。
+- x64 SSH `-Full` 全套测试通过，包括 RSA/ECDSA/Ed25519、加密私钥与 Unicode 路径、
+  Curve25519/AES-GCM、混合代理链、并发 OPEN、信任/认证失败、取消、超时、失联与空闲复用
+  （`ssh-regression.log`）。本机默认 Paramiko 3.1.0 不满足要求，使用独立 venv 的 3.5.1 重跑通过，系统环境未更改。
+- 同源 x64 helper 配合真实 Hook DLL 通过 18 项检查，包括中文/空格/逗号目录、
+  不从工作目录加载 DLL、损坏请求、非法 UTF-8、非管理员有效请求返回拒绝；未触发 UAC。
+- 32 位宿主真实 UI/限制/启动/注入回归通过（`legacy.log`）；最终 Hook32/64 均无静态 TLS 目录。
+- ARM64 引导代码两组共 9 条路径的仿真测试通过；本次未更改引导机器码。
+- 两包的 ZIP CRC、7 个产品二进制的架构与源文件字节一致性通过；ARM 包新增 SSH/helper 的缺失及错架构负向检查通过。
+  包清单记录在 `arm64-ssh-helper-package-{intel,arm64}.json`。
+
 ## 2026-11-12：独立打包
 
 常规包保持 `ProxyLane-版本-Windows.zip`，只包含 x86/x64 产品组件。

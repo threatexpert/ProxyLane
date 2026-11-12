@@ -8,6 +8,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ProxyLane", "ProxyLane\Prox
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ProxyLaneTests", "..\tests\ProxyLaneTests.vcxproj", "{E7540CAB-F4E1-4BF3-BD20-C6A81B34FA47}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ProxyLaneElevated", "ProxyLaneElevated\ProxyLaneElevated.vcxproj", "{86D83301-BEF8-4C88-9E9C-D319224B1045}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -18,6 +20,14 @@ Global
 		Release|ARM64 = Release|ARM64
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{86D83301-BEF8-4C88-9E9C-D319224B1045}.Debug|Win32.ActiveCfg = Debug|x64
+		{86D83301-BEF8-4C88-9E9C-D319224B1045}.Debug|x64.ActiveCfg = Debug|x64
+		{86D83301-BEF8-4C88-9E9C-D319224B1045}.Debug|ARM64.ActiveCfg = Debug|ARM64
+		{86D83301-BEF8-4C88-9E9C-D319224B1045}.Debug|ARM64.Build.0 = Debug|ARM64
+		{86D83301-BEF8-4C88-9E9C-D319224B1045}.Release|Win32.ActiveCfg = Release|x64
+		{86D83301-BEF8-4C88-9E9C-D319224B1045}.Release|x64.ActiveCfg = Release|x64
+		{86D83301-BEF8-4C88-9E9C-D319224B1045}.Release|ARM64.ActiveCfg = Release|ARM64
+		{86D83301-BEF8-4C88-9E9C-D319224B1045}.Release|ARM64.Build.0 = Release|ARM64
 		{2FF92BAD-87A2-4929-85B9-0DF15475603D}.Debug|Win32.ActiveCfg = Debug|Win32
 		{2FF92BAD-87A2-4929-85B9-0DF15475603D}.Debug|Win32.Build.0 = Debug|Win32
 		{2FF92BAD-87A2-4929-85B9-0DF15475603D}.Debug|x64.ActiveCfg = Debug|x64

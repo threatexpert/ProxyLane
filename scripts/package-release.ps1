@@ -33,6 +33,8 @@ if ($Architecture -eq 'ARM64') {
         @{ Source = (Join-Path $binaryDirectory 'ProxyLaneSecureTransportARM64.dll'); Entry = 'ProxyLaneSecureTransportARM64.dll'; Versioned = $false; Machine = 0xaa64 },
         @{ Source = (Join-Path $binaryDirectory 'ProxyLaneMitmARM64.dll'); Entry = 'ProxyLaneMitmARM64.dll'; Versioned = $false; Machine = 0xaa64 },
         @{ Source = (Join-Path $binaryDirectory 'ProxyLaneMitmARM64.exe'); Entry = 'ProxyLaneMitmARM64.exe'; Versioned = $false; Machine = 0xaa64 },
+        @{ Source = (Join-Path $binaryDirectory 'ProxyLaneSshARM64.dll'); Entry = 'ProxyLaneSshARM64.dll'; Versioned = $false; Machine = 0xaa64 },
+        @{ Source = (Join-Path $binaryDirectory 'ProxyLaneElevatedARM64.exe'); Entry = 'ProxyLaneElevatedARM64.exe'; Versioned = $false; Machine = 0xaa64 },
         @{ Source = (Join-Path $repositoryRoot 'docs/README_ARM64.md'); Entry = 'README.md'; Versioned = $false }
     )
     $archivePlatform = 'Windows-ARM64'

@@ -971,7 +971,8 @@ static AppLaunchResult LaunchElevatedAndProxy(
 
 	CString hookPath = GetProxyLaneHookModulePath(ProcessArchitecture::CurrentModule());
 	if (hookPath.IsEmpty()) return APP_LAUNCH_ELEVATED_HELPER_FAILED;
-	if (hookPath.Find(_T(',')) >= 0)
+	const LPCTSTR nativeHelper = ProcessArchitecture::ElevatedHelperFileName(ProcessArchitecture::CurrentModule());
+	if (!nativeHelper && hookPath.Find(_T(',')) >= 0)
 		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
 	const DWORD hookAttributes = GetFileAttributes(hookPath);
 	if (hookAttributes == INVALID_FILE_ATTRIBUTES ||
@@ -980,8 +981,19 @@ static AppLaunchResult LaunchElevatedAndProxy(
 		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
 	}
 
-	CString rundllPath = ChooseRundll32(GetCurrentProcess());
-	if (rundllPath.IsEmpty()) return APP_LAUNCH_ELEVATED_HELPER_FAILED;
+	CString helperPath;
+	if (nativeHelper)
+	{
+		const int separator = hookPath.ReverseFind(_T('\\'));
+		if (separator < 0) return APP_LAUNCH_ELEVATED_HELPER_FAILED;
+		helperPath = hookPath.Left(separator + 1) + nativeHelper;
+		const DWORD attributes = GetFileAttributes(helperPath);
+		if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY))
+			return APP_LAUNCH_ELEVATED_HELPER_FAILED;
+	}
+	else
+		helperPath = ChooseRundll32(GetCurrentProcess());
+	if (helperPath.IsEmpty()) return APP_LAUNCH_ELEVATED_HELPER_FAILED;
 	CString encodedRequestWide;
 	WCHAR* encodedWideBuffer = encodedRequestWide.GetBuffer(encodedRequest.GetLength());
 	const int convertedLength = MultiByteToWideChar(
@@ -996,17 +1008,20 @@ static AppLaunchResult LaunchElevatedAndProxy(
 		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
 
 	CString parameters;
-	parameters.Format(
-		_T("\"%s\",ElevatedLaunch --request=%s"),
-		(LPCTSTR)hookPath,
-		(LPCTSTR)encodedRequestWide);
+	if (nativeHelper)
+		parameters.Format(_T("--request=%s"), (LPCTSTR)encodedRequestWide);
+	else
+		parameters.Format(
+			_T("\"%s\",ElevatedLaunch --request=%s"),
+			(LPCTSTR)hookPath,
+			(LPCTSTR)encodedRequestWide);
 
 	SHELLEXECUTEINFO shellInfo = { 0 };
 	shellInfo.cbSize = sizeof(shellInfo);
 	shellInfo.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
 	shellInfo.hwnd = ownerWindow;
 	shellInfo.lpVerb = _T("runas");
-	shellInfo.lpFile = rundllPath;
+	shellInfo.lpFile = helperPath;
 	shellInfo.lpParameters = parameters;
 	shellInfo.nShow = SW_HIDE;
 

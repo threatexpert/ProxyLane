@@ -631,7 +631,7 @@
   "page1.ssh_hint": "SSH 仅代理 TCP；按需建立并复用会话，每 15 秒保活。首次使用请先测试并核对主机指纹。",
   "ssh.host_key": "SSH 主机指纹（SHA256）",
   "profile.ssh_invalid": "SSH 需要登录用户名、有效的 SHA256 主机指纹（首次测试可留空）及原生传输；用户名和密码的 UTF-8 长度不能超过 127 字节。",
-  "test.ssh_unavailable": "SSH 需要 Windows 10 / Server 2016 或更新版本的 64 位 ProxyLane，以及同目录下的 ProxyLaneSsh64.dll。",
+  "test.ssh_unavailable": "SSH 需要 Windows 10 或更高版本的原生 x64/ARM64 环境，以及对应架构的 SSH 后端 DLL。",
   "test.ssh_unknown_key": "尚未信任此 SSH 服务器的主机指纹。未发送登录密码。",
   "test.ssh_changed_key": "SSH 主机指纹与保存的记录不一致，连接已拒绝。未发送登录密码。",
   "test.ssh_trust_key": "请通过可信渠道核对上面的服务器地址和指纹。是否信任此指纹？\n确认后请重新测试；单服务器配置还需保存并应用。",

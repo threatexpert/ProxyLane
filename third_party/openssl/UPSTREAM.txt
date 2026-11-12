@@ -13,7 +13,7 @@ OpenSSL/Microsoft audit of the third-party binaries. Recheck source provenance,
 signature and SSH authentication tests before changing the pinned package.
 
 scripts/prepare-openssl.ps1 downloads and verifies this exact package and
-extracts only headers, libcrypto_static_v142.lib (x64 / Release / MT), and the
+extracts only headers, libcrypto_static_v142.lib (selected x64 or ARM64 / Release / MT), and the
 license. No OpenSSL build, Perl, NASM, NuGet account or .NET SDK is required by
 consumers. Offline builds can place the same .nupkg in build/deps first.
 Archive validation on each invocation protects the pinned download; per-cache

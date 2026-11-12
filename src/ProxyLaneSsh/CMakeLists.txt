@@ -4,13 +4,13 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
 set(CRYPTO_BACKEND OpenSSL CACHE STRING "" FORCE)
 set(OPENSSL_USE_STATIC_LIBS TRUE)
 set(OPENSSL_MSVC_STATIC_RT TRUE)
-if(NOT PROXYLANE_OPENSSL_ROOT OR NOT PROXYLANE_OPENSSL_VERSION)
+if(NOT PROXYLANE_OPENSSL_ROOT OR NOT PROXYLANE_OPENSSL_VERSION OR NOT PROXYLANE_OPENSSL_CRYPTO)
   message(FATAL_ERROR "Run scripts/build-ssh.ps1 to prepare the pinned OpenSSL dependency")
 endif()
 set(OPENSSL_INCLUDE_DIR "${PROXYLANE_OPENSSL_ROOT}/include" CACHE PATH "" FORCE)
 set(OPENSSL_ROOT_DIR "${PROXYLANE_OPENSSL_ROOT}")
 # FindOpenSSL uses LIB_EAY_RELEASE on MSVC, including for OpenSSL 3.x.
-set(LIB_EAY_RELEASE "${PROXYLANE_OPENSSL_ROOT}/lib/win-x64/native/libcrypto_static_v142.lib" CACHE FILEPATH "" FORCE)
+set(LIB_EAY_RELEASE "${PROXYLANE_OPENSSL_ROOT}/${PROXYLANE_OPENSSL_CRYPTO}" CACHE FILEPATH "" FORCE)
 find_package(OpenSSL "${PROXYLANE_OPENSSL_VERSION}" EXACT REQUIRED COMPONENTS Crypto)
 # The pinned library has no zlib dependency. Do not pick up a developer's
 # unrelated global installation through libssh2's optional package search.
@@ -20,10 +20,10 @@ set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(ENABLE_ZLIB_COMPRESSION OFF CACHE BOOL "" FORCE)
-# This backend is intentionally x64 / Windows 10+; legacy protocols do not
+# This backend supports native x64 and ARM64 / Windows 10+; legacy protocols do not
 # depend on it. Static CRT avoids an additional redistributable requirement.
-if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-  message(FATAL_ERROR "ProxyLane SSH backend requires x64")
+if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT CMAKE_GENERATOR_PLATFORM MATCHES "^(x64|ARM64)$")
+  message(FATAL_ERROR "ProxyLane SSH backend requires native x64 or ARM64")
 endif()
 add_subdirectory("${LIBSSH2_SOURCE}" libssh2)
 target_sources(libssh2_shared PRIVATE SessionPump.c)

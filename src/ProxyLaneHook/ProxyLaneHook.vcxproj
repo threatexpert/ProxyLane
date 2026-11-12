@@ -585,4 +585,9 @@
           Outputs="$(ProjectDir)..\..\bin\ProxyLaneSsh64.dll;$(ProjectDir)..\..\build\deps\ssh-backend.stamp">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)..\..\scripts\build-ssh.ps1&quot; -Platform x64" />
   </Target>
+  <Target Name="BuildSshBackendARM64" AfterTargets="Build" Condition="'$(Platform)'=='ARM64'"
+          Inputs="$(ProjectDir)..\..\scripts\build-ssh.ps1;$(ProjectDir)..\..\scripts\prepare-openssl.ps1;$(ProjectDir)..\..\third_party\openssl\dependency.json;$(ProjectDir)..\ProxyLaneSsh\CMakeLists.txt;$(ProjectDir)..\ProxyLaneSsh\SessionPump.c;$(ProjectDir)..\..\third_party\libssh2\UPSTREAM.txt;$(ProjectDir)..\..\third_party\libssh2\concurrent-channel-open.patch;$(ProjectDir)..\..\third_party\libssh2\include\libssh2.h;$(ProjectDir)..\..\third_party\libssh2\COPYING"
+          Outputs="$(OutDir)ProxyLaneSshARM64.dll;$(ProjectDir)..\..\build\deps\ssh-backend-ARM64.stamp">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)..\..\scripts\build-ssh.ps1&quot; -Platform ARM64 -OutputDirectory &quot;$(OutDir).&quot;" />
+  </Target>
 </Project>

@@ -27,5 +27,5 @@ BOOL ProxyLaneInjectSuspendedProcess(
 	LPCSTR pipeName,
 	ProxyLaneCreateProcessWFunction createProcessFunction);
 
-// Elevated rundll32 entry point hosted by the existing Hook DLL.
+// Shared entry point for system rundll32 and the native ARM64 elevated helper.
 void CALLBACK ElevatedLaunch(HWND hwnd, HINSTANCE instance, LPSTR commandLine, int showCommand);
