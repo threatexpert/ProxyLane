@@ -492,3 +492,10 @@ ARM64 包增加同版 Hook32/64，保留原生后端；Intel 包仍不带 ARM64�
 用户复测确认 x64 PowerShell 附加后的子进程接管已恢复。后续审查发现 HOOKMODULE_KERNEL32 在 Windows 8+ 已映射为 KernelBase.dll，原先额外查询 KernelBase!CreateProcessW 的分支既重复，也会在 Windows 7 缺少该导出时使安装失败。
 
 现仅通过已有模块映射安装一次 CreateProcessW，删除第二个回调、绑定项及专用去重/导出包装函数。保留动态 TLS 防重复处理、XP 原有行为和原生 ARM64 内部入口。DLL 存在性检查只维持原先额外 Hook 的启用范围，不再推断导出归属。LoadLibraryExW 等其他 API 的路径未随此次清理改变。Windows 7 与 XP 的实机运行未在本次环境验证。
+
+
+### LoadLibraryExW 独立模块选择
+
+LoadLibraryExW 使用独立的 HOOKMODULE_LIBRARYLOADER：只有当前进程已加载 KernelBase 且它导出 LoadLibraryExW 时才选择 KernelBase，否则回退 Kernel32。进程创建 API 的 HOOKMODULE_KERNEL32 版本映射保持不变。始终只有一个 LoadLibraryExW 绑定，不依赖 Detours 跳过 Windows 7 Kernel32 的函数序言和跳转包装。
+
+回归新增模块不存在/导出缺失的回退检查，以及独立测试进程内的单 Hook 覆盖：经 Kernel32 和直接 KernelBase 调用均进入同一个 Hook，原始 trampoline 可正常加载，卸载 Hook 后恢复原行为。Windows 7/XP 设备运行仍须另行验证，现代 Windows 上的测试不能替代它。

@@ -6,6 +6,7 @@
 #include "stdafx.h"
 #include "BrowserQuicPolicy.h"
 #include "HookWinsock.h"
+#include "LibraryLoaderHook.h"
 #include <psapi.h>
 #include "GlobalProxy.h"
 #include "token.h"
@@ -342,6 +343,7 @@ CHookWinsock::CHookWinsock(void)
 
 	m_ModuleName[HOOKMODULE_WS2_32] = "Ws2_32.dll";
 	m_ModuleName[HOOKMODULE_ADVAPI32] = "Advapi32.dll";
+	m_ModuleName[HOOKMODULE_LIBRARYLOADER] = LibraryLoaderHook::ModuleName();
 
 	if (IsWin8OrLater())
 		m_ModuleName[HOOKMODULE_KERNEL32] = "KernelBase.dll";
@@ -2741,8 +2743,9 @@ BOOL CHookWinsock::HookWinsock()
 		}
 
         if(BrowserQuicPolicy::Enabled()) {
-            // Kernel32's export resolves to KernelBase on modern Windows.
-            bool prepared=HookAPI(HOOKMODULE_KERNEL32,_EHF(LoadLibraryExW),"LoadLibraryExW",_HOOKFUNC(LoadLibraryExW),_TRAMPFUNC(LoadLibraryExW))
+            // Prefer KernelBase's actual loader export; older systems fall
+            // back to Kernel32. Install one hook, independent of process APIs.
+            bool prepared=HookAPI(HOOKMODULE_LIBRARYLOADER,_EHF(LoadLibraryExW),"LoadLibraryExW",_HOOKFUNC(LoadLibraryExW),_TRAMPFUNC(LoadLibraryExW))
                 &&HookAPI(HOOKMODULE_WS2_32,_EHF(send),"send",_HOOKFUNC(send),_TRAMPFUNC(send))
                 &&HookAPI(HOOKMODULE_WS2_32,_EHF(WSASend),"WSASend",_HOOKFUNC(WSASend),_TRAMPFUNC(WSASend));
             if(prepared && ApplyHooks(true))return TRUE;

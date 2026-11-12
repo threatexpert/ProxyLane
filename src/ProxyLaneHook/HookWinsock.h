@@ -18,6 +18,7 @@ typedef enum
 	HOOKMODULE_WS2_32 = 0,
 	HOOKMODULE_KERNEL32,
 	HOOKMODULE_ADVAPI32,
+	HOOKMODULE_LIBRARYLOADER,
 	HOOKMODULE_COUNT
 }eHOOKMODUDLE;
 
@@ -82,7 +83,7 @@ class CHookWinsock
 			return &name[0];
 		}
 
-		char * operator =(char *lpsz)
+		char * operator =(const char *lpsz)
 		{
 			int i=0;
 
