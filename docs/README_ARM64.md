@@ -2,6 +2,22 @@
 
 本包面向 Windows 11 ARM64。原生命令行程序的 ARM64X 修复已获用户实机反馈；新增跨架构注入仍待 ARM 设备完整验收，不代表全部兼容性已经验证。
 
+## 实现状态与验证状态
+
+以下“待验收”表示代码已实现，但尚未在 Windows 11 ARM 真机上完成全部运行测试，不表示功能尚未开发。
+
+| 功能 | 实现状态 | Windows 11 ARM 验证状态 |
+| --- | --- | --- |
+| ARM64/x64/x86 目标注入、附加及跨架构子进程代理 | 已实现，三种 Hook 已构建并打包 | 原生 ARM64X 命令行程序及 x64 PowerShell 子进程已有用户成功反馈；完整九种架构组合仍待验收 |
+| SSH 后端 | 已实现，原生 ARM64 DLL 已构建并打包 | ARM 真机专项验收待完成 |
+| MITM/TLS 后端 | 已实现，原生 ARM64 DLL 已构建并打包 | ARM 真机专项验收待完成 |
+| UAC / 管理员启动 | 已实现，使用系统 rundll32，无独立提权 helper | ARM 真机提权及跨架构组合验收待完成 |
+| 浏览器专用 QUIC 策略干预 | ARM64 适配未实现；按用户决定暂缓 | 不纳入本轮验收范围 |
+
+完整跨架构“矩阵”是一组测试用例，不是一项尚未实现的功能。编译通过及 Intel 回归通过不能替代 ARM 真机验收，也不代表任意 ARM64EC 混合模块都兼容。
+
+2026-11-12 决定：暂缓 ARM64 浏览器专用 QUIC 策略干预。ARM64 宿主目前不启用这项策略，包括其代理的 x64 仿真浏览器；不宣称已与 amd64 的此项功能对齐。这里指浏览器内部策略 Hook，不表示常规 UDP 代理未实现。
+
 ## 文件与启动
 
 完整解压后运行 `ProxyLaneARM64.exe`，保持以下 7 个产品二进制在同一目录：
@@ -28,7 +44,7 @@ Hook32/64 与 Intel 包来自同一版本构建，不能用旧版本 DLL 替换�
 - 注入排队成功不等于 Hook 初始化成功；应检查 PL 中的初始化结果和实际代理流量。
 
 普通子进程流程在注入失败后会释放 PL 自己增加的挂起，子进程可能继续运行而未被代理；调用者原本要求的挂起不由 PL 取消。严格“启动并代理”以及提权启动失败时终止本次创建的目标。
-SSH、UAC 和全部跨架构网络/子进程组合仍需 ARM 设备验证。浏览器 QUIC 策略 Hook 的 ARM 原生适配不属于本次跨架构修改。
+SSH、MITM/TLS、UAC 和全部跨架构网络/子进程组合均已有实现，仍需 ARM 设备完成运行验收。浏览器专用 QUIC 策略干预的 ARM64 适配未实现，已明确暂缓。
 DoH 的本地 UDP 回包保留实际中继来源地址，不提供原 DNS 服务器来源地址透明性。
 
 ## ARM 真机矩阵验收
@@ -45,10 +61,12 @@ python tests/CrossArchitectureE2ETests.py --bin <完整解压的ARM64包目录> 
 ## English
 
 Experimental Windows 11 ARM64 package. Native ARM64X shell injection has user-reported device success; the new cross-architecture matrix still requires Windows ARM device validation.
+Cross-architecture injection/child handling, SSH, MITM/TLS and elevated launch are implemented and built. Pending device validation means incomplete runtime testing, not missing implementation. The x64 PowerShell child-process fix also has user-reported device success.
+As decided on 2026-11-12, ARM64 adaptation of the browser-specific QUIC policy intervention is not implemented and is deferred, outside the current acceptance scope. The ARM64 host does not enable this policy, including for emulated x64 browsers. This limitation concerns browser-internal policy hooks, not the implementation of ordinary UDP proxying.
 Run `ProxyLaneARM64.exe` with all seven bundled binaries. The ARM64 host uses native transport/MITM/SSH backends. Matching-version Hook32 and Hook64 support the x86/x64 target paths; no Intel GUI or backend binaries are needed for these targets.
 Injection selects the target's active ABI. Cross-architecture routes use system rundll32 with explicit machine selection and verify the helper before execution. Startup, running-process attachment, elevated launch and child injection share this routing. ARM64EC/x64 mode uses Hook64; arbitrary mixed-module hooks are not separately certified.
 An injection scheduling result is not a Hook initialization acknowledgment. On ordinary child injection failure, PL releases only its own suspension, so that child may continue without interception. Strict and elevated launch terminate the newly created target on injection failure.
 The package contains no standalone elevation helper, CA executable, debug symbols or test probes. Intel releases remain free of ARM64 binaries. Hook32 retains its XP static-TLS check; XP runtime validation has not been performed here.
-For device tests, run the Python command above using native 64-bit Python with psutil and all three probes. Expected results: 18 startup cases through Kernel32/KernelBase, 9 attachment-then-child cases, 82 proxied connections. KernelBase cases also check failed creation and caller-owned suspension. UAC, SSH and broader application compatibility need separate device checks.
+For device tests, run the Python command above using native 64-bit Python with psutil and all three probes. Expected results: 18 startup cases through Kernel32/KernelBase, 9 attachment-then-child cases, 82 proxied connections. KernelBase cases also check failed creation and caller-owned suspension. UAC, SSH, MITM/TLS and broader application compatibility need separate device checks.
 
 [Windows on Arm emulation reference](https://learn.microsoft.com/en-us/windows/arm/apps-on-arm-x86-emulation)

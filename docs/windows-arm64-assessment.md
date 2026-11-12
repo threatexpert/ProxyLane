@@ -499,3 +499,11 @@ ARM64 包增加同版 Hook32/64，保留原生后端；Intel 包仍不带 ARM64�
 LoadLibraryExW 使用独立的 HOOKMODULE_LIBRARYLOADER：只有当前进程已加载 KernelBase 且它导出 LoadLibraryExW 时才选择 KernelBase，否则回退 Kernel32。进程创建 API 的 HOOKMODULE_KERNEL32 版本映射保持不变。始终只有一个 LoadLibraryExW 绑定，不依赖 Detours 跳过 Windows 7 Kernel32 的函数序言和跳转包装。
 
 回归新增模块不存在/导出缺失的回退检查，以及独立测试进程内的单 Hook 覆盖：经 Kernel32 和直接 KernelBase 调用均进入同一个 Hook，原始 trampoline 可正常加载，卸载 Hook 后恢复原行为。Windows 7/XP 设备运行仍须另行验证，现代 Windows 上的测试不能替代它。
+
+### 2026-11-12：实现状态澄清与 QUIC 策略暂缓
+
+按用户决定，ARM64 浏览器专用 QUIC 策略干预暂缓，不纳入本轮验收范围。这项适配尚未实现，不能写成“已实现、只待测试”。当前 ARM64 宿主不启用 BrowserQuicPolicy，包括面向 x64 仿真浏览器的策略下发。它与常规 UDP 代理是不同功能，不能据此推断 ARM64 没有 UDP 代理能力。
+
+跨架构注入/附加/子进程代理、原生 SSH 后端、MITM/TLS 后端及使用系统 rundll32 的 UAC 提权启动均已有实现，并已完成对应构建和打包。其中原生 ARM64X 命令行注入、x64 PowerShell 附加后子进程接管已有用户实机成功反馈；完整 ARM 架构组合以及 SSH、MITM/TLS、UAC 专项运行验收尚未完成。“待验收”表示测试证据尚不完整，不表示这些功能尚未开发。
+
+完整跨架构矩阵指三种架构之间的测试组合，不是额外待开发的功能。Intel 回归和 ARM 交叉编译不能替代 Windows 11 ARM 真机运行；任意 ARM64EC 混合模块兼容性也不作全面承诺。当前状态表及设备测试方法见 [ARM64 包说明](README_ARM64.md)。
