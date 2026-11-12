@@ -129,11 +129,14 @@ Transport=PLAIN
                         str(probe[child]), str(probe[source])], cwd=directory,
                         stdin=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW)
                     try:
+                        wait_for(Path(str(report) + ".ready").exists, waiting)
                         subprocess.run([str(probe[source]), "--attach", str(waiting.pid), pipe,
                             str(directory / ("ProxyLaneHook%s.dll" % suffix[target]))],
                             cwd=directory, check=True, timeout=25)
                         waiting.communicate(b"G\n", timeout=25)
                         assert waiting.returncode == 0, report.read_text(encoding="utf-8-sig") if report.exists() else waiting.returncode
+                        if not arm:
+                            assert "public_entries_unchanged=1" in report.read_text(encoding="utf-8-sig")
                         for depth, architecture in enumerate((target, child, source)):
                             contents = Path(str(report) + ".child" * depth).read_text(encoding="utf-8-sig")
                             expected = str(directory / ("ProxyLaneHook%s.dll" % suffix[architecture]))

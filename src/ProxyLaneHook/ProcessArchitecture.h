@@ -14,6 +14,13 @@ namespace ProcessArchitecture
         ProcessInfo() : process(Unknown), native(Unknown) {}
     };
 
+    inline bool NeedsPublicCreateProcessHook(const ProcessInfo& current)
+    {
+        // Only Intel emulation on ARM needs the extra public API boundary.
+        // Native Intel (including WOW64) and native ARM keep their old hooks.
+        return current.native == Arm64 && (current.process == X86 || current.process == X64);
+    }
+
     inline Architecture FromMachine(USHORT machine)
     {
         switch (machine)

@@ -537,3 +537,11 @@ hook_CreateProcessInternalW            RVA 0x8ae38
 本次验证：ARM64 Release/Debug 构建通过；Release DLL 中 ResolveNativeApis 的固定栈帧从 197616 字节降为 1072 字节（包含保存寄存器的空间，不包含所调用函数）。引导代码模拟测试通过，Intel 跨架构回归通过 8 个启动用例、4 个附加后子进程用例和 37 次代理连接；Hook32/64 最终 DLL 的静态 TLS 检查通过。XP 实机未测试。构建、符号化及回归日志保存于 build/qa/firefox-arm64-stack。
 
 2026-11-12 用户复测确认：修复提交 6bbab42 对应版本的 i386、amd64、ARM64 Firefox 均正常、稳定地透明代理。Firefox ARM64 栈溢出问题更新为“已修复，用户真机复测通过”。该反馈验证浏览器实际使用，不等同于新增小栈回归程序或完整自动化跨架构矩阵已运行；浏览器专用 QUIC 策略干预继续暂缓。
+
+### 2026-11-12：将公开 CreateProcessW Hook 限定到 ARM 仿真进程
+
+根据用户要求，新增公开入口的启用条件改为当前进程的 native=ARM64 且 process=x86/x64。原生 x86/x64 Windows（包括 x64 上的 WOW64 进程）不再安装这个额外 Hook，保留 CreateProcessInternalW / CreateProcessWithLogonW；原生 ARM64 路径不变。仍使用现有 ProcessArchitecture 动态 API 查询，查询失败记录 query-architecture 错误而不猜测运行架构。LoadLibraryExW 的独立模块选择、跨架构路由及动态 TLS 去重机制保持不变。
+
+测试增加平台条件覆盖，并在跨架构附加探针中于注入前保存 Kernel32/KernelBase 的 CreateProcessW 入口字节，注入并确认代理流量后检查原生 Intel 入口未被修改，再验证子进程和孙进程代理。探针使用 ready 文件确保附加发生在快照之后。ARM 仿真进程保留公开入口的判断有模拟测试覆盖，实际 PowerShell/Firefox 场景仍待本次变更后的 ARM 真机复测。
+
+本次构建及回归：Win32/x64 Release 构建和完整 Detours 回归通过，ARM64 Release 交叉构建通过。Windows 10 x64 上的 8 个启动、4 个附加后子进程用例及 37 次代理连接通过；4 个附加用例均验证公开 CreateProcessW 入口未被修改。Hook32/64 静态 TLS 检查通过。ARM64 和 Intel 分别打包，使用同一轮 Hook32/64，Intel 包不含 ARM64 文件。XP/Windows 7 实机未测试。日志见 build/qa/arm-emulation-create-gate。

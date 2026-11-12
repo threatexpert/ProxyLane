@@ -135,18 +135,30 @@ int ProcessArchitectureTestsMain()
 
     info.native = X64;
     info.process = X86;
+    CHECK(!NeedsPublicCreateProcessHook(info)); // WOW64 on Intel is not ARM emulation.
     CHECK(Route(X86, info) == Direct && Route(X64, info) == Helper);
     CHECK(_tcscmp(SystemRundllDirectory(info), _T("SysWOW64")) == 0);
     info.process = X64;
+    CHECK(!NeedsPublicCreateProcessHook(info));
     CHECK(Route(X64, info) == Direct && Route(X86, info) == Helper);
     CHECK(_tcscmp(SystemRundllDirectory(info), _T("System32")) == 0);
     info.native = X86;
     CHECK(Route(X64, info) == Unsupported && SystemRundllDirectory(info) == NULL);
     info.process = X86;
     CHECK(Route(X86, info) == Direct);
+    CHECK(!NeedsPublicCreateProcessHook(info));
     CHECK(_tcscmp(SystemRundllDirectory(info), _T("System32")) == 0);
     // All nine Windows 11 ARM routes; only matching ABIs inject directly.
     info.native = Arm64;
+    info.process = X86;
+    CHECK(NeedsPublicCreateProcessHook(info));
+    info.process = X64;
+    CHECK(NeedsPublicCreateProcessHook(info));
+    info.process = Arm64;
+    CHECK(!NeedsPublicCreateProcessHook(info));
+    info.process = Unknown;
+    CHECK(!NeedsPublicCreateProcessHook(info));
+    CHECK(!NeedsPublicCreateProcessHook(ProcessInfo()));
     for (int source = 0; source < 3; ++source)
         for (int target = 0; target < 3; ++target)
         {

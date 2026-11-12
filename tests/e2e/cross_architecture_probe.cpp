@@ -89,8 +89,6 @@ int wmain(int argc, wchar_t** argv)
     bool kernelBase = false;
     if (argc > 1 && wcscmp(argv[1], L"--wait") == 0)
     {
-        // Running-process attachment: do no network I/O before the runner releases us.
-        if (getchar() != 'G') return 2;
         attachment = true;
         ++first;
     }
@@ -105,6 +103,33 @@ int wmain(int argc, wchar_t** argv)
     int result = 0;
     if (!ProcessArchitecture::Query(GetCurrentProcess(), actual) ||
         actual.process != ProcessArchitecture::CurrentModule()) result = 4;
+    FARPROC publicEntries[2] = {};
+    BYTE publicBefore[2][32] = {};
+    bool publicEntriesUnchanged = false;
+    const bool checkPublicEntries = attachment && !result &&
+        (actual.native == ProcessArchitecture::X86 || actual.native == ProcessArchitecture::X64);
+    if (attachment)
+    {
+        // Snapshot before injection and signal readiness to the runner. On
+        // native Intel, attaching PL must leave both public exports untouched.
+        if (checkPublicEntries)
+        {
+            const wchar_t* providers[] = { L"kernel32.dll", L"kernelbase.dll" };
+            for (int i = 0; i < 2; ++i)
+            {
+                HMODULE provider = GetModuleHandleW(providers[i]);
+                publicEntries[i] = provider ? GetProcAddress(provider, "CreateProcessW") : NULL;
+                if (publicEntries[i]) memcpy(publicBefore[i], reinterpret_cast<const void*>(publicEntries[i]), sizeof(publicBefore[i]));
+            }
+            if (!publicEntries[0]) return 34;
+        }
+        FILE* ready = NULL;
+        if (_wfopen_s(&ready, (std::wstring(report) + L".ready").c_str(), L"wt") || !ready) return 35;
+        fputs("READY\n", ready);
+        fclose(ready);
+        // Do no network I/O before the runner has attached and releases us.
+        if (getchar() != 'G') return 2;
+    }
     const wchar_t* hook = ProcessArchitecture::HookFileName(ProcessArchitecture::CurrentModule());
     HMODULE loaded = NULL;
     // Injection is queued asynchronously; wait for the expected module before testing traffic.
@@ -123,6 +148,14 @@ int wmain(int argc, wchar_t** argv)
             if (!result) break;
             Sleep(100);
         }
+    }
+    if (!result && checkPublicEntries)
+    {
+        publicEntriesUnchanged = true;
+        for (int i = 0; i < 2; ++i)
+            if (publicEntries[i] && memcmp(publicBefore[i], reinterpret_cast<const void*>(publicEntries[i]), sizeof(publicBefore[i])))
+                publicEntriesUnchanged = false;
+        if (!publicEntriesUnchanged) result = 36;
     }
     if (!result && first < argc)
     {
@@ -160,8 +193,8 @@ int wmain(int argc, wchar_t** argv)
     FILE* output = NULL;
     const std::wstring temporary = std::wstring(report) + L".tmp";
     if (_wfopen_s(&output, temporary.c_str(), L"wt, ccs=UTF-8") || !output) return 9;
-    fwprintf(output, L"%s machine=%u hook=%s error=%d\n", result ? L"FAIL" : L"PASS",
-        static_cast<unsigned>(actual.process), loadedPath, result);
+    fwprintf(output, L"%s machine=%u hook=%s error=%d public_entries_unchanged=%d\n", result ? L"FAIL" : L"PASS",
+        static_cast<unsigned>(actual.process), loadedPath, result, publicEntriesUnchanged ? 1 : 0);
     fclose(output);
     if (!MoveFileExW(temporary.c_str(), report, MOVEFILE_REPLACE_EXISTING)) return 9;
     return result;

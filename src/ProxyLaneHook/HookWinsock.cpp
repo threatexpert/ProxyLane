@@ -7,6 +7,7 @@
 #include "BrowserQuicPolicy.h"
 #include "HookWinsock.h"
 #include "LibraryLoaderHook.h"
+#include "ProcessArchitecture.h"
 #include <psapi.h>
 #include "GlobalProxy.h"
 #include "token.h"
@@ -2730,13 +2731,12 @@ BOOL CHookWinsock::HookWinsock()
 			if (!HookAPI(HOOKMODULE_ADVAPI32, _EHF(CreateProcessWithLogonW), "CreateProcessWithLogonW", _HOOKFUNC(CreateProcessWithLogonW), _TRAMPFUNC(CreateProcessWithLogonW)))
 				break;
 #if defined(_M_IX86) || (defined(_M_X64) && !defined(_M_ARM64EC))
-			// Intel Hooks need the public emulation boundary. Native ARM64
-			// continues to intercept the internal ARM implementation directly.
-			// Retain the existing pre-KernelBase behavior (including XP).
-			// DLL presence only enables the extra hook; the established module
-			// mapping selects its provider: Kernel32 on Win7, KernelBase on Win8+.
-			// Do not require a second export from KernelBase on Windows 7.
-			if (GetModuleHandleW(L"kernelbase.dll") &&
+			// The public boundary is needed only by Intel emulation on ARM64.
+			// Native x86/x64 Windows retains its original process API hook set.
+			ProcessArchitecture::ProcessInfo current;
+			if (!ProcessArchitecture::Query(GetCurrentProcess(), current))
+				return SetHookFailure(::GetLastError(), "query-architecture", "kernel32.dll", "CreateProcessW");
+			if (ProcessArchitecture::NeedsPublicCreateProcessHook(current) &&
 				!HookAPI(HOOKMODULE_KERNEL32, _EHF(CreateProcessW), "CreateProcessW",
 					_HOOKFUNC(CreateProcessW), _TRAMPFUNC(CreateProcessW))) break;
 #endif

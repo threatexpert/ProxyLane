@@ -55,7 +55,7 @@ Hook32/64 与 Intel 包来自同一版本构建，不能用旧版本 DLL 替换�
 - 同架构直接执行注入；跨架构使用系统 `rundll32.exe`。x86 使用 SysWOW64，ARM64/x64 使用 System32 并显式选择运行模式。启动后核对宿主架构，再允许它执行注入。
 - GUI 启动/附加、提权启动以及已代理父进程创建的子进程均接入上述路由。三种架构之间的九种父子组合已实现路由，已获上述 ARM 真机成功反馈；完整自动化矩阵尚未确认全部跑完。
 - ARM64EC/x64 兼容模式使用已有 x64 Hook 路径，未单独承诺任意混合模块或非导出函数 Hook 都兼容。
-- Hook32/64 按既有模块映射接管一次公开 CreateProcessW（Windows 7 选择 Kernel32，Windows 8+ 选择 KernelBase），并保留内部入口；不要求 Windows 7 的 KernelBase 导出该函数。动态 TLS 保证一次创建只处理一次子进程。x64 PowerShell 附加后创建子进程的个案已有用户实测通过，完整 ARM 矩阵仍待验收。
+- 仅在 ARM64 系统的 x86/x64 仿真进程中，Hook32/64 额外接管一次公开 CreateProcessW，并保留内部入口。原生 x86/x64 系统（包括 x64 系统上的 WOW64 进程）不安装这个额外 Hook，原生 ARM64 也继续使用既有内部入口。动态 TLS 防止嵌套入口重复处理子进程；公开入口仍使用既有模块映射，LoadLibraryExW 的独立选择不受影响。此前 x64 PowerShell 子进程修复已有用户实测通过，本次收窄条件后仍需 ARM 实机复测。
 - 注入排队成功不等于 Hook 初始化成功；应检查 PL 中的初始化结果和实际代理流量。
 
 普通子进程流程在注入失败后会释放 PL 自己增加的挂起，子进程可能继续运行而未被代理；调用者原本要求的挂起不由 PL 取消。严格“启动并代理”以及提权启动失败时终止本次创建的目标。
@@ -81,6 +81,7 @@ On 2026-11-12 the user reported successful proxying of both amd64 and i386 gonc 
 As decided on 2026-11-12, ARM64 adaptation of the browser-specific QUIC policy intervention is not implemented and is deferred, outside the current acceptance scope. The ARM64 host does not enable this policy, including for emulated x64 browsers. This limitation concerns browser-internal policy hooks, not the implementation of ordinary UDP proxying.
 Run `ProxyLaneARM64.exe` with all seven bundled binaries. The ARM64 host uses native transport/MITM/SSH backends. Matching-version Hook32 and Hook64 support the x86/x64 target paths; no Intel GUI or backend binaries are needed for these targets.
 Injection selects the target's active ABI. Cross-architecture routes use system rundll32 with explicit machine selection and verify the helper before execution. Startup, running-process attachment, elevated launch and child injection share this routing. ARM64EC/x64 mode uses Hook64; arbitrary mixed-module hooks are not separately certified.
+The additional CreateProcessW hook is now restricted to x86/x64 emulation on ARM64 Windows. Native Intel Windows, including WOW64 processes, and native ARM64 retain their existing process API hook set. This narrower condition still needs an ARM device retest; LoadLibraryExW provider selection is unchanged.
 An injection scheduling result is not a Hook initialization acknowledgment. On ordinary child injection failure, PL releases only its own suspension, so that child may continue without interception. Strict and elevated launch terminate the newly created target on injection failure.
 The package contains no standalone elevation helper, CA executable, debug symbols or test probes. Intel releases remain free of ARM64 binaries. Hook32 retains its XP static-TLS check; XP runtime validation has not been performed here.
 For device tests, run the Python command above using native 64-bit Python with psutil and all three probes. Expected results: 18 startup cases through Kernel32/KernelBase, 9 attachment-then-child cases, 82 proxied connections. KernelBase cases also check failed creation and caller-owned suspension. The user's successful UAC, SSH and MITM/TLS tests are separate from this automated matrix.
