@@ -555,3 +555,9 @@ hook_CreateProcessInternalW            RVA 0x8ae38
 回归使用独立测试进程的空 DACL 实际制造进程查询拒绝访问，并通过 PRC 登记与可执行文件名不同的 RegisteredDoh.exe，检查成功、缓存命中、共享查询和失败日志仍使用登记名称。测试只限制自身进程，并保留句柄恢复 DACL，不修改用户进程权限。真实 ARM 提权场景仍需用户复测。
 
 本次验证：Win32/x64 Release 构建及 Detours 回归通过，ARM64 Release 交叉构建通过。受限进程 DoH 集成测试覆盖成功、缓存、共享查询、取消、代理链、失败和 bootstrap 地址重试；DNS 中继 SOCKS5、HTTP、代理链及 SERVFAIL 测试通过。Google 测试端点连接超时后，改用可达的 AliDNS 端点完成在线验证。Hook32/64 最终 DLL 静态 TLS 检查通过；XP 实机未测试。ARM64/Intel 包已分别生成，核对每个二进制与构建输出一致、两包 Hook32/64 一致，Intel 包不含 ARM64 文件。测试日志和核对记录见 build/qa/doh-process-identity，发布包见 dist/doh-process-identity。
+
+### 2026-11-12：修正 ARM64 标题与托盘提示的架构标签
+
+主窗口标题和托盘悬停提示均调用 AppVersion::DisplayTitle。旧实现将 _WIN64 等同于 x64，但 ARM64 编译同样定义 _WIN64，因此误显示为 x64。改为按 _M_ARM64 / _M_X64 分别追加 ARM64 / x64 标签；32 位版本保持原有标题格式。这是显示修正，不改变进程架构识别与注入路由。
+
+ARM64、Win32、x64 Release 构建通过，已核对最终 PE 架构和对应标题后缀。两种发布包的二进制与构建输出一致，Intel 包不含 ARM64 文件；Hook32/64 静态 TLS 检查通过。ARM64 界面与 XP 实机未测试。本次为标题显示修正，未重复运行代理链路回归。记录见 build/qa/arm64-title，发布包见 dist/arm64-title。

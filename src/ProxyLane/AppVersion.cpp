@@ -81,7 +81,9 @@ CString AppVersion::DisplayTitle()
 		title += version;
 	}
 
-#ifdef _WIN64
+#if defined(_M_ARM64)
+	title += _T(" (ARM64)");
+#elif defined(_M_X64)
 	title += _T(" (x64)");
 #endif
 
