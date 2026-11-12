@@ -747,7 +747,7 @@ PROXYERROR_CANTRESOLVEHOST 7
                 else if (nCode == PROXYERROR_SSH_KEY_FILE) detail += ": SSH private key file unavailable or invalid";
                 else if (nCode == PROXYERROR_SSH_KEY_AUTHFAILED) detail += ": SSH private key authentication failed";
                 else if (nCode == PROXYERROR_SSH_HOSTKEY_CHANGED) detail += ": SSH host key changed; connection rejected";
-                else if (nCode == PROXYERROR_SSH_UNAVAILABLE) detail += ": SSH backend requires Windows 10+ x64 and ProxyLaneSsh64.dll";
+                else if (nCode == PROXYERROR_SSH_UNAVAILABLE) detail += ": SSH backend requires Windows 10+ native x64/ARM64 and the matching ProxyLaneSsh DLL";
 				else if ((nCode == PROXYERROR_REQUESTFAILED || (nCode == PROXYERROR_NOCONN && m_pChain->HasSsh())) && lParam)
 					detail += CStringA(": ") + CStringA((LPCSTR)lParam, (int)strnlen_s((LPCSTR)lParam, 200));
 				else if (nCode != PROXYERROR_NOCONN && nCode != PROXYERROR_REQUESTFAILED)

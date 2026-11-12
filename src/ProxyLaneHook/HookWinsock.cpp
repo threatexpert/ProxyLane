@@ -6,6 +6,8 @@
 #include "stdafx.h"
 #include "BrowserQuicPolicy.h"
 #include "HookWinsock.h"
+#include "LibraryLoaderHook.h"
+#include "ProcessArchitecture.h"
 #include <psapi.h>
 #include "GlobalProxy.h"
 #include "token.h"
@@ -342,6 +344,7 @@ CHookWinsock::CHookWinsock(void)
 
 	m_ModuleName[HOOKMODULE_WS2_32] = "Ws2_32.dll";
 	m_ModuleName[HOOKMODULE_ADVAPI32] = "Advapi32.dll";
+	m_ModuleName[HOOKMODULE_LIBRARYLOADER] = LibraryLoaderHook::ModuleName();
 
 	if (IsWin8OrLater())
 		m_ModuleName[HOOKMODULE_KERNEL32] = "KernelBase.dll";
@@ -621,18 +624,19 @@ BOOL CHookWinsock::ApplyHooks(bool attach)
 BOOL CHookWinsock::HookAPI(eHOOKMODUDLE ehm, eHOOKFUN ehf, char *exportfunc,
 	LPVOID myfuncaddr, PVOID* original)
 {
-	HMODULE module = GetModuleHandleA(m_ModuleName[ehm]);
+	const char* moduleName = m_ModuleName[ehm];
+	HMODULE module = GetModuleHandleA(moduleName);
 	if (!module)
-		return SetHookFailure(::GetLastError(), "resolve-module", m_ModuleName[ehm], exportfunc);
+		return SetHookFailure(::GetLastError(), "resolve-module", moduleName, exportfunc);
 	PVOID target = module ? reinterpret_cast<PVOID>(GetProcAddress(module, exportfunc)) : NULL;
 	if (!target)
 	{
-		return SetHookFailure(::GetLastError(), "GetProcAddress", m_ModuleName[ehm], exportfunc);
+		return SetHookFailure(::GetLastError(), "GetProcAddress", moduleName, exportfunc);
 	}
 	*original = target;
 	m_HookedInfo[ehf].original = original;
 	m_HookedInfo[ehf].replacement = myfuncaddr;
-	m_HookModules[ehf] = m_ModuleName[ehm];
+	m_HookModules[ehf] = moduleName;
 	m_HookApis[ehf] = exportfunc;
 	return TRUE;
 }
@@ -1956,6 +1960,20 @@ MyDetourProc(has_Return, BOOL, WINAPI, CreateProcessInternalW, (HANDLE hToken, L
 	return g_pHookWinsock->inhook_CreateProcessInternalW(hToken, lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, lpEnvironment, lpCurrentDirectory, lpStartupInfo, lpProcessInformation, hNewToken);
 }
 
+// ARM64EC system code can call the internal ARM implementation directly,
+// bypassing CreateProcessInternalW's x64 export/FFS. Intercept the public
+// boundary as well, preserving its original implementation/trampoline.
+MyDetourProc(has_Return, BOOL, WINAPI, CreateProcessW, (
+	LPCWSTR application, LPWSTR command, LPSECURITY_ATTRIBUTES processAttributes,
+	LPSECURITY_ATTRIBUTES threadAttributes, BOOL inheritHandles, DWORD flags,
+	LPVOID environment, LPCWSTR directory, LPSTARTUPINFOW startup,
+	LPPROCESS_INFORMATION process))
+{
+	return g_pHookWinsock->inhook_CreateProcessInternalW(NULL, application, command,
+		processAttributes, threadAttributes, inheritHandles, flags, environment,
+		directory, startup, process, NULL, CallTrampoline(CreateProcessW));
+}
+
 static BOOL WINAPI CreateProcessWithoutProxyLaneHook(
 	LPCWSTR applicationName,
 	LPWSTR commandLine,
@@ -2362,14 +2380,21 @@ BOOL WINAPI CHookWinsock::inhook_CreateProcessInternalW(
 	LPSECURITY_ATTRIBUTES lpProcessAttributes, LPSECURITY_ATTRIBUTES lpThreadAttributes,
 	BOOL bInheritHandles, DWORD dwCreationFlags, LPVOID lpEnvironment,
 	LPCWSTR lpCurrentDirectory, LPSTARTUPINFOW lpStartupInfo,
-	LPPROCESS_INFORMATION lpProcessInformation, PHANDLE hNewToken)
+	LPPROCESS_INFORMATION lpProcessInformation, PHANDLE hNewToken,
+	decltype(&::CreateProcessW) publicEntry)
 {
-	if (!m_psi.bHookCreateProcess || TlsGetValue(m_ProcessCreationTls))
+	const auto create = [&](DWORD flags, LPVOID environment) -> BOOL
 	{
+		if (publicEntry)
+			return publicEntry(lpApplicationName, lpCommandLine, lpProcessAttributes,
+				lpThreadAttributes, bInheritHandles, flags, environment, lpCurrentDirectory,
+				lpStartupInfo, lpProcessInformation);
 		return CallTrampoline(CreateProcessInternalW)(hToken, lpApplicationName, lpCommandLine,
-			lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, lpEnvironment,
+			lpProcessAttributes, lpThreadAttributes, bInheritHandles, flags, environment,
 			lpCurrentDirectory, lpStartupInfo, lpProcessInformation, hNewToken);
-	}
+	};
+	if (!m_psi.bHookCreateProcess || TlsGetValue(m_ProcessCreationTls))
+		return create(dwCreationFlags, lpEnvironment);
 
 	BOOL helperCreated = FALSE;
 	if (TryCreateAppLauncher(hToken, lpApplicationName, lpCommandLine,
@@ -2414,9 +2439,28 @@ BOOL WINAPI CHookWinsock::inhook_CreateProcessInternalW(
 		effectiveEnvironment = &childEnvironment[0];
 	}
 
-	BOOL bRetVal = CallTrampoline(CreateProcessInternalW)(hToken, lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, effectiveEnvironment, lpCurrentDirectory, lpStartupInfo, lpProcessInformation, hNewToken);
-
-	const DWORD creationError = ::GetLastError();
+	// A public call may nest KernelBase and the internal export. The outermost
+	// hook alone owns suspension, environment rewriting, notification and resume.
+	BOOL bRetVal;
+	DWORD creationError;
+	{
+		struct CreationScope
+		{
+			DWORD index;
+			BOOL entered;
+			explicit CreationScope(DWORD value) : index(value),
+				entered(TlsSetValue(value, reinterpret_cast<LPVOID>(1))) {}
+			~CreationScope()
+			{
+				DWORD error = ::GetLastError();
+				if (entered) TlsSetValue(index, NULL);
+				::SetLastError(error);
+			}
+		} scope(m_ProcessCreationTls);
+		if (!scope.entered) return FALSE;
+		bRetVal = create(dwCreationFlags, effectiveEnvironment);
+		creationError = ::GetLastError();
+	}
 	mitigationDeferral.Restore();
 	if (bRetVal)
 		FinishChildCreation(lpProcessInformation, bSuspend, lpApplicationName, lpCommandLine);
@@ -2464,6 +2508,14 @@ void CHookWinsock::FinishChildCreation(LPPROCESS_INFORMATION lpProcessInformatio
 			lpProcessInformation->dwThreadId,
 			pipeName,
 			CreateProcessWithoutProxyLaneHook);
+		if (!injectionSucceeded)
+		{
+			const DWORD error = ::GetLastError();
+			CString message;
+			message.Format(L"Child injection failed: parent=%lu, child=%lu, error=%lu (0x%08lX), image=%s",
+				GetCurrentProcessId(), hnpi.dwProcessId, error, error, hnpi.szAppPath);
+			PRCPipeClient.PRCLogtext(message);
+		}
 		PRCPipeClient.PRCNotifyChildInjectionResult(&hnpi, injectionSucceeded);
 
 	} while (FALSE);
@@ -2678,11 +2730,22 @@ BOOL CHookWinsock::HookWinsock()
 				break;
 			if (!HookAPI(HOOKMODULE_ADVAPI32, _EHF(CreateProcessWithLogonW), "CreateProcessWithLogonW", _HOOKFUNC(CreateProcessWithLogonW), _TRAMPFUNC(CreateProcessWithLogonW)))
 				break;
+#if defined(_M_IX86) || (defined(_M_X64) && !defined(_M_ARM64EC))
+			// The public boundary is needed only by Intel emulation on ARM64.
+			// Native x86/x64 Windows retains its original process API hook set.
+			ProcessArchitecture::ProcessInfo current;
+			if (!ProcessArchitecture::Query(GetCurrentProcess(), current))
+				return SetHookFailure(::GetLastError(), "query-architecture", "kernel32.dll", "CreateProcessW");
+			if (ProcessArchitecture::NeedsPublicCreateProcessHook(current) &&
+				!HookAPI(HOOKMODULE_KERNEL32, _EHF(CreateProcessW), "CreateProcessW",
+					_HOOKFUNC(CreateProcessW), _TRAMPFUNC(CreateProcessW))) break;
+#endif
 		}
 
         if(BrowserQuicPolicy::Enabled()) {
-            // Kernel32's export resolves to KernelBase on modern Windows.
-            bool prepared=HookAPI(HOOKMODULE_KERNEL32,_EHF(LoadLibraryExW),"LoadLibraryExW",_HOOKFUNC(LoadLibraryExW),_TRAMPFUNC(LoadLibraryExW))
+            // Prefer KernelBase's actual loader export; older systems fall
+            // back to Kernel32. Install one hook, independent of process APIs.
+            bool prepared=HookAPI(HOOKMODULE_LIBRARYLOADER,_EHF(LoadLibraryExW),"LoadLibraryExW",_HOOKFUNC(LoadLibraryExW),_TRAMPFUNC(LoadLibraryExW))
                 &&HookAPI(HOOKMODULE_WS2_32,_EHF(send),"send",_HOOKFUNC(send),_TRAMPFUNC(send))
                 &&HookAPI(HOOKMODULE_WS2_32,_EHF(WSASend),"WSASend",_HOOKFUNC(WSASend),_TRAMPFUNC(WSASend));
             if(prepared && ApplyHooks(true))return TRUE;

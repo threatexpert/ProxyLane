@@ -48,3 +48,15 @@ with tempfile.TemporaryDirectory(prefix="ProxyLane-storage-policy-") as temporar
     assert ini.read_bytes() == before
     assert sorted(p.name for p in root.iterdir()) == ["ProxyLane.ini", "ProxyLane64.exe", "portable.flag"]
     print("PASS: switching back uses the existing INI without backup or migration files")
+
+    # Use the same host binary under each product filename: path selection must
+    # not depend on executing ARM64 code to catch an ARM64 suffix regression.
+    original_exe = exe
+    for filename in ("ProxyLane.exe", "ProxyLaneARM64.exe", "ProxyLanearm64.exe"):
+        exe = root / filename
+        shutil.copy2(source, exe)
+        assert run("--resolve").lower() == str(ini).lower()
+        assert ini.read_bytes() == before
+        exe.unlink()
+    exe = original_exe
+    print("PASS: x86/x64/ARM64 product filenames share the portable INI")

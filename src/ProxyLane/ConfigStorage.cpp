@@ -66,6 +66,7 @@ CString ConfigStorage::Directory(const CString& path) { return path.Left(path.Re
 CString ConfigStorage::PortablePath()
 {
     CString path = Executable();
+    if (path.Right(9).CompareNoCase(L"ARM64.exe") == 0) return path.Left(path.GetLength() - 9) + L".ini";
     if (path.Right(6).CompareNoCase(L"64.exe") == 0) return path.Left(path.GetLength() - 6) + L".ini";
     return path.Left(path.ReverseFind(L'.')) + L".ini";
 }

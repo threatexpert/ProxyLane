@@ -71,7 +71,7 @@ bool DnsMessage(const Json& request, Json& response) {
 }
 void LogDohResult(DWORD pid, const CStringA& name, const CStringA& type,
     CStringA summary, DWORD started, bool cacheHit, bool shared, bool local,
-    const CDohQuery* query) {
+    const CDohQuery* query, LPCWSTR processName) {
     // DNS text and transport errors are untrusted; keep one bounded log line.
     summary.Replace('\r', ' '); summary.Replace('\n', ' '); summary.Replace('\t', ' ');
     if (summary.GetLength() > 1024) summary = summary.Left(1021) + "...";
@@ -88,7 +88,7 @@ void LogDohResult(DWORD pid, const CStringA& name, const CStringA& type,
     if (local) summary += "; source=local";
     else if (cacheHit) summary += "; cache=hit";
     else if (shared) summary += "; shared=yes";
-    LogDnsRelay(pid, name.Left(512), type, summary);
+    LogDnsRelay(pid, name.Left(512), type, summary, processName);
 }
 }
 CDohQuery::CDohQuery() : m_wakeup(std::make_shared<CDohWakeup>(GetHwnd())) {}
@@ -109,10 +109,11 @@ void CDohQuery::ResetTransport() {
     m_addresses.clear(); m_wireAnswer.clear(); m_ttl = 0;
     m_summaryText.clear();
 }
-std::shared_ptr<CDohQuery> CDohQuery::Resolve(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, bool test, DohQueryLogInfo* log, TestProgress progress) {
+std::shared_ptr<CDohQuery> CDohQuery::Resolve(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, bool test, DohQueryLogInfo* log, TestProgress progress, CProxyReceptionCentre* host) {
     if (log) {
         log->started = GetTickCount();
-        LogDnsRelay(client.dwPid, client.szDomainName, client.dstAddr.IsIPv6() ? "AAAA" : "A", "query started");
+        log->processName = GetDnsLogProcessName(host, client);
+        LogDnsRelay(client.dwPid, client.szDomainName, client.dstAddr.IsIPv6() ? "AAAA" : "A", "query started", log->processName);
     }
     return Start(client, proxy, chain, test, {}, log ? &log->cacheHit : NULL, log ? &log->shared : NULL, std::move(progress));
 }
@@ -126,7 +127,7 @@ void CDohQuery::LogAddressResult(const PRCClient& client, const DohQueryLogInfo&
         summary = m_summaryText.empty() ? "NOERROR; summary unavailable" : m_summaryText.c_str();
     }
     LogDohResult(client.dwPid, client.szDomainName, client.dstAddr.IsIPv6() ? "AAAA" : "A",
-        summary, log.started, log.cacheHit, log.shared, false, this);
+        summary, log.started, log.cacheHit, log.shared, false, this, log.processName);
 }
 std::shared_ptr<CDohQuery> CDohQuery::Exchange(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, const std::vector<unsigned char>& wire, bool* cacheHit, bool* shared) {
     return Start(client, proxy, chain, false, wire, cacheHit, shared);
@@ -187,7 +188,7 @@ std::shared_ptr<CDohQuery> CDohQuery::Start(const PRCClient& client, const Proxy
     result->m_io = module ? (IoFn)GetProcAddress(module, "plm_doh_io") : NULL;
     result->m_free = module ? (FreeFn)GetProcAddress(module, "plm_doh_free") : NULL;
     if (!version || version() != PLM_ABI_VERSION || !result->m_create || !result->m_io || !result->m_free) {
-        result->m_error = "Compatible ProxyLaneMitm64.dll with DoH support is unavailable"; result->m_done = true; return result;
+        result->m_error = "Compatible native ProxyLane MITM module with DoH support is unavailable"; result->m_done = true; return result;
     }
     result->m_started = now;
     if (!test) queries.active[key] = result;
@@ -383,10 +384,11 @@ int CDohQuery::OnLayerCallback(const CAsyncSocketExLayer* layer, int type, int c
     return 1;
 }
 
-bool CDnsDohRequest::Begin(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, const char* data, int length) {
+bool CDnsDohRequest::Begin(const PRCClient& client, const ProxyInfo& proxy, const ProxyChain* chain, const char* data, int length, CProxyReceptionCentre* host) {
     m_started = GetTickCount();
+    m_processName = GetDnsLogProcessName(host, client);
     if (!data || length < 12 || length > 65535) {
-        LogDnsRelayRoute(&client, "rejected DNS message: invalid length");
+        LogDnsRelayRoute(&client, "rejected DNS message: invalid length", host);
         return false;
     }
     m_pid = client.dwPid;
@@ -405,7 +407,7 @@ bool CDnsDohRequest::Begin(const PRCClient& client, const ProxyInfo& proxy, cons
     m_name = info.value("name", "").c_str(); m_type = info.value("type", "").c_str();
     // This also covers cached/shared queries and local refusals; do not imply
     // that every application request starts another upstream exchange.
-    LogDnsRelay(m_pid, m_name, m_type, "query started");
+    LogDnsRelay(m_pid, m_name, m_type, "query started", m_processName);
     if (info.contains("local_reply")) {
         try { m_rejected = Unhex(info.at("local_reply").get<std::string>()); }
         catch (...) { LogResult("ERROR; reason=invalid local DNS reply", true); return false; }
@@ -424,7 +426,7 @@ bool CDnsDohRequest::NotifyWhenReady(const std::shared_ptr<CDohWakeup>& waiter) 
 void CDnsDohRequest::LogResult(CStringA summary, bool local) {
     if (m_resultLogged) return;
     m_resultLogged = true;
-    LogDohResult(m_pid, m_name, m_type, summary, m_started, m_cacheHit, m_shared, local, m_exchange.get());
+    LogDohResult(m_pid, m_name, m_type, summary, m_started, m_cacheHit, m_shared, local, m_exchange.get(), m_processName);
 }
 bool CDnsDohRequest::TryBuildReply(bool udp, std::vector<unsigned char>& response) {
     if (!m_rejected.empty()) { response = m_rejected; return true; }
@@ -487,7 +489,7 @@ void CDnsDohTcp::Pump() {
         if (length < 12) { Close(); break; }
         if (m_input.size() < length + 2) break;
         CDnsDohRequest request;
-        if (!request.Begin(m_client, m_proxy, m_chain.empty() ? NULL : &m_chain, (char*)m_input.data()+2, (int)length)) { Close(); break; }
+        if (!request.Begin(m_client, m_proxy, m_chain.empty() ? NULL : &m_chain, (char*)m_input.data()+2, (int)length, m_host)) { Close(); break; }
         m_pending.push_back(std::move(request));
         if (!m_pending.back().NotifyWhenReady(m_wakeup)) { Close(); break; }
         m_input.erase(m_input.begin(), m_input.begin()+length+2);

@@ -3,6 +3,38 @@
 #include "ProxyChainTransportTests.cpp"
 #undef main
 #include "IsolateProxyTestProcess.h"
+#pragma comment(lib, "advapi32.lib")
+
+// Restrict only this disposable fixture process. Retain an authorized handle
+// to restore its DACL; log lookups that reopen it must get access denied.
+class DenyProcessQueries {
+    HANDLE process;
+    std::vector<BYTE> original;
+public:
+    DenyProcessQueries() : process(OpenProcess(READ_CONTROL | WRITE_DAC, FALSE, GetCurrentProcessId())) {
+        Check(process != NULL, "open fixture security handle");
+        DWORD bytes = 0;
+        GetKernelObjectSecurity(process, DACL_SECURITY_INFORMATION, NULL, 0, &bytes);
+        Check(bytes != 0, "read fixture DACL size");
+        original.resize(bytes);
+        Check(GetKernelObjectSecurity(process, DACL_SECURITY_INFORMATION,
+            reinterpret_cast<PSECURITY_DESCRIPTOR>(original.data()), bytes, &bytes) != FALSE, "save fixture DACL");
+        ACL empty; SECURITY_DESCRIPTOR descriptor;
+        Check(InitializeAcl(&empty, sizeof(empty), ACL_REVISION) &&
+            InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) &&
+            SetSecurityDescriptorDacl(&descriptor, TRUE, &empty, FALSE) &&
+            SetKernelObjectSecurity(process, DACL_SECURITY_INFORMATION, &descriptor), "restrict fixture process");
+        HANDLE denied = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, GetCurrentProcessId());
+        DWORD error = GetLastError();
+        if (denied) CloseHandle(denied);
+        Check(!denied && error == ERROR_ACCESS_DENIED, "fixture reproduces denied process-name lookup");
+    }
+    ~DenyProcessQueries() {
+        SetKernelObjectSecurity(process, DACL_SECURITY_INFORMATION,
+            reinterpret_cast<PSECURITY_DESCRIPTOR>(original.data()));
+        CloseHandle(process);
+    }
+};
 
 static SOCKET OpenDohClient(IGlobalProxy* proxy, const char* domain, bool udp, _SockAddr& endpoint) {
     SOCKET client = socket(AF_INET, udp ? SOCK_DGRAM : SOCK_STREAM, 0);
@@ -19,6 +51,13 @@ static SOCKET OpenDohClient(IGlobalProxy* proxy, const char* domain, bool udp, _
     c.sType = udp ? SOCK_DGRAM : SOCK_STREAM; c.s = client; c.socketGeneration = client;
     FILETIME created, exited, kernel, user; GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user);
     c.processCreateTime = ((ULONGLONG)created.dwHighDateTime << 32) | created.dwLowDateTime;
+    // Use a registered name distinct from this fixture's real executable.
+    // Logs must use the PRC identity, not re-open the process to obtain host.exe.
+    HookProcessIdentityInfo identity = {};
+    identity.dwProcessId = c.dwPid; identity.processCreateTime = c.processCreateTime;
+    wcscpy_s(identity.szAppPath, L"C:\\ProxyLaneTests\\RegisteredDoh.exe");
+    header.action = PRCPD_REGISTER_PROCESS_IDENTITY; header.dataSize = sizeof(identity);
+    PipeWrite(pipe, &header, sizeof(header)); PipeWrite(pipe, &identity, sizeof(identity));
     c.srcAddr = source; c.dstAddr.SetIP("127.255.0.1"); c.dstAddr.SetPort(18888);
     strcpy_s(c.szDomainName, domain);
     header.action = PRCPD_REGISTERCLIENT; header.flag = 0; header.dataSize = sizeof(c);
@@ -37,6 +76,7 @@ class DohLog : public Log {
 int main(int argc, char** argv) {
     Check(argc >= 5, "arguments: socks-port http-port url bootstrap [failure]");
     IsolateTestProcess();
+    DenyProcessQueries restrictedIdentity;
     WSADATA ws; WSAStartup(MAKEWORD(2,2), &ws);
     Settings settings; DohLog log;
     settings.chain.push_back(Hop(TEXT("SOCKS5"), (WORD)atoi(argv[1])));

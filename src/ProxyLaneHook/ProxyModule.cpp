@@ -5,11 +5,13 @@
 
 
 #include "stdafx.h"
+#include "ProcessArchitecture.h"
 #include "ProxyModule.h"
 #include "GlobalProxy.h"
 #include "HookWinsock.h"
 #include <shlobj.h>
 #include "InjectDll.h"
+#include "InjectDllArm64.h"
 #include "DeferredMitigationPolicy.h"
 
 CGlobalProxy *g_pPMGlobalProxy = NULL;
@@ -271,10 +273,21 @@ static UINT get_arg(LPSTR lpszIn, LPCSTR lpszOpt, LPSTR lpszBuf, int size)
 DWORD WINAPI AttachToHandles(HANDLE hProcess, HANDLE hThread, LPCSTR szPipeName)
 {
 	DWORD dwExitCode = 0xf;
+#if defined(_M_ARM64) && !defined(_M_ARM64EC)
+	WCHAR myDllPath[32768];
+	if (!hProcess || !hThread || !szPipeName || !szPipeName[0])
+	{ SetLastError(ERROR_INVALID_PARAMETER); return dwExitCode; }
+	DWORD length = GetModuleFileNameW(g_hDllModule, myDllPath, _countof(myDllPath));
+	if (!length) return dwExitCode;
+	if (length >= _countof(myDllPath)) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return dwExitCode; }
+	if (InjectDllArm64W(hProcess, hThread, myDllPath, szPipeName) == 1)
+		dwExitCode = 0xFF01;
+#else
 	WCHAR myDllPath[MAX_PATH];
 
 	if (!hProcess || !hThread || !szPipeName || !szPipeName[0])
 		return dwExitCode;
+	if (!ProcessArchitecture::RequireDirectInjection(hProcess)) return dwExitCode;
 
 	DWORD pathLength = GetModuleFileNameW(g_hDllModule, myDllPath, _countof(myDllPath));
 	if (!pathLength || pathLength >= _countof(myDllPath))
@@ -283,12 +296,30 @@ DWORD WINAPI AttachToHandles(HANDLE hProcess, HANDLE hThread, LPCSTR szPipeName)
 
 	if (InjectDll(hProcess, hThread, myDllPath, szPipeName) == 1)
 		dwExitCode = 0xFF01;
-
+#endif
 	return dwExitCode;
 }
 
 DWORD WINAPI AttachToI(DWORD dwPid, DWORD dwTid, LPCSTR szPipeName)
 {
+#if defined(_M_ARM64) && !defined(_M_ARM64EC)
+	WCHAR myDllPath[32768];
+	DWORD length = GetModuleFileNameW(g_hDllModule, myDllPath, _countof(myDllPath));
+	if (!length) return 0xf;
+	if (length >= _countof(myDllPath)) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return 0xf; }
+	HANDLE process = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION |
+		PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE, FALSE, dwPid);
+	if (!process) return 0xf;
+	HANDLE thread = dwTid ? OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT | THREAD_QUERY_INFORMATION,
+		FALSE, dwTid) : NULL;
+	int result = -1;
+	if (!dwTid || thread) result = InjectDllArm64W(process, thread, myDllPath, szPipeName);
+	DWORD error = GetLastError();
+	if (thread) CloseHandle(thread);
+	CloseHandle(process);
+	SetLastError(error);
+	return result == 1 ? 0xFF01 : 0xf;
+#else
 	DWORD dwExitCode = 0xf;
 	HANDLE hProc = NULL;
 	HANDLE hThread = NULL;
@@ -314,6 +345,7 @@ DWORD WINAPI AttachToI(DWORD dwPid, DWORD dwTid, LPCSTR szPipeName)
 	hProc = OpenProcess(PROCESS_ALL_ACCESS, 0, dwPid);
 	if (!hProc)
 		goto __Cleanup;
+	if (!ProcessArchitecture::RequireDirectInjection(hProc)) goto __Cleanup;
 
 	if (dwTid != 0)
 	{
@@ -369,6 +401,7 @@ __Cleanup:
 		CloseHandle(hProc);
 
 	return dwExitCode;
+#endif
 }
 
 void CALLBACK AttachTo(HWND hwnd, HINSTANCE hinst, LPSTR lpszCmdLine, int nCmdShow)

@@ -31,8 +31,9 @@ private:
 };
 
 void PrintText(const TCHAR *fmt, ...);
-void LogDnsRelay(DWORD pid, LPCSTR name, LPCSTR type, LPCSTR result);
-void LogDnsRelayRoute(const PRCClient* client, LPCSTR result);
+CString GetDnsLogProcessName(CProxyReceptionCentre* receptionCentre, const PRCClient& client);
+void LogDnsRelay(DWORD pid, LPCSTR name, LPCSTR type, LPCSTR result, LPCWSTR processName = NULL);
+void LogDnsRelayRoute(const PRCClient* client, LPCSTR result, CProxyReceptionCentre* receptionCentre = NULL);
 void LogDohTargetSelection(CProxyReceptionCentre* receptionCentre,
     const PRCClient* client, size_t attempt = 0, size_t total = 0);
 void LogNewProxyTask(const LPPRCClient lpC);

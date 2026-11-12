@@ -58,7 +58,7 @@ public:
 	BOOL RegisterProcessIdentity(LPHookProcessIdentityInfo identity);
 	BOOL UpdateProcessHookResult(LPHookWSockResult result);
 	BOOL RegisterReleasedChild(LPHookNewProcessInfo child);
-	BOOL GetProcessIdentity(DWORD processId, LPWSTR appPath, DWORD appPathCount);
+	BOOL GetProcessIdentity(DWORD processId, LPWSTR appPath, DWORD appPathCount, ULONGLONG processCreateTime = 0);
 	BOOL GetProcessHookState(
 		DWORD processId,
 		ULONGLONG processCreateTime,

@@ -9,6 +9,7 @@
 #include "MitmControl.h"
 #include "ProxyMonitor.h"
 #include "PlatformSupport.h"
+#include "ProcessArchitecture.h"
 #include "QuicBridge.h"
 #include "BrowserQuicPolicy.h"
 #include <atomic>
@@ -38,7 +39,9 @@ namespace {
         if (!n || n >= _countof(path)) return NULL;
         TCHAR* slash = _tcsrchr(path, _T('\\'));
         if (!slash) return NULL;
-        _tcscpy_s(slash + 1, _countof(path) - (slash + 1 - path), _T("ProxyLaneMitm64.dll"));
+        LPCTSTR name = ProcessArchitecture::MitmFileName(ProcessArchitecture::CurrentModule());
+        if (!name) { SetLastError(ERROR_NOT_SUPPORTED); return NULL; }
+        _tcscpy_s(slash + 1, _countof(path) - (slash + 1 - path), name);
         module = LoadLibrary(path);
         if (module) {
             PLM_VERSION_FN version = (PLM_VERSION_FN)GetProcAddress(module, "plm_abi_version");

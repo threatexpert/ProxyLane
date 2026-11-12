@@ -37,6 +37,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ProxyLaneTestsMain.cpp" />
+    <ClCompile Include="ProcessArchitectureTests.cpp" />
     <ClCompile Include="DohWakeupTests.cpp" />
     <ClCompile Include="DirectIpv6RouteTests.cpp" />
     <ClCompile Include="MonitorLogFormatTests.cpp" />

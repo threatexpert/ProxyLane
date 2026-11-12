@@ -8,7 +8,7 @@
 #define WC_ERR_INVALID_CHARS 0x00000080
 #endif
 
-// The UI and elevated rundll32 exchange a length-prefixed request encoded as
+// The UI and elevated launcher exchange a length-prefixed request encoded as
 // unpadded Base64URL. Only the bytes used by each field are transmitted.
 
 #define PROXYLANE_ELEVATED_REQUEST_MAGIC   0x4C454C50UL // "PLEL"

@@ -18,6 +18,7 @@ typedef enum
 	HOOKMODULE_WS2_32 = 0,
 	HOOKMODULE_KERNEL32,
 	HOOKMODULE_ADVAPI32,
+	HOOKMODULE_LIBRARYLOADER,
 	HOOKMODULE_COUNT
 }eHOOKMODUDLE;
 
@@ -40,6 +41,7 @@ typedef enum
 	//kernel32
 	HOOKAPI_CreateProcessInternalW,
 	HOOKAPI_CreateProcessWithLogonW,
+	HOOKAPI_CreateProcessW,
 
 	HOOKAPI_LoadLibraryExW,
 	HOOKAPI_send,
@@ -81,7 +83,7 @@ class CHookWinsock
 			return &name[0];
 		}
 
-		char * operator =(char *lpsz)
+		char * operator =(const char *lpsz)
 		{
 			int i=0;
 
@@ -773,7 +775,8 @@ public:
 		LPCWSTR lpCurrentDirectory,
 		LPSTARTUPINFOW lpStartupInfo,
 		LPPROCESS_INFORMATION lpProcessInformation,
-		PHANDLE hNewToken);
+		PHANDLE hNewToken,
+		decltype(&::CreateProcessW) publicEntry = NULL);
 
 	BOOL WINAPI inhook_CreateProcessWithLogonW(LPCWSTR username, LPCWSTR domain,
 		LPCWSTR password, DWORD logonFlags, LPCWSTR applicationName,

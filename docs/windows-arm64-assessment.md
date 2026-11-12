@@ -1,0 +1,563 @@
+# Windows ARM64 原生支持评估
+
+初始评估日期：2026-10-15；初始基线：`main` 的 `26386d2`。
+开发分支：`codex/windows-arm64-assessment`。
+本分支正在分阶段适配，尚不能发布为支持 ARM64 的完整产品。下文旧阶段记录保留为历史，当前状态以最新章节为准。
+
+## 2026-11-12：系统命令行程序的 ARM64X 判断与错误反馈
+
+用户在 Windows 11 原生 ARM64 系统反馈：非管理员普通启动 Edge 成功，但 cmd.exe / powershell.exe 提示注入失败，
+没有进一步错误信息。本机检查发现两处问题；尚未在用户设备上确认修复后的行为。
+
+- 原 `PureArm64Image` 看到非零 `CHPEMetadataPointer` 即返回 `ERROR_NOT_SUPPORTED`。
+  这会拒绝 ARM64X 程序的原生 ARM64 执行视图。
+  [Linaro 的实测 PE 文件头](https://linaro.atlassian.net/wiki/spaces/WOAR/pages/28869623809/Identify+CPU+architecture)
+  列出了系统 cmd.exe 和 Windows PowerShell 的 ARM64X 版本；用户尚未提供其实际文件头/错误码，
+  因此该判断是与现象吻合的代码缺陷，不是已完成实机复现的根因结论。
+- 保留进程架构、目标内存 PE 的 ARM64/PE32+、load-config 边界及 ntdll 一致性检查。
+  对有混合元数据的目标，动态调用 Windows 11 的
+  [GetProcessInformation / ProcessMachineTypeInfo](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/ns-processthreadsapi-process_machine_information)，
+  仅在运行时 `ProcessMachine == 0xAA64` 时放行。API 缺失、调用失败、未知架构及 x64/ARM64EC 模式仍拒绝。
+  这没有开放 ARM 宿主上的跨架构注入，也不以磁盘文件名判断执行架构。
+- `InjectNewProcess` 原先在记录结果和关闭句柄后丢失 Win32 错误。现在保存并恢复该错误，
+  普通严格启动在终止目标之前记录它。弹窗显示十进制/十六进制错误码及系统说明，
+  日志记录目标路径、PID 和错误码；无 PRC 管道/子进程过滤拒绝也设置明确错误。
+  这次错误详情针对普通启动路径，尚未改变提权子进程回传协议。
+- 单元测试覆盖混合视图的原生 ARM64 确认、x86/x64/ARM64EC/未知拒绝，以及 API 缺失/失败。
+  ARM64 `InjectionTestsARM64.exe` 增加系统 cmd.exe 和 Windows PowerShell 的挂起启动、fixture DLL 回调、
+  正常退出检查。该测试在构建机仅交叉编译，须在 ARM64 设备运行。
+
+设备复测：解压新包，普通启动系统 cmd.exe / Windows PowerShell，再确认进程和网络代理。
+如果仍失败，请记录新的弹窗错误码与 `Injection failed: PID ... target=... Win32=...` 日志。
+完整构建输出中的 `InjectionTestsARM64.exe` 与 `InjectionFixtureARM64.dll` 可单独验证原生引导，
+测试不会修改系统程序文件。其余阶段记录中的“所有 ARM64X 均不支持”属于旧限制，以本节为准。
+
+本机验证通过（`build/qa/arm64-shell-fix-*.log`）：ARM64 Release/Debug 构建及 11 项产物架构/哈希、
+Win32/x64 完整解决方案与单元测试、TCP/UDP 统计/卸载、四种父子/孙进程组合（8 次代理连接）、
+PRC 重绑定、IPv6/DNS、32 位宿主真实 UI 与启动注入、Hook 静态 TLS 检查、ARM64 bootstrap 仿真。
+Hook32/64 导入表没有新增 `GetProcessInformation` 或 `IsWow64Process2` 静态依赖。
+新包位于 `dist/arm64-shell-fix/ProxyLane-1.3.10-Windows-ARM64.zip`，固定 5 个产品二进制，
+已验证 ZIP CRC、每个 PE 的架构和包内文件与源产物一致性；不含 helper 或 MITM EXE。
+新增系统 shell 注入用例尚未在 ARM64 上执行，用户设备上的修复效果仍需复测。
+
+## 2026-11-12：统一使用系统 rundll32，精简打包
+
+本次按用户要求撤销独立 ARM64 提权宿主，ARM64 与 x64 共用现有启动流程：
+GUI 通过 `ShellExecuteEx` 的 `runas` 动词启动系统 `rundll32.exe`，传入完整 Hook DLL 路径、
+`ElevatedLaunch` 导出名及 Base64URL 请求。原生 ARM64 选择 `System32`；
+传统 x86/x64 的 `System32`/`SysWOW64` 选择保持原样。
+
+- `SystemRundllDirectory` 替代原先只允许 Intel 的路径函数，单元测试覆盖原生 ARM64、
+  ARM 仿真目标、未知和不一致架构。注入 `Route` 未放宽，ARM 宿主仍仅允许 ARM64→ARM64。
+- 删除 `ProxyLaneElevated` 项目、源文件、项目引用、文件名映射及构建/打包清单项。
+  不再构建或分发 `ProxyLaneElevatedARM64.exe`。
+- `ProxyLaneMitmARM64.exe` 仍可作为开发用 CA 工具交叉构建，但从发行包移除。
+  ARM64 包现在是 1 个 GUI EXE + 4 个 DLL（Hook、安全传输、MITM、SSH），共 5 个产品二进制，
+  另含 `README.md` 和 `LICENSE`。英文说明仍在 ARM64 README 的 English 小节。
+- 将 helper 测试替换为 `tests/ElevatedRundllTests.py`，直接启动系统 rundll32 和真实 Hook 导出。
+  使用带中文/空格的 DLL 路径，验证有效非管理员请求、损坏请求、UTF-8、长度和参数校验。
+  测试不触发 UAC，也不创建成功目标。ARM64 测试要求原生 ARM64 Python，防止仿真进程影响宿主选择。
+
+在 Windows ARM64 设备上复现入口回归：
+
+```powershell
+python tests/ElevatedRundllTests.py --platform ARM64 --hook bin/ARM64/Release/ProxyLaneHookARM64.dll
+```
+
+还需从普通权限的 ARM64 GUI 实测 UAC 确认/取消、系统 rundll32 的实际加载行为、
+原生目标代理与子进程，以及注入失败后的清理。当前 x64 构建主机不能替代这些验收；
+Windows XP 动态加载也尚未重测。下节独立 helper 的描述仅保留为历史记录。
+
+验证通过（日志 `build/qa/arm64-rundll-*.log`）：
+
+- ARM64 Release/Debug 均使用 `-Rebuild` 重建成功，每种配置 11 个构建产物的架构与 SHA256 已核对，
+  `RuntimeTested=false`。其中包含仅用于开发的 CA 工具和测试探针，发行包仅取 5 个产品二进制。
+- Win32/x64 Release 构建、单元测试、TCP/UDP 统计与启停、四种父子/孙进程组合、
+  8 次代理连接、PRC 重绑定及 IPv6/DNS 回归通过；32 位宿主真实 UI/限制/启动/注入回归通过。
+- 系统 rundll32 的 Win32/x64 入口回归各 17 项通过；ARM64 原生运行环境和错架构 DLL 的拒绝检查通过。
+- x64 SSH `-Full` 共 99 项通过；ARM64 bootstrap 两组 9 条路径通过；最终 Hook32/64 无静态 TLS 目录。
+- 两种 ZIP 的固定文件清单、CRC、PE 架构及包内二进制与当前源产物一致性通过。
+  ARM64 包在额外 EXE 存在和不存在两种输入目录下都成功，两个 EXE 均不入包。
+  包清单与 SHA256 见 `build/qa/arm64-rundll-package-{intel,arm64}.json`。
+
+## 2026-11-12：SSH 后端与原生提权 helper
+
+本次完成代码与交叉构建接入；Windows ARM64 实机验收仍未完成。
+
+- SSH 使用既有固定版本 libssh2 1.11.1、并发通道补丁及 openssl-native 3.5.9，
+  不更换密码学依赖或包哈希。该包同时含 x64/ARM64 的 v142 MT 静态 libcrypto。
+  `prepare-openssl.ps1 -Platform ARM64` 提取 ARM64 库，架构缓存隔离，共享下载包加锁。
+  `build-ssh.ps1 -Platform ARM64 [-OutputDirectory ...]` 输出 `ProxyLaneSshARM64.dll`。
+- Hook 按当前模块架构选择 SSH DLL，保持按需加载；x86、ARM64EC 和旧系统不开放后端。
+  ARM64 Hook 的 Release/Debug 构建均准备 SSH Release 后端，x64 保留既有 Release 构建路径。
+- 新增纯 ARM64 `ProxyLaneElevatedARM64.exe`。GUI 使用 `runas` 启动它，复用既有
+  Base64URL/UTF-8 请求协议和 `ElevatedLaunch` 校验、令牌检查、挂起创建、注入、恢复逻辑。
+  helper 以绝对路径从自身目录加载 Hook，依赖搜索限制为自身目录及系统目录。
+  非 ASCII 外层请求、过长请求、缺失 DLL/入口返回失败，不通过代码页转换接受歧义输入。
+- Intel GUI 保留系统 rundll32 路径；辅助项目的 x64 配置仅用于同源宿主回归，不加入 Intel 发行包。
+  不开放 ARM 宿主上的 x86/x64 注入，不修改 ARM64EC/ARM64X 边界，也不适配浏览器 QUIC 策略 Hook。
+- ARM64 包现含 7 个产品二进制：原 5 个文件加 SSH DLL、提权 helper。
+  额外的 SSH 测试程序仅存在于构建目录；固定打包清单继续排除测试程序及其他架构文件。
+
+ARM64 本机构建后，在设备上运行 SSH 测试（Python + Paramiko >= 3.5；无需编译器）：
+
+```powershell
+.\tests\run-ssh-transport-tests.ps1 -Platform ARM64 -Full
+python tests/ElevatedHelperTests.py --helper bin/ARM64/Release/ProxyLaneElevatedARM64.exe --hook bin/ARM64/Release/ProxyLaneHookARM64.dll
+```
+
+SSH runner 使用 `scripts/build-arm64.ps1` 生成的 `SshTransportTestsARM64.exe`，
+并拒绝在 x64 主机冒充 ARM64 运行验收。`-BinaryDirectory` 可指定设备上的完整构建输出。
+`-PythonExecutable` 可指定隔离环境中的 Python；runner 启动前检查 Paramiko >= 3.5，避免旧版服务器在 AES-GCM 用例中崩溃后表现为客户端超时。
+helper 自动测试仅验证协议和失败路径，不触发 UAC，也不请求成功创建目标。
+还须在标准用户下从 GUI 选择纯 ARM64 测试程序，分别确认/取消 UAC；
+确认代理流量、目标 PID、原生子进程继承，以及不支持目标注入失败后不遗留运行进程。
+这些实机项和 Windows XP 动态加载均尚未执行。
+
+本机验证记录（`build/qa/arm64-ssh-helper-*`）：
+
+- ARM64 Release/Debug 全量构建通过，每种配置 12 个产物均为原生 `0xAA64`；
+  校验清单与 SHA256 在 `arm64-build/{Release,Debug}/verification.json`，`RuntimeTested=false`。
+- ARM64 SSH DLL 已检查 `libssh2_init`、三项并发通道扩展和 `plssh_pump` 导出；
+  只依赖 Windows 系统 DLL，没有额外 OpenSSL / CRT DLL。
+- Win32/x64 Release 构建、单元测试、TCP/UDP 统计/重启/卸载、四种父子/孙进程组合、
+  8 次代理连接、重绑定及 IPv6/DNS 通过（`intel-regression.log`）。
+- x64 SSH `-Full` 全套测试通过，包括 RSA/ECDSA/Ed25519、加密私钥与 Unicode 路径、
+  Curve25519/AES-GCM、混合代理链、并发 OPEN、信任/认证失败、取消、超时、失联与空闲复用
+  （`ssh-regression.log`）。本机默认 Paramiko 3.1.0 不满足要求，使用独立 venv 的 3.5.1 重跑通过，系统环境未更改。
+- 同源 x64 helper 配合真实 Hook DLL 通过 18 项检查，包括中文/空格/逗号目录、
+  不从工作目录加载 DLL、损坏请求、非法 UTF-8、非管理员有效请求返回拒绝；未触发 UAC。
+- 32 位宿主真实 UI/限制/启动/注入回归通过（`legacy.log`）；最终 Hook32/64 均无静态 TLS 目录。
+- ARM64 引导代码两组共 9 条路径的仿真测试通过；本次未更改引导机器码。
+- 两包的 ZIP CRC、7 个产品二进制的架构与源文件字节一致性通过；ARM 包新增 SSH/helper 的缺失及错架构负向检查通过。
+  包清单记录在 `arm64-ssh-helper-package-{intel,arm64}.json`。
+
+## 2026-11-12：独立打包
+
+常规包保持 `ProxyLane-版本-Windows.zip`，只包含 x86/x64 产品组件。
+ARM64 独立输出 `ProxyLane-版本-Windows-ARM64.zip`，只包含 5 个 ARM64 产品文件
+（GUI、Hook、安全传输、MITM/DoH DLL、CA 工具）、专用说明和许可证，不含测试探针及调试符号。
+ARM64 SSH 后端仍未构建，跨架构注入与实机验证状态不因打包而改变。
+
+```powershell
+# x86/x64：默认从 bin 读取
+.\scripts\package-release.ps1
+# ARM64：默认从 bin/ARM64/Release 读取
+.\scripts\package-arm64.ps1
+# 等价的公共入口
+.\scripts\package-release.ps1 -Architecture ARM64
+```
+
+两个入口都支持 `-BinaryDirectory` 和 `-OutputDirectory`。使用固定清单和 PE Machine/可选头检查，
+避免目录中出现其他架构、测试文件或旧产物时被一起打包。x86/x64 打包前自动运行
+`tests/HookStaticTlsTests.py`，需要 Python。
+
+已生成两种 1.3.10 ZIP 并核对文件清单、ZIP CRC 和包内每个 PE 的架构；
+负向检查确认将 x64 DLL 改名成 ARM64 DLL、或给 x86 Hook 引入静态 TLS 目录时均拒绝打包。
+验证清单在 `build/qa/package-architecture-verification.json`。
+
+Windows 11 ARM 可以运行 x86/x64 仿真应用，但当前 `ProcessArchitecture::Route` 只开放
+ARM64→ARM64；ARM 系统上其他八种父子架构组合均不支持。普通子进程创建流程会报告注入失败，
+并释放 ProxyLane 自己增加的挂起，子进程因此可能未被代理而继续运行。Windows x64 上已通过的
+四种 x86/x64 组合测试不能替代 ARM 仿真环境验证。
+
+## 2026-11-12：同步 main 与构建回归
+
+同步主线 `6fabf2c`（包含 DoH、SSH、协议分析、UI 更新及 XP 静态 TLS 修复）。
+解决八个文件的合并冲突，并检查自动合并的架构边界：
+
+- 将 ARM64 `InjectDll` 入口同步为主线的 UTF-16 DLL 路径接口，保留 ARM64 原生注入实现。
+- 合并架构路由和主线的 PRC、提权、测试变更；保留 `/Zc:threadSafeInit-` 和 DoH 动态 TLS 状态。
+- 安全传输脚本默认仍只构建主线使用的 x64 后端；显式传入 `ARM64` 时构建原生后端，不恢复已停用的 Win32 Rust 后端。
+- `build-mitm.ps1` 增加 ARM64 目标及独立输出目录，ARM64 产品构建同时生成
+  `ProxyLaneMitmARM64.dll` 和 CA 工具 `ProxyLaneMitmARM64.exe`；Hook 按实际架构加载 MITM/DoH 模块。
+- 浏览器 QUIC 策略 Hook 使用 x64 指令定位及 x64 unwind 表，只在纯 x64 下启用。
+  ARM64 不编译或执行这条路径；这与通用 MITM/QUIC/DoH Rust 模块的交叉构建是两回事。
+- SSH 固定依赖目前是 x64 OpenSSL/libssh2，ARM64 明确返回后端不可用，不尝试加载 `ProxyLaneSsh64.dll`。
+  ARM64 SSH 后端仍待单独适配，本次没有更换密码学依赖。
+- 修复 ARM64 可执行文件的便携配置名，使 `ProxyLaneARM64.exe` 使用 `ProxyLane.ini`，
+  而非误裁剪成 `ProxyLaneARM.ini`；在现有配置存储测试中覆盖三种产品文件名。
+- 将配置初始化前的宿主转交判断统一为共享架构检测，删除自动合并遗留的 `IsWow64` 调用；
+  32 位宿主测试也同步使用新的架构检测替身，仍运行真实 UI 与注入实现。
+- 缩短 SSH 依赖构建目录名，修复长 worktree 路径下 VS 2019/CMake 的临时路径超限；
+  缓存仍以平台、libssh2 补丁哈希及固定 OpenSSL 包哈希区分。
+
+- 更新 MITM 接口回归测试的预期设置，保留主线新增的 `recording` 字段；原断言与当前接口结构不一致，未修改产品行为。
+
+已通过的验证（日志位于 `build/qa/arm64-main-merge-*.log`）：
+
+| 检查 | 结果与日志后缀 |
+| --- | --- |
+| ARM64 Release / Debug | 两种配置均通过，分别验证 9 个产物的 PE Machine 为 `0xAA64`；`release.log` / `debug.log` |
+| ARM64 引导代码 | 400 字节源码/生成结果一致、无重定位；Unicorn 两组共 9 条路径通过；`bootstrap.log` |
+| Win32 / x64 Release 回归 | 完整解决方案、单元测试、TCP/UDP 统计、重启及显式卸载；`regression.log` |
+| 托管启动及重绑定 | 四种父子/孙进程架构组合、8 次代理连接、MSBuild 启动、x86/x64 PRC 重绑定及 IPv6/DNS；同上 |
+| 配置存储 | Win32/x64 测试通过，包含 ARM64 便携文件名；`config.log` |
+| 32 位宿主 | 真实 UI、功能限制、普通代理启动与注入通过；`legacy.log` |
+| Hook 静态 TLS | 最终 `ProxyLaneHook32.dll` / `ProxyLaneHook64.dll` 均无 PE TLS 目录；`static-tls.log` |
+| MITM Release API | 设置、配额、停用/重启和过期对象测试通过；`mitm.log` |
+| DoH 离线连通性 | 超时、取消、SOCKS/SSH 信任失败归因及禁止重复重建代理链通过；`doh.log` |
+
+ARM64 产物与 SHA256 清单在 `build/qa/arm64-build/{Release,Debug}/verification.json`，
+`RuntimeTested` 仍为 `false`。C++ Debug/Release 分开构建，可选 Rust 模块沿用 Release 构建。
+
+仍未在 Windows ARM64 或 Windows XP 上实测。交叉构建、PE 检查、机器码仿真和
+x86/x64 本机回归不能替代这两项平台验收。ARM64 的跨架构/仿真进程注入、提权 helper、
+SSH 后端和浏览器 QUIC 策略 Hook 仍不支持；本次不更新正式发行包。
+
+## 2026-10-16 第三阶段：ARM64 → ARM64 原生注入
+
+已实现同架构注入，当前只完成交叉编译和机器码仿真，**未在 Windows ARM64 上执行**。
+下文第一、二阶段的禁用状态是历史记录，以本节为准。
+
+- `InjectDllArm64.cpp`：纯 ARM64 宿主对纯 ARM64 目标，覆盖调用者已挂起的主线程与
+  运行中进程的 `CreateRemoteThread` 两条路径。`AttachToHandles`、`AttachToI`、GUI
+  普通附加和已代理进程创建子进程的直接注入路由均已接入。DLL 路径使用 UTF-16。
+- 挂起线程路径不增加或减少挂起计数，由现有调用者恢复线程；在引导代码实际开始运行时
+  保存 X0–X30、SP、PC、NZCV、完整 SIMD 寄存器、FPCR/FPSR，随后使用 `NtContinue`
+  恢复上下文。加载 DLL、找不到入口、入口返回失败均继续原线程；上下文恢复自身失败则
+  fail-fast，不能带着损坏的上下文继续。线程执行约定参考
+  [Windows ARM64 ABI](https://learn.microsoft.com/en-us/cpp/build/arm64-windows-abi-conventions)。
+- 初始挂起进程的 PEB 加载器链表可能尚未就绪，因此通过 `VirtualQueryEx` 与映射文件名
+  找到主映像和 ntdll；验证目标主映像为 ARM64 且无 CHPE 元数据。核对本机/目标 ntdll
+  路径、PE 头后，用目标模块基址加导出 RVA 定位 `LdrLoadDll`、`LdrGetProcedureAddress`
+  和 `NtContinue`，不假设另一进程与当前进程的绝对函数地址相同，也不要求 kernel32 已加载。
+- 参数内存为 RW，机器码写入后改为 RX 并刷新指令缓存。执行发布前失败会释放两块内存；
+  成功安排执行后，保留到目标进程退出，避免异步代码仍执行时释放。短路径通常占两个
+  4 KiB 页面，长 DLL 路径按参数长度增加；每次成功安排注入都会保留一份，运行期不回收。
+- 返回 `0xFF01`/底层 `1` 仅代表已安排执行，不代表 Hook 已成功初始化。保留既有异步
+  PRC 注册确认流程。没有恢复 HookCallGate，没有在 Detours 安装时挂起其他线程，
+  显式卸载仍要求调用者保证安全时机。
+
+机器码源码位于 `src/remotecode/arm64/Bootstrap.S`，生成头文件一并纳入版本控制。
+`scripts/generate-arm64-bootstrap.py` 调用 Clang 生成 ARM64 COFF，拒绝 `.text`
+重定位后提取代码及入口偏移；`--check` 检查源码与生成结果一致。C++ 静态断言验证参数和
+Windows `CONTEXT` 的布局。`build-arm64.ps1` 现在还需要 Python，并在构建前执行该检查。
+
+离线仿真（需要 Python 的 `unicorn` 包）：
+
+```powershell
+python scripts/generate-arm64-bootstrap.py --clang C:\path\to\llvm\bin\clang.exe --check
+python tests/arm64/test_bootstrap.py
+```
+
+仿真执行实际签入的 400 字节机器码，用会破坏易失寄存器的 API 替身覆盖两种入口共 9 条
+成功/失败路径，检查参数、上下文、栈对齐、非易失寄存器和远程线程返回值。它不模拟 Windows
+加载器或 `NtContinue` 内核实现，不能证明真实 Windows 启动与恢复流程已正确。
+
+`build-arm64.ps1` 额外构建 `InjectionTestsARM64.exe` 和 `InjectionFixtureARM64.dll`，
+共验证七个输出文件均为原生 ARM64。虚拟机内将这两个文件放在同一目录，运行：
+
+```powershell
+.\InjectionTestsARM64.exe
+```
+
+该测试使用生产注入器创建自己的测试子进程，覆盖启动前注入、运行中附加、DLL 缺失、
+入口缺失、初始化返回失败、错误进程/线程组合及相对 DLL 路径拒绝，并检查 RX/RW 保护、
+挂起计数、原主线程继续执行及入口调用次序。测试 DLL 不安装 Hook，不需要代理服务器；
+这一步通过后还需要用真实 ProxyLane GUI/PRC 验证网络代理、子孙进程和异常/退出流程。
+
+范围与待验收项：
+
+- ARM64 与 x86/x64 的跨架构注入、ARM 主机上的仿真进程注入仍拒绝；传统 x86/x64
+  Windows 的原有路由保留。目标主映像检测不代表其加载的每个混合系统 DLL 都已验证。
+- 系统 `rundll32` 的 ARM64 提权 helper 尚未开放，GUI 内“以管理员身份启动”的该辅助
+  路径仍不支持。需要管理员权限时先以管理员身份启动原生 GUI，再走直接注入。
+- 远程引导代码尚无动态 unwind 元数据；跨越它的异常展开、调试栈回溯及系统保护策略
+  仍需实机验证。没有添加绕过动态代码限制的机制，相关系统 API 失败会返回错误。
+- 子进程 guard 的 ARM64 PEB/环境读取、延迟恢复 CIG、真实加载器时序、Detours 原生
+  重定位、PRC 确认、TLS/PSK 传输均需在 ARM64 虚拟机继续验收。
+
+本阶段构建与验证日志：`build/qa/arm64-injection-build.log`、
+`arm64-injection-debug.log`、`arm64-injection-regression.log`；产物清单仍在
+`build/qa/arm64-build/{Release,Debug}/verification.json`，`RuntimeTested` 保持 `false`。
+Release/Debug 交叉构建、七个产物的 PE 架构检查、9 条引导代码仿真路径均已通过。
+`tests/run-detours-tests.ps1` 已完整通过：Win32/x64 解决方案及单元测试、TCP/UDP 统计
+与重启/显式卸载、四种父子/孙进程组合（8 次代理连接）、MSBuild 启动和 IPv6/DNS 回归。
+未合并 main，未更新日常发行包。
+
+## 2026-10-16 第二阶段：原生交叉编译
+
+已新增产品的 `Debug|ARM64` 和 `Release|ARM64` 配置，使用 VS 2019 v142、
+Windows 10 SDK，现有 Win32/x64 的 v141_xp 配置保持不变。
+C++ GUI 与 Hook DLL 均已完整编译、链接；Rust 的 `aarch64-pc-windows-msvc`
+目标及锁定版本的 `ring/rustls` 也已实际编译通过，未修改 Cargo.lock 或上游源码。
+
+推荐从 x64 Windows 开发主机运行：
+
+```powershell
+.\scripts\build-arm64.ps1 -ClangBinDirectory 'C:\path\to\llvm\bin'
+.\scripts\build-arm64.ps1 -Configuration Debug -ClangBinDirectory 'C:\path\to\llvm\bin'
+```
+
+若 `clang.exe` 已在 PATH 中，可省略 `-ClangBinDirectory`。脚本会加载
+`vcvarsall amd64_arm64` 的头文件/库环境，并在结束时恢复调用者的环境变量。
+需要 VS 2019 的 ARM64 编译器、ATL/MFC、Windows 10 SDK、Rust 与 Clang；
+不能只把 Clang 放进 PATH 而遗漏 MSVC/SDK 头文件。`ring 0.17.14` 的 Windows ARM64
+C 代码要求 Clang。本机实际使用现有 Android NDK 27.2 附带的 Clang 18.0.3，
+以 `--target=aarch64-pc-windows-msvc` 编译并链接 Windows SDK/CRT；产物不是 Android ELF。
+Rust 的官方平台说明也支持在 Windows 上进行架构交叉编译：
+[Windows MSVC targets](https://doc.rust-lang.org/rustc/platform-support/windows-msvc.html)。
+
+产物放在 `bin/ARM64/Release/` 或 `bin/ARM64/Debug/`，与既有发行产物隔离：
+
+| 文件 | 用途 |
+|---|---|
+| `ProxyLaneARM64.exe` | 原生 GUI |
+| `ProxyLaneHookARM64.dll` | 原生 Hook/本地代理模块，保留显式卸载接口 |
+| `ProxyLaneSecureTransportARM64.dll` | 原生 Rust 安全传输模块 |
+| `ProxyLaneTrafficARM64.exe` | 复用现有 TCP/UDP、启停及显式卸载测试的原生测试程序 |
+| `DetoursBuildProbe.exe` | 架构识别与 Detours 事务探针（始终为 Release 探针） |
+
+脚本验证所有上述文件均为 PE32+、Machine `0xAA64`，写入 SHA256 清单。
+Debug 的安全传输模块与既有构建习惯一致，使用 Rust Release 版本。
+`ProxyLaneTests` 中的指令字节用例仍为 x86/x64，解决方案 ARM64 配置不构建它；
+两个原生探针由 `build-arm64.ps1` 单独构建，不能把它们当作完整 ARM64 重定位测试覆盖。
+流量探针仍需要现有 `TrafficStatisticsE2ETests.py` 和 SOCKS5 测试服务配合；此阶段未运行。
+
+`InjectDll.cpp` 按实际指令集分支，ARM64 分支明确返回不支持；`AttachToI` 在 ARM64
+也直接返回 `ERROR_NOT_SUPPORTED`，不会分配或执行 x86/x64 的远程线程机器码。
+所有 Windows ARM64 宿主的自动注入路由仍被第一阶段策略禁用；允许在受控测试进程内
+直接调用 `gp_HookWinsock/gp_UnhookWinsock`，用于后续验证原生 inline hook。
+构建成功不代表远程注入、网络代理或安全传输已经在 ARM64 上验证通过。
+
+本阶段验证：
+
+- Release、Debug 完整交叉构建和五个产物的 PE 架构检查通过。
+- 导出表：Hook DLL 的 7 个导出、Rust DLL 的 13 个 C ABI 导出存在。
+- GUI 和流量探针均依赖 `ProxyLaneHookARM64.dll`，没有错误链接 x64 Hook DLL。
+- 安全传输 DLL 依赖 `VCRUNTIME140.dll`；虚拟机运行时需具备相应 ARM64 VC 运行库。
+- Win32/x64 Release 解决方案重新编译、两架构单元测试通过；本阶段未重复上一阶段
+  已通过的完整网络 E2E，也未执行任何 ARM64 程序。
+
+构建日志、导入/导出表和 SHA256 清单位于 `build/qa/arm64-build/`，
+配置分别使用 `Release/verification.json` 与 `Debug/verification.json`。
+尚未合并 main、未修改发行打包脚本，也未打 ARM64 发行包。
+下一步是原生进程内运行测试和 ARM64 bootstrap/helper 的实现。
+
+## 2026-10-16 第一阶段：架构识别与路由
+
+已将 GUI、提权/子进程辅助注入、底层注入入口统一接入
+`src/ProxyLaneHook/ProcessArchitecture.h`，区分 `Unknown/X86/X64/Arm64`。
+动态调用 `IsWow64Process2`，失败保留错误并拒绝注入；只有 API 不存在且操作系统早于
+Windows 10 1709 时，才允许用旧接口识别 x86/x64。使用 `RtlGetVersion` 读取真实系统版本，
+避免应用 manifest 影响判断。ARM 仿真环境中 `GetNativeSystemInfo` 也可能返回仿真架构，
+不能把这个 API 单独当作真实宿主架构的证据。参见
+[GetNativeSystemInfo 文档](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-getnativesysteminfo)。
+
+产物名称集中定义为既有 x86/x64 名称及 `ProxyLaneARM64.exe`、
+`ProxyLaneHookARM64.dll`、`ProxyLaneSecureTransportARM64.dll`。
+启动器根据宿主架构选择原生程序；安全传输根据当前模块架构选择 DLL。
+辅助进程不再根据 DLL 文件名是否以 `64.dll` 结尾来推断架构。
+远程子进程标记读取也先确认架构；获取 WOW64 PEB 失败时不再继续解析另一种 PEB 布局。
+
+**阶段性限制：** ARM64 宿主上的注入路由暂时全部返回不支持，包括仿真进程；
+原生 ARM64 bootstrap、对应 helper 和混合模块边界尚待实现。第一阶段新增文件名只是明确映射；
+第二阶段已补充原生交叉构建，尚未开放注入。x86/x64 Windows 的同架构直连与跨架构辅助流程保留。
+ARM64EC/ARM64X 不在本阶段支持范围；进程架构识别也不能证明混合模块 ABI 兼容。
+
+新增 `tests/ProcessArchitectureTests.cpp`，覆盖三种架构、ARM 宿主仿真进程、未知 machine、
+API 失败不回退、旧系统回退边界、路由及真实当前进程查询。
+ARM64 探针已更新为当前 `InstallDetourHooks/RemoveDetourHooks` API 并包含上述测试，
+不再引用已删除的 HookCallGate。x64 主机仅验证该探针交叉编译和 PE Machine，未运行它。
+
+验证已通过，记录见 `build/qa/arm64-foundation/`：
+
+- Release Win32/x64 完整解决方案编译、两架构单元测试。
+- `tests/run-detours-tests.ps1`：TCP/UDP 统计和重启、显式卸载、四种 x86/x64
+  父子/孙进程组合（8 次代理连接）、MSBuild 启动、IPv6/DNS 回归。
+- `tests/run-startup-smoke.ps1 -ObserveSeconds 5 -Repetitions 1`：x86 转交 x64
+  和直接 x64 启动均通过，主窗口保持响应。
+- ARM64 探针交叉编译、PE Machine `0xAA64` 验证通过；未在 ARM 设备运行。
+- 检查四个 x86/x64 EXE/DLL 的 PE 架构与导入表，没有新增对 `IsWow64Process2`
+  或 `RtlGetVersion` 的静态导入。旧系统回退经过模拟测试，尚未在 XP 实机重测。
+
+本阶段不修改 main、不发布发行包。
+第一阶段后续的原生交叉构建已在第二阶段完成；进程内运行验收、原生注入和匹配架构的 helper 仍待完成。
+
+
+## 初始评估结论与证据（2026-10-15）
+
+原生 ARM64 支持可行，Detours 后端已有可用的构建基础；主要工作是将整个工程从
+“32 位 / 64 位”的二选一模型改为明确区分 x86、x64、ARM64，并适配注入与子进程流程。
+目前不能仅复制 x64 项目配置就发布 ARM64 版本。
+
+已在 Windows 10 x64（10.0.19045）上完成以下检查：
+
+| 项目 | 结果 | 证据范围 |
+|---|---|---|
+| VS 2019 v142 ARM64 编译器、ATL/MFC 库目录 | 已安装 | 本机 `14.29.30133` 的 `bin/Hostx64/arm64`、`atlmfc/lib/arm64` 存在；未编译完整 MFC 应用 |
+| Detours 核心及本项目事务/入口保护封装 | ARM64 编译、链接通过 | `detours.cpp`、`disasm.cpp`、`modules.cpp`、`DetourHooks.cpp`、`HookCallGate.cpp` |
+| 输出架构 | 已验证为原生 ARM64 | 读取构建探针的 PE 文件头，Machine 为 `0xAA64`；编译时检查 `_M_ARM64` 且排除 `_M_ARM64EC` |
+| ARM64 执行、hook 和 DLL 注入 | 未验证 | 当前执行主机是 x64，没有在此运行 ARM64 探针 |
+| Rust 安全传输 ARM64 | 未构建 | 本机尚未安装 `aarch64-pc-windows-msvc` 标准库目标；现有脚本仅构建 x86/x64 |
+
+复现构建：在 VS 2019 开发者命令行中运行：
+
+```powershell
+msbuild tests/arm64/DetoursBuildProbe.vcxproj /m /p:Configuration=Release /p:Platform=ARM64
+dumpbin /headers build/qa/arm64-assessment/bin/DetoursBuildProbe.exe
+```
+
+本次日志为 `build/qa/arm64-assessment/build.log`，PE 检查结果为同目录
+`verification.json`。该探针只用于编译、链接检查，没有实际安装 hook；
+不能将其构建成功等同于原生运行测试通过。探针未加入现有 x86/x64 解决方案。
+
+## 必须处理的工程位置
+
+下列行号按评估基线记录，后续修改时应按函数名定位。
+
+| 优先级 | 位置 | 当前行为与适配要求 |
+|---|---|---|
+| P0 | `src/ProxyLane/Page3.cpp:699`，`is64Process`、`ChooseProxyLaneHookModule`、`ChooseRundll32` | 只用 `IsWow64Process` 和文件名 `64.dll` 选择模块，无法正确表达 x64 与 ARM64 的区别；需要共享的架构检测与明确的产物映射 |
+| P0 | `src/ProxyLaneHook/ElevatedLauncher.cpp:92,276`，`Is64BitProcess`、`ProxyLaneInjectSuspendedProcess` | 只比较双方是否 64 位就决定能否直接注入；x64 与 ARM64 同为 64 位却不是同一指令集，必须改成目标执行架构匹配，并更新提权/辅助进程路径 |
+| P0 | `src/ProxyLaneHook/InjectDll.cpp:38` | `_WIN64` 分支内是 x64 机器码与 `CONTEXT.Rip/Rax`，ARM64 同样定义 `_WIN64`，会错误进入此分支；必须按 `_M_IX86`、`_M_X64`、`_M_ARM64` 分开，提供原生注入实现 |
+| P0 | `src/ProxyLaneHook/ProxyModule.cpp:283`，`AttachToI` | 远程线程占位代码为 x86/x64 的 NOP/RET，不能在 ARM64 上执行；无主线程 ID 的附加路径也需适配 |
+| P0 | `src/remotecode/remoteCode.h:18` 和 `remoteCode.cpp` | 引导参数含指针、句柄和布局依赖；新的 ARM64 引导代码需有可复现生成流程与偏移检查，不能直接复用现有字节数组 |
+| P1 | `src/ProxyLaneHook/HookWinsock.cpp:2278`，`FinishChildCreation` | 子进程创建、暂停、PRC 决策、注入、恢复是完整链路，架构切换后必须保持父进程返回前注入与失败恢复语义 |
+| P1 | `src/ProxyLaneHook/ProxyReceptionCentre.cpp:279`，`RemoteProcessHasChildGuard` | 通过 WOW64 状态、PEB/环境偏移读取远程标记；需要分别验证 ARM64、x64 仿真和 x86 仿真的布局及失败处理，不能仅按位宽推断 |
+| P1 | `src/ProxyLaneHook/DeferredMitigationPolicy.h:100` | 使用未公开的属性列表内存布局，`_WIN64` 下固定头部大小；需在 ARM64 的实际创建流程中验证，不能由 x64 测试推导 |
+| P1 | `src/ProxyLane/ProxyLane.cpp:188` | x86 启动器在 WOW64 下转交给 `ProxyLane64.exe`；需增加原生宿主架构选择，避免 ARM64 主机仍固定转交 x64 |
+| P1 | `src/ProxyLaneHook/asynsocket/AsyncSecureSocketLayer.cpp:96` | `_WIN64` 一律加载 `ProxyLaneSecureTransport64.dll`；需要独立 ARM64 DLL 名称和加载映射 |
+| P1 | `src/ProxyLane/*.vcxproj`、`src/ProxyLaneHook/*.vcxproj`、`src/ProxyLane.sln` | 产品只有 Win32/x64、v141_xp 配置；建议 ARM64 单独使用 v142 + Windows 10 SDK，现有 XP 配置保留给 x86/x64 |
+| P1 | `scripts/build-secure-transport.ps1`、`scripts/package-release.ps1` | 需要 ARM64 Rust 目标、依赖构建验证，以及明确的三架构输出/打包清单 |
+| P2 | `tests/DetourHooksTests.cpp`、托管启动/流量测试 | 指令重定位单测使用 x86/x64 字节序列，ARM64 不能直接执行；新增 ARM64 指令用例和父子进程架构矩阵 |
+
+`HookNewProcessInfo` 等现有消息主要使用固定宽度字段，可以优先保持协议兼容；
+但仍需逐个检查实际传输结构的 `sizeof/offsetof`，不能因存在 `#pragma pack(1)` 就认定
+所有结构都可跨架构传输。`myapi` 是远程执行参数，与 PRC 的消息协议应分别处理。
+
+## 建议实施顺序
+
+1. **统一架构识别和模块选择。** 引入 `Unknown/X86/X64/Arm64`，动态调用
+   `IsWow64Process2`；成功且 `processMachine == IMAGE_FILE_MACHINE_UNKNOWN` 时使用
+   `nativeMachine`。失败保持 Unknown，不把它当成 x64。旧系统仅在确认是传统
+   x86/x64 环境后使用兼容分支。同步替换 GUI、提权和子进程注入中的二选一逻辑。
+   此规则依据 [Microsoft 的接口定义](https://learn.microsoft.com/en-us/windows/win32/api/wow64apiset/nf-wow64apiset-iswow64process2)。
+2. **建立 ARM64 原生构建和进程内验证。** 先补足架构编译分支，构建原生 Hook DLL；
+   在受控 ARM64 测试程序中直接加载并启停 hook，验证网络代理和指令重定位，先不依赖远程注入。
+   建议产物显式命名为 `ProxyLaneARM64.exe`、`ProxyLaneHookARM64.dll`、
+   `ProxyLaneSecureTransportARM64.dll`，避免与已有 x64 的 `64` 命名冲突。
+3. **适配 ARM64→ARM64 注入。** 覆盖启动时的挂起主线程和附加到运行中进程两条路径；
+   验证寄存器/栈恢复、加载器时序、实际函数地址解析和失败时的线程恢复。
+   Detours 的注入 API 可以作为单独方案评估，但本次只引入了其 inline hook 核心，
+   不能认为现有私有注入流程已被 Detours 接管。
+4. **再扩展跨架构路由。** 优先使用与目标架构匹配的辅助程序；若继续使用系统
+   `rundll32`，必须在 Windows on ARM 上验证其实际架构、重定向与模块加载兼容性。
+   不继续把 `System32 == x64` 写进业务规则。
+5. **补齐安全传输和发布。** 构建 `aarch64-pc-windows-msvc`，检查锁定版本的
+   rustls/ring 及 C ABI。Rust 官方列出了该目标及 Windows 交叉编译路径，
+   但这不代替本项目依赖的实际构建测试：[Rust MSVC 平台说明](https://doc.rust-lang.org/stable/rustc/platform-support/windows-msvc.html)。
+
+上述工作分成可独立审查的提交；第一阶段架构识别已实施，后续再引入 ARM64 特有的执行代码。
+
+## 验收边界
+
+建议首期以 Windows 11 on ARM 的纯 ARM64 进程为目标，ARM64EC/ARM64X 混合模块单独评估；
+仅靠一个进程位宽或架构枚举不能保证混合模块 ABI 兼容。现有 x86/x64 程序在 ARM 主机
+上的仿真运行也应单独测试，不能把“系统能运行它”当成“注入和 inline hook 已兼容”。
+微软区分了 Windows 10 on ARM 的 x86 仿真与 Windows 11 的 x64 仿真，并要求在 ARM
+设备或相应虚拟机上进行运行测试：[添加 Arm 支持](https://learn.microsoft.com/en-us/windows/arm/add-arm-support)。
+
+最低验收集：
+
+- ARM64 单进程启停、TCP/UDP、DNS、ConnectEx/WSASendMsg 缓存回调、阻断与绕过策略。
+- ARM64 原生重定位：分支、条件分支、PC 相对寻址和字面量加载；调用者保证静默时的启停、安装后的并发调用、失败回滚。
+- ARM64→ARM64 子进程/孙进程、提权、附加、失败后的挂起线程恢复。
+- 在同一 ARM 主机上逐项测试 x86/x64/ARM64 父子进程的九种组合；未支持的组合应明确拒绝，
+  不能错误选择另一架构的 DLL。
+- ARM64 安全传输 DLL 的实际 TLS/PSK 连接，并保持现有 x86/x64 回归通过。
+
+已完成共享架构识别、原生交叉构建和 ARM64 同架构注入实现；ARM 设备运行验收仍未完成。
+
+
+## Windows 11 跨架构路由实现更新
+
+ARM64/x64/x86 已接入共享架构路由：Windows 11 ProcessMachineTypeInfo 确认实际 ABI；同架构直接注入，跨架构用系统 rundll32，并设置机器类型、处理 x86 文件系统重定向、在恢复宿主前核对其实际架构。GUI 附加和子进程使用同一启动组件。子进程继续仅继承授权的进程/线程句柄，保持既有挂起恢复语义。
+
+ARM64 包增加同版 Hook32/64，保留原生后端；Intel 包仍不带 ARM64。Intel 引导代码补充转发导出解析、指令缓存刷新和失败分配释放。
+
+新增 `tests/CrossArchitectureE2ETests.py` 与三种架构的 CrossArchitectureProbe：ARM 主机验收九种启动/父子组合及孙进程、九种运行中附加组合，要求实际 SOCKS5 流量。Intel 主机运行其四种组合子集，不能代替 ARM 设备运行。完整范围与运行方法见 README_ARM64.md。
+
+
+### x64 PowerShell 附加后的子进程入口修复
+
+用户报告 Windows 11 ARM 上兼容模式 PowerShell 内的 curl 别名可代理，但启动 System32/curl.exe 时没有子进程接管；原生 PowerShell 正常。仅 Hook CreateProcessInternalW 的导出入口不能覆盖混合系统模块内部直接调用路径。本次在 Hook32/64 中增加 Kernel32/KernelBase 的公开 CreateProcessW 入口，仍调用各自原始 trampoline，保持原 API 行为；动态 TLS 抑制嵌套入口的重复注入/恢复。按 Detours 实际解析入口去重，避免导出别名重复 patch。XP 没有 KernelBase，保留既有入口组合；原生 ARM64 Hook 继续使用内部 ARM 入口。
+
+矩阵增加直接 KernelBase 创建、附加后再创建子进程/孙进程、调用者挂起保留、失败后再次创建。ARM 设备运行与该 PowerShell 个案的修复效果仍待用户复测，不能由 Intel 回归替代。
+
+
+### 进程创建 API 模块映射清理
+
+用户复测确认 x64 PowerShell 附加后的子进程接管已恢复。后续审查发现 HOOKMODULE_KERNEL32 在 Windows 8+ 已映射为 KernelBase.dll，原先额外查询 KernelBase!CreateProcessW 的分支既重复，也会在 Windows 7 缺少该导出时使安装失败。
+
+现仅通过已有模块映射安装一次 CreateProcessW，删除第二个回调、绑定项及专用去重/导出包装函数。保留动态 TLS 防重复处理、XP 原有行为和原生 ARM64 内部入口。DLL 存在性检查只维持原先额外 Hook 的启用范围，不再推断导出归属。LoadLibraryExW 等其他 API 的路径未随此次清理改变。Windows 7 与 XP 的实机运行未在本次环境验证。
+
+
+### LoadLibraryExW 独立模块选择
+
+LoadLibraryExW 使用独立的 HOOKMODULE_LIBRARYLOADER：只有当前进程已加载 KernelBase 且它导出 LoadLibraryExW 时才选择 KernelBase，否则回退 Kernel32。进程创建 API 的 HOOKMODULE_KERNEL32 版本映射保持不变。始终只有一个 LoadLibraryExW 绑定，不依赖 Detours 跳过 Windows 7 Kernel32 的函数序言和跳转包装。
+
+回归新增模块不存在/导出缺失的回退检查，以及独立测试进程内的单 Hook 覆盖：经 Kernel32 和直接 KernelBase 调用均进入同一个 Hook，原始 trampoline 可正常加载，卸载 Hook 后恢复原行为。Windows 7/XP 设备运行仍须另行验证，现代 Windows 上的测试不能替代它。
+
+### 2026-11-12：实现状态澄清与 QUIC 策略暂缓
+
+按用户决定，ARM64 浏览器专用 QUIC 策略干预暂缓，不纳入本轮验收范围。这项适配尚未实现，不能写成“已实现、只待测试”。当前 ARM64 宿主不启用 BrowserQuicPolicy，包括面向 x64 仿真浏览器的策略下发。它与常规 UDP 代理是不同功能，不能据此推断 ARM64 没有 UDP 代理能力。
+
+跨架构注入/附加/子进程代理、原生 SSH 后端、MITM/TLS 后端及使用系统 rundll32 的 UAC 提权启动均已有实现，并已完成对应构建和打包。其中原生 ARM64X 命令行注入、x64 PowerShell 附加后子进程接管已有用户实机成功反馈；完整 ARM 架构组合以及 SSH、MITM/TLS、UAC 专项运行验收尚未完成。“待验收”表示测试证据尚不完整，不表示这些功能尚未开发。
+
+完整跨架构矩阵指三种架构之间的测试组合，不是额外待开发的功能。Intel 回归和 ARM 交叉编译不能替代 Windows 11 ARM 真机运行；任意 ARM64EC 混合模块兼容性也不作全面承诺。当前状态表及设备测试方法见 [ARM64 包说明](README_ARM64.md)。
+
+### 2026-11-12：用户 ARM 真机测试通过反馈
+
+用户随后确认子进程代理、SSH、MITM/TLS、UAC 均已测试可用，更新上述验收状态为“用户 ARM 真机测试通过”。跨架构子进程场景包括：原生 ARM64 cmd 分别启动 amd64 gonc、i386 gonc，以及用户描述为 `syswow32` 目录内的 cmd 分别启动 amd64 gonc、i386 gonc，四个场景均可代理子进程。
+
+`syswow32` 保留用户原话，尚未核实是否指 SysWOW64，不据此认定父进程实际架构。记录来源是用户手工实测，不代表完整自动化矩阵已经运行通过。浏览器专用 QUIC 策略干预仍按前述决定暂缓。最新汇总见 README_ARM64.md。
+
+用户进一步确认代理链也已测试正常，代理链状态补记为“用户 Windows 11 ARM 真机测试通过”。未提供具体链路配置，本记录不扩展为所有协议排列组合的覆盖声明。
+
+### Firefox ARM64 创建子进程时的栈溢出
+
+用户提供 Firefox 160.0、Windows 11 ARM 22631 的崩溃报告，异常为 EXCEPTION_STACK_OVERFLOW。ProxyLaneHookARM64.dll 的 CodeView GUID/age 与本地符号完全匹配（7AC3B7BAF1F041E899D227C66896238A9，时间戳 0x6AF54587）。符号化调用链为：
+
+```text
+_alloca_probe                          RVA 0x1020
+InjectDllArm64W                        RVA 0x8fcec，调用 ResolveNativeApis
+AttachToHandles                       RVA 0xdaf98
+ProxyLaneInjectSuspendedProcess        RVA 0x8d90
+CHookWinsock::FinishChildCreation      RVA 0x8012c
+CHookWinsock::inhook_CreateProcessInternalW  RVA 0x8bc20
+hook_CreateProcessInternalW            RVA 0x8ae38
+```
+
+旧版 ResolveNativeApis 序言通过 x15=0x303e、lsl #4 申请 197600 字节栈空间，另有 16 字节保存帧；其中三个 WCHAR[32768] 路径数组合计 196608 字节。在 Firefox 的调用线程剩余栈空间不足时，进入该函数的栈探测即溢出。现有调用栈没有显示循环递归，此问题也不涉及已暂缓的浏览器 QUIC 策略干预。
+
+修复将三个路径缓冲区作为一次按需堆分配，离开函数时自动释放并保留 Win32 错误码；分配失败返回 ERROR_NOT_ENOUGH_MEMORY。保留原有完整路径容量及目标映像校验，不新增静态 TLS。InjectionTestsARM64 增加在 128 KiB 栈线程中执行启动注入和运行中附加的用例，验证远端 Hook 回调、调用者挂起计数和子进程正常退出。新增回归程序的 ARM 真机运行结果尚未单独报告；Firefox 的用户复测结果见下。
+
+本次验证：ARM64 Release/Debug 构建通过；Release DLL 中 ResolveNativeApis 的固定栈帧从 197616 字节降为 1072 字节（包含保存寄存器的空间，不包含所调用函数）。引导代码模拟测试通过，Intel 跨架构回归通过 8 个启动用例、4 个附加后子进程用例和 37 次代理连接；Hook32/64 最终 DLL 的静态 TLS 检查通过。XP 实机未测试。构建、符号化及回归日志保存于 build/qa/firefox-arm64-stack。
+
+2026-11-12 用户复测确认：修复提交 6bbab42 对应版本的 i386、amd64、ARM64 Firefox 均正常、稳定地透明代理。Firefox ARM64 栈溢出问题更新为“已修复，用户真机复测通过”。该反馈验证浏览器实际使用，不等同于新增小栈回归程序或完整自动化跨架构矩阵已运行；浏览器专用 QUIC 策略干预继续暂缓。
+
+### 2026-11-12：将公开 CreateProcessW Hook 限定到 ARM 仿真进程
+
+根据用户要求，新增公开入口的启用条件改为当前进程的 native=ARM64 且 process=x86/x64。原生 x86/x64 Windows（包括 x64 上的 WOW64 进程）不再安装这个额外 Hook，保留 CreateProcessInternalW / CreateProcessWithLogonW；原生 ARM64 路径不变。仍使用现有 ProcessArchitecture 动态 API 查询，查询失败记录 query-architecture 错误而不猜测运行架构。LoadLibraryExW 的独立模块选择、跨架构路由及动态 TLS 去重机制保持不变。
+
+测试增加平台条件覆盖，并在跨架构附加探针中于注入前保存 Kernel32/KernelBase 的 CreateProcessW 入口字节，注入并确认代理流量后检查原生 Intel 入口未被修改，再验证子进程和孙进程代理。探针使用 ready 文件确保附加发生在快照之后。ARM 仿真进程保留公开入口的判断有模拟测试覆盖，实际 PowerShell/Firefox 场景仍待本次变更后的 ARM 真机复测。
+
+本次构建及回归：Win32/x64 Release 构建和完整 Detours 回归通过，ARM64 Release 交叉构建通过。Windows 10 x64 上的 8 个启动、4 个附加后子进程用例及 37 次代理连接通过；4 个附加用例均验证公开 CreateProcessW 入口未被修改。Hook32/64 静态 TLS 检查通过。ARM64 和 Intel 分别打包，使用同一轮 Hook32/64，Intel 包不含 ARM64 文件。XP/Windows 7 实机未测试。日志见 build/qa/arm-emulation-create-gate。
+
+### 2026-11-12：提权进程的 DoH 日志名称显示为 Unknown
+
+用户报告同一提权 gonc.exe 的代理日志显示名称，但 DoH 开始和结果日志显示 Unknown。原因是 DoH 日志将 receptionCentre 传为 NULL，跳过 Hook 登记的进程身份，只尝试 OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ) / GetModuleFileNameExW；普通权限宿主无法读取提权进程时名称为空。这是共享日志路径问题，不限于 ARM64，日志中的 DNS 结果和代理流量不受此显示问题影响。
+
+修复让 TCP/UDP 地址解析和 DNS 接管路径传入所属 PRC，优先按 PID 与创建时间读取已登记身份；每个应用请求保存独立名称快照供开始和结果日志使用，不把名称放入跨进程共享查询。无法取得登记身份时保留系统查询回退，并校验进程创建时间，避免 PID 复用误标。日志辅助函数保留调用方错误码，不改变 DoH 缓存、事件驱动、转发或 UDP 回包来源地址。
+
+回归使用独立测试进程的空 DACL 实际制造进程查询拒绝访问，并通过 PRC 登记与可执行文件名不同的 RegisteredDoh.exe，检查成功、缓存命中、共享查询和失败日志仍使用登记名称。测试只限制自身进程，并保留句柄恢复 DACL，不修改用户进程权限。真实 ARM 提权场景仍需用户复测。
+
+本次验证：Win32/x64 Release 构建及 Detours 回归通过，ARM64 Release 交叉构建通过。受限进程 DoH 集成测试覆盖成功、缓存、共享查询、取消、代理链、失败和 bootstrap 地址重试；DNS 中继 SOCKS5、HTTP、代理链及 SERVFAIL 测试通过。Google 测试端点连接超时后，改用可达的 AliDNS 端点完成在线验证。Hook32/64 最终 DLL 静态 TLS 检查通过；XP 实机未测试。ARM64/Intel 包已分别生成，核对每个二进制与构建输出一致、两包 Hook32/64 一致，Intel 包不含 ARM64 文件。测试日志和核对记录见 build/qa/doh-process-identity，发布包见 dist/doh-process-identity。
+
+### 2026-11-12：修正 ARM64 标题与托盘提示的架构标签
+
+主窗口标题和托盘悬停提示均调用 AppVersion::DisplayTitle。旧实现将 _WIN64 等同于 x64，但 ARM64 编译同样定义 _WIN64，因此误显示为 x64。改为按 _M_ARM64 / _M_X64 分别追加 ARM64 / x64 标签；32 位版本保持原有标题格式。这是显示修正，不改变进程架构识别与注入路由。
+
+ARM64、Win32、x64 Release 构建通过，已核对最终 PE 架构和对应标题后缀。两种发布包的二进制与构建输出一致，Intel 包不含 ARM64 文件；Hook32/64 静态 TLS 检查通过。ARM64 界面与 XP 实机未测试。本次为标题显示修正，未重复运行代理链路回归。记录见 build/qa/arm64-title，发布包见 dist/arm64-title。

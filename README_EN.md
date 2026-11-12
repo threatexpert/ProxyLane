@@ -1,4 +1,4 @@
-﻿<h1 align="center">ProxyLane</h1>
+<h1 align="center">ProxyLane</h1>
 
 <p align="center">
   <strong>Transparent per-process proxy for Windows · HTTPS / QUIC traffic decryption</strong><br>
@@ -16,6 +16,8 @@
 ProxyLane gives selected Windows applications their own proxy settings without changing the system-wide proxy or installing a kernel driver. It uses user-mode process injection and network API hooks, and can pass proxy settings to child processes.
 
 Core proxy features support **Windows XP through Windows 11**, with Win32 and x64 components.
+
+The regular `ProxyLane-version-Windows.zip` targets x86/x64 Windows and contains no ARM64 binaries. ARM64 uses a separate experimental `ProxyLane-version-Windows-ARM64.zip`; see its bundled README for supported paths and pending device validation.
 
 It also helps inspect application traffic: view HTTP/1.1, HTTP/2 and HTTP/3 requests and responses, DNS and Raw/Hex data, decrypt HTTPS and QUIC v1, and save recordings for offline viewing. Select `NOPROXY` to monitor traffic without an external proxy.
 
@@ -158,6 +160,8 @@ C++ manages demand-created sessions. Connections on the same event thread reuse 
 
 Multiple channel opens can await server confirmation on the same session; a slow target does not serialize later opens. Each session admits at most 32 unfinished opens and queues excess requests. An individual open times out after about 60 seconds without failing healthy channels. Cancelled/timed-out operations retain cleanup state until a late confirmation is closed or a rejection arrives, and count against this limit.
 
+The experimental ARM64 package also includes `ProxyLaneSshARM64.dll`, cross-built but awaiting ARM64 device validation; see [ARM64 package notes](docs/README_ARM64.md).
+
 `ProxyLaneSsh64.dll` is loaded only for SSH, with Windows 10 / Server 2016 x64 as the minimum support target. A 64-bit host can serve 32-bit applications. The OpenSSL backend supports RSA / ECDSA / Ed25519 host keys, Curve25519 key exchange and AES-GCM.
 
 ## gonc TLS-PSK Secure Transport
@@ -209,7 +213,7 @@ The application and runtime DLLs are written to `bin/`. The x64 Release post-bui
 
 ### SSH Backend Dependency
 
-libssh2 uses official 1.11.1 plus `third_party/libssh2/concurrent-channel-open.patch`, maintained in the development branch of [threatexpert/libssh2](https://github.com/threatexpert/libssh2). The directory also contains the matching public header and original license. `scripts/build-ssh.ps1` downloads and SHA256-verifies the official source archive, applies the patch, and isolates source/build caches by patch hash under the ignored `build/deps` directory. Builds do not depend on a developer's sibling checkout. The CMake wrapper in `src/ProxyLaneSsh` statically links OpenSSL libcrypto and the CRT, with no extra OpenSSL or VC runtime DLLs. On the first build, `scripts/prepare-openssl.ps1` downloads precompiled `openssl-native 3.5.9` from nuget.org (about 128 MiB), verifies the SHA256 pinned in `third_party/openssl/dependency.json`, and caches it for later builds. No OpenSSL installation, Perl, NASM, NuGet, .NET SDK or account is required. Offline builds may place the same package at `build/deps/openssl-native.3.5.9.nupkg` beforehand. Only x64 / v142 / MT static libcrypto and headers are used; provenance and signature verification are documented in `third_party/openssl/UPSTREAM.txt`.
+libssh2 uses official 1.11.1 plus `third_party/libssh2/concurrent-channel-open.patch`, maintained in the development branch of [threatexpert/libssh2](https://github.com/threatexpert/libssh2). The directory also contains the matching public header and original license. `scripts/build-ssh.ps1` downloads and SHA256-verifies the official source archive, applies the patch, and isolates source/build caches by patch hash under the ignored `build/deps` directory. Builds do not depend on a developer's sibling checkout. The CMake wrapper in `src/ProxyLaneSsh` statically links OpenSSL libcrypto and the CRT, with no extra OpenSSL or VC runtime DLLs. On the first build, `scripts/prepare-openssl.ps1` downloads precompiled `openssl-native 3.5.9` from nuget.org (about 128 MiB), verifies the SHA256 pinned in `third_party/openssl/dependency.json`, and caches it for later builds. No OpenSSL installation, Perl, NASM, NuGet, .NET SDK or account is required. Offline builds may place the same package at `build/deps/openssl-native.3.5.9.nupkg` beforehand. The selected platform uses x64 or ARM64 / v142 / MT static libcrypto and headers from the same package; provenance and signature verification are documented in `third_party/openssl/UPSTREAM.txt`.
 
 The x64 Release target invokes the script only when outputs are missing or dependency/build-wrapper inputs have changed. Normal application edits skip it. Cached sources require no download, and CMake builds incrementally. Run `powershell -ExecutionPolicy Bypass -File .\scripts\build-ssh.ps1` for an explicit backend build. The first build needs network access; later builds can use the offline cache. Release packaging merges the upstream license into the single `LICENSE` file.
 

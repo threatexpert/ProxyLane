@@ -5,6 +5,7 @@
 
 #include "stdafx.h"
 #include "ProxyReceptionCentre.h"
+#include "ProcessArchitecture.h"
 #include "GlobalProxy.h"
 #include "ProxyDataHandle.h"
 #include "ProxyLog.h"
@@ -289,48 +290,34 @@ static BOOL RemoteProcessHasChildGuard(
 	if (!process)
 		return FALSE;
 
-	HMODULE kernel32 = GetModuleHandle(_T("kernel32.dll"));
-	typedef BOOL (WINAPI *IsWow64ProcessProc)(HANDLE, PBOOL);
-	IsWow64ProcessProc isWow64Process = kernel32
-		? reinterpret_cast<IsWow64ProcessProc>(
-			GetProcAddress(kernel32, "IsWow64Process")) : NULL;
-	BOOL targetWow64 = FALSE;
-	if (isWow64Process)
-		isWow64Process(process, &targetWow64);
-
-#ifndef _WIN64
-	BOOL currentWow64 = FALSE;
-	if (isWow64Process)
-		isWow64Process(GetCurrentProcess(), &currentWow64);
-	// ProxyLane32 forwards to ProxyLane64 on x64.  If that invariant is ever
-	// broken, skip a 64-bit target rather than interpreting 64-bit pointers.
-	if (currentWow64 && !targetWow64)
+	ProcessArchitecture::ProcessInfo architecture;
+	if (!ProcessArchitecture::Query(process, architecture) ||
+		ProcessArchitecture::Route(ProcessArchitecture::CurrentModule(), architecture) == ProcessArchitecture::Unsupported ||
+		(sizeof(void*) == 4 && architecture.process != ProcessArchitecture::X86))
 	{
 		CloseHandle(process);
 		return FALSE;
 	}
-#endif
 
 	HMODULE ntdll = GetModuleHandle(_T("ntdll.dll"));
 	NtQueryInformationProcessProc query = ntdll
 		? reinterpret_cast<NtQueryInformationProcessProc>(
 			GetProcAddress(ntdll, "NtQueryInformationProcess")) : NULL;
 	ULONG_PTR pebAddress = 0;
-	BOOL pointer32 = FALSE;
+	const BOOL pointer32 = architecture.process == ProcessArchitecture::X86;
 	if (query)
 	{
 #ifdef _WIN64
-		if (targetWow64)
+		if (pointer32)
 		{
 			ULONG_PTR wow64Peb = 0;
 			if (query(process, 26, &wow64Peb, sizeof(wow64Peb), NULL) >= 0)
 			{
 				pebAddress = wow64Peb;
-				pointer32 = TRUE;
 			}
 		}
+		else
 #endif
-		if (!pebAddress)
 		{
 			ChildGuardProcessBasicInformation basicInfo = { 0 };
 			if (query(process, 0, &basicInfo, sizeof(basicInfo), NULL) >= 0)
@@ -340,10 +327,8 @@ static BOOL RemoteProcessHasChildGuard(
 
 	ULONG_PTR processParameters = 0;
 	ULONG_PTR environmentAddress = 0;
-	const ULONG_PTR processParametersOffset = pointer32 ? 0x10 :
-		(sizeof(void *) == 8 ? 0x20 : 0x10);
-	const ULONG_PTR environmentOffset = pointer32 ? 0x48 :
-		(sizeof(void *) == 8 ? 0x80 : 0x48);
+	const ULONG_PTR processParametersOffset = pointer32 ? 0x10 : 0x20;
+	const ULONG_PTR environmentOffset = pointer32 ? 0x48 : 0x80;
 	BOOL found = FALSE;
 	if (pebAddress && ReadRemotePointer(process,
 		pebAddress + processParametersOffset, pointer32, &processParameters) &&
@@ -820,14 +805,15 @@ BOOL CProxyReceptionCentre::RegisterReleasedChild(LPHookNewProcessInfo child)
 BOOL CProxyReceptionCentre::GetProcessIdentity(
 	DWORD processId,
 	LPWSTR appPath,
-	DWORD appPathCount)
+	DWORD appPathCount,
+	ULONGLONG processCreateTime)
 {
 	if (!processId || !appPath || appPathCount == 0)
 		return FALSE;
 	appPath[0] = L'\0';
 
 	HookProcessIdentityInfo identity = { 0 };
-	if (!m_processRegistry->Get(processId, 0, &identity)) return FALSE;
+	if (!m_processRegistry->Get(processId, processCreateTime, &identity)) return FALSE;
 	ULONGLONG actual = 0;
 	if (QueryProcessCreateTime(processId, &actual) && actual != identity.processCreateTime)
 		return FALSE;

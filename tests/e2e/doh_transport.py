@@ -159,7 +159,7 @@ def run(binary, chain=False, failure=False, udp=True, url="https://dns.google/dn
             completed = []
             started = 0
             for line in lines:
-                match = re.fullmatch(r'\[DoH\] host\.exe \(\d+\) : example\.org A -> (.+)', line)
+                match = re.fullmatch(r'\[DoH\] RegisteredDoh\.exe \(\d+\) : example\.org A -> (.+)', line)
                 assert match, ('DoH log must identify the process', line)
                 if match[1] == 'query started':
                     started += 1
@@ -181,6 +181,8 @@ def run(binary, chain=False, failure=False, udp=True, url="https://dns.google/dn
         else:
             assert ' A -> ERROR; reason=' in result.stderr and '; elapsed=' in result.stderr, result.stderr
             assert 'cache_ttl=' not in result.stderr, ('Failed queries must not log a cache lifetime', result.stderr)
+        assert all(line.startswith('[DoH] RegisteredDoh.exe (') for line in result.stderr.splitlines()
+                   if line.startswith('[DoH]')), ('Registered identity must also survive query failure', result.stderr)
         last = http or socks
         queries = [r for r in last.requests if len(r) == 3 and r[1] == 443]
         targets = [r for r in last.requests if len(r) == 3 and r[1] == 18888]
@@ -195,7 +197,7 @@ def run(binary, chain=False, failure=False, udp=True, url="https://dns.google/dn
             tcp_selected = []
             udp_selected = []
             for line in selected:
-                match = re.fullmatch(r'\[Proxy\] host\.exe \(\d+\) : (TCP|UDP) example\.org:18888 -> ([^;]+); (.+)', line)
+                match = re.fullmatch(r'\[Proxy\] RegisteredDoh\.exe \(\d+\) : (TCP|UDP) example\.org:18888 -> ([^;]+); (.+)', line)
                 assert match, ('Unexpected target selection log', line)
                 address, port = match[2].rsplit(':', 1)
                 assert port == '18888' and any(r[0] == address for r in targets), ('Selected target must match actual proxy request', line, targets)

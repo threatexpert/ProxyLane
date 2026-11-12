@@ -22,6 +22,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DetourHooks.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="InjectDllArm64.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="GlobalProxy.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -285,6 +286,7 @@
     </ClInclude>
     <ClInclude Include="HookDispatch.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="DetourHooks.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="ProcessArchitecture.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="HookFailureDiagnostics.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="InjectDll.h">
       <Filter>Header Files</Filter>

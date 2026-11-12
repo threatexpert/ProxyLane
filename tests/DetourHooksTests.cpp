@@ -1,5 +1,6 @@
 #include "DetourHooks.h"
 #include "HookFailureDiagnostics.h"
+#include "LibraryLoaderHook.h"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -13,6 +14,64 @@ typedef ULONG_PTR (WINAPI *Function)();
 Function original;
 ULONG_PTR WINAPI Replacement() { return original() + 1; }
 ULONG_PTR WINAPI WrongReplacement() { return 0; }
+bool loaderModulePresent, loaderExportPresent;
+unsigned loaderQueries, loaderCalls;
+decltype(&::LoadLibraryExW) originalLoader;
+HMODULE WINAPI LoaderModule(LPCWSTR name)
+{
+    Check(!wcscmp(name, L"KernelBase.dll"), "query loader provider independently");
+    return loaderModulePresent ? reinterpret_cast<HMODULE>(1) : NULL;
+}
+FARPROC WINAPI LoaderExport(HMODULE module, LPCSTR name)
+{
+    ++loaderQueries;
+    Check(module == reinterpret_cast<HMODULE>(1) && !std::strcmp(name, "LoadLibraryExW"), "query loader export");
+    return loaderExportPresent ? reinterpret_cast<FARPROC>(LoadLibraryExW) : NULL;
+}
+HMODULE WINAPI HookLoader(LPCWSTR path, HANDLE file, DWORD flags)
+{
+    ++loaderCalls;
+    return originalLoader(path, file, flags);
+}
+void LibraryLoader()
+{
+    loaderModulePresent = false; loaderExportPresent = true; loaderQueries = 0;
+    Check(!std::strcmp(LibraryLoaderHook::ModuleName(LoaderModule, LoaderExport), "Kernel32.dll") &&
+        loaderQueries == 0, "missing KernelBase falls back without querying an invalid module");
+    loaderModulePresent = true; loaderExportPresent = false;
+    Check(!std::strcmp(LibraryLoaderHook::ModuleName(LoaderModule, LoaderExport), "Kernel32.dll"),
+        "present module without loader export falls back");
+    loaderExportPresent = true;
+    Check(!std::strcmp(LibraryLoaderHook::ModuleName(LoaderModule, LoaderExport), "KernelBase.dll"),
+        "available KernelBase loader is selected");
+
+    // In this disposable process, intercept both public call paths through a
+    // single binding, and verify that its original trampoline still works.
+    auto kernel32Loader = reinterpret_cast<decltype(originalLoader)>(
+        GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryExW"));
+    HMODULE kernelBase = GetModuleHandleW(L"kernelbase.dll");
+    auto kernelBaseLoader = kernelBase ? reinterpret_cast<decltype(originalLoader)>(
+        GetProcAddress(kernelBase, "LoadLibraryExW")) : NULL;
+    originalLoader = reinterpret_cast<decltype(originalLoader)>(GetProcAddress(
+        GetModuleHandleA(LibraryLoaderHook::ModuleName()), "LoadLibraryExW"));
+    Check(kernel32Loader && originalLoader, "resolve real loader entries");
+    DetourHookBinding binding = { reinterpret_cast<PVOID*>(&originalLoader), HookLoader };
+    Check(InstallDetourHooks(&binding, 1) == NO_ERROR, "install one loader hook");
+    HMODULE loaded = kernel32Loader(L"kernel32.dll", NULL, 0);
+    Check(loaded && loaderCalls == 1, "Kernel32 path intercepted once");
+    FreeLibrary(loaded);
+    if (kernelBaseLoader)
+    {
+        loaded = kernelBaseLoader(L"kernel32.dll", NULL, 0);
+        Check(loaded && loaderCalls == 2, "direct KernelBase path intercepted once");
+        FreeLibrary(loaded);
+    }
+    Check(RemoveDetourHooks(&binding, 1) == NO_ERROR, "remove loader hook");
+    unsigned before = loaderCalls;
+    loaded = kernel32Loader(L"kernel32.dll", NULL, 0);
+    Check(loaded && loaderCalls == before, "loader behavior restored after detach");
+    FreeLibrary(loaded);
+}
 struct Code {
     BYTE* bytes;
     bool installed;
@@ -204,6 +263,7 @@ int DetourHooksTestCase(const char* name)
     else if (!std::strcmp(name, "rollback")) Rollback();
     else if (!std::strcmp(name, "detach-rollback")) DetachRollback();
     else if (!std::strcmp(name, "concurrent")) ConcurrentCalls();
+    else if (!std::strcmp(name, "library-loader")) LibraryLoader();
     else return 2;
     return 0;
 }
@@ -214,6 +274,8 @@ int DetourHooksTestsMain()
     RunCase("rip-lea"); RunCase("rip-mov");
 #endif
     RunCase("rollback"); RunCase("detach-rollback"); RunCase("concurrent");
+    RunCase("library-loader");
+    std::puts("Library loader selection, fallback and single-hook coverage passed");
     std::puts("Detours relocation, attach/detach rollback, quiescent cycles and concurrent callers passed");
     return 0;
 }

@@ -1,6 +1,7 @@
 ﻿#include <iostream>
 #include <cstring>
 
+int ProcessArchitectureTestsMain();
 int DohWakeupTestsMain();
 int Socks5UdpCodecTestsMain();
 int BoundedLogQueueTestsMain();
@@ -47,6 +48,7 @@ int main(int argc, char** argv)
     if (MonitorLogFormatTestsMain() != 0) return 1;
 	if (argc == 3 && std::strcmp(argv[1], "--detours-case") == 0)
 		return DetourHooksTestCase(argv[2]);
+	if (ProcessArchitectureTestsMain() != 0) return 1;
 	if (DetourHooksTestsMain() != 0) return 1;
 	if (TrafficStatisticsTestsMain() != 0)
 		return 1;

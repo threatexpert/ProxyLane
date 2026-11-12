@@ -43,7 +43,8 @@ try:
     assert not open_stream(0), 'monitoring must default to off'
     assert query({'type':'stats'})['type']=='inactive', 'disabled capture must not create a cache'
     original=query({'type':'mitm_options'})['settings']
-    changed=dict(entry_mib=1,total_mib=16,history_rows=1024,preview_kib=128,
+    # Retain recording settings added to the options schema.
+    changed=dict(original,entry_mib=1,total_mib=16,history_rows=1024,preview_kib=128,
                  decode_mib=8,connections=2,pending_requests=16,udp_packets=512,handshake_seconds=30)
     query({'type':'mitm_options','settings':changed,'validate_only':True})
     assert query({'type':'mitm_options'})['settings']==original

@@ -11,6 +11,7 @@ class CProxyReceptionCentre;
 
 // Per application request, never stored on a shared query.
 struct DohQueryLogInfo {
+    CString processName;
     DWORD started = 0;
     bool cacheHit = false, shared = false;
 };
@@ -20,7 +21,7 @@ struct DohQueryLogInfo {
 class CDohQuery : public CAsyncSocketEx, public CWndTimer {
 public:
     using TestProgress = std::function<void(int, int, WPARAM, LPARAM)>;
-    static std::shared_ptr<CDohQuery> Resolve(const PRCClient&, const ProxyInfo&, const ProxyChain* = NULL, bool test = false, DohQueryLogInfo* = NULL, TestProgress = {});
+    static std::shared_ptr<CDohQuery> Resolve(const PRCClient&, const ProxyInfo&, const ProxyChain* = NULL, bool test = false, DohQueryLogInfo* = NULL, TestProgress = {}, CProxyReceptionCentre* = NULL);
     void CancelTestProgress() { m_testProgress = {}; }
     int FailureCode() const { return m_failureCode; }
     int FailedHop() const { return m_failedHop; }
@@ -89,7 +90,7 @@ private:
 // One application transaction; the shared exchange excludes its DNS ID.
 class CDnsDohRequest {
 public:
-    bool Begin(const PRCClient&, const ProxyInfo&, const ProxyChain*, const char*, int);
+    bool Begin(const PRCClient&, const ProxyInfo&, const ProxyChain*, const char*, int, CProxyReceptionCentre* = NULL);
     bool NotifyWhenReady(const std::shared_ptr<CDohWakeup>&);
     bool TryBuildReply(bool udp, std::vector<unsigned char>& response);
 private:
@@ -98,6 +99,7 @@ private:
     std::vector<unsigned char> m_rejected;
     std::shared_ptr<CDohQuery> m_exchange;
     CStringA m_name, m_type;
+    CString m_processName;
     DWORD m_pid = 0;
     DWORD m_started = 0;
     bool m_cacheHit = false, m_shared = false, m_resultLogged = false;

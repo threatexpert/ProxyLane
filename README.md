@@ -1,4 +1,4 @@
-﻿<h1 align="center">ProxyLane</h1>
+<h1 align="center">ProxyLane</h1>
 
 <p align="center">
   <strong>Windows 应用进程级透明代理 · HTTPS / QUIC 流量解密</strong><br>
@@ -16,6 +16,8 @@
 ProxyLane 让指定 Windows 应用使用独立的代理配置，无需修改系统全局代理或安装内核驱动。它通过用户态进程注入与网络 API Hook 实现代理，并可让子进程继承设置。
 
 主体代理功能兼容 **Windows XP 至 Windows 11**，提供 Win32 与 x64 组件。
+
+常规 `ProxyLane-版本-Windows.zip` 仅面向 x86/x64 Windows，不包含 ARM64 组件。ARM64 使用独立的 `ProxyLane-版本-Windows-ARM64.zip` 开发测试包；其功能范围和未完成的实机验收见包内说明。
 
 除了代理，也可以用它分析应用流量：查看 HTTP/1.1、HTTP/2、HTTP/3 请求响应、DNS 和 Raw／Hex 数据，解密 HTTPS 与 QUIC v1，并录制后离线查看。选择 `NOPROXY` 即可在不使用外部代理的情况下监视流量。
 
@@ -165,6 +167,8 @@ C++ 管理按需创建的 SSH session，同一事件线程中相同前置链路�
 
 同一 session 可以同时等待多个通道打开确认，慢目标不会阻塞后续目标的打开。每个 session 最多保留 32 个未完成的打开操作，额外请求排队；单个请求约 60 秒超时，仅使该业务连接失败。取消或超时后仍保留协议清理状态，收到迟到确认时关闭对应通道，该状态也计入上限。
 
+ARM64 开发测试包另含 `ProxyLaneSshARM64.dll`，已交叉构建但待 ARM64 实机验收，范围见 [ARM64 测试包说明](docs/README_ARM64.md)。
+
 SSH 后端为独立的 `ProxyLaneSsh64.dll`，仅在使用 SSH 时加载，最低支持目标是 Windows 10 / Server 2016 x64；32 位应用可以通过 64 位主程序使用。OpenSSL 后端支持 RSA / ECDSA / Ed25519 主机密钥、Curve25519 密钥交换及 AES-GCM。
 
 ## gonc TLS-PSK 加密传输
@@ -216,7 +220,7 @@ msbuild .\src\ProxyLane.sln /m /p:Configuration=Release /p:Platform=x64
 
 ### SSH 后端依赖
 
-libssh2 以官方 1.11.1 为基础，并应用 `third_party/libssh2/concurrent-channel-open.patch`；补丁在 [threatexpert/libssh2](https://github.com/threatexpert/libssh2) 的开发分支维护。目录中同时保留配套公开头文件和原始许可证。`scripts/build-ssh.ps1` 下载并校验官方源码包 SHA256，在忽略入库的 `build/deps` 下按补丁哈希隔离源码与构建缓存，再应用补丁；不依赖开发者本机的相邻仓库。`src/ProxyLaneSsh` 的 CMake 封装将 OpenSSL `libcrypto` 和 CRT 静态链接到 DLL，不需要额外 OpenSSL / VC 运行库 DLL。首次构建由 `scripts/prepare-openssl.ps1` 从 nuget.org 自动下载预编译的 `openssl-native 3.5.9`（约 128 MiB），按 `third_party/openssl/dependency.json` 中固定的 SHA256 校验并缓存；后续复用缓存。无需安装 OpenSSL、Perl、NASM、NuGet 或 .NET SDK，也无需账号。离线构建可预先放置同一包到 `build/deps/openssl-native.3.5.9.nupkg`。只使用 x64 / v142 / MT 的静态 libcrypto 和头文件；来源及签名核验记录见 `third_party/openssl/UPSTREAM.txt`。
+libssh2 以官方 1.11.1 为基础，并应用 `third_party/libssh2/concurrent-channel-open.patch`；补丁在 [threatexpert/libssh2](https://github.com/threatexpert/libssh2) 的开发分支维护。目录中同时保留配套公开头文件和原始许可证。`scripts/build-ssh.ps1` 下载并校验官方源码包 SHA256，在忽略入库的 `build/deps` 下按补丁哈希隔离源码与构建缓存，再应用补丁；不依赖开发者本机的相邻仓库。`src/ProxyLaneSsh` 的 CMake 封装将 OpenSSL `libcrypto` 和 CRT 静态链接到 DLL，不需要额外 OpenSSL / VC 运行库 DLL。首次构建由 `scripts/prepare-openssl.ps1` 从 nuget.org 自动下载预编译的 `openssl-native 3.5.9`（约 128 MiB），按 `third_party/openssl/dependency.json` 中固定的 SHA256 校验并缓存；后续复用缓存。无需安装 OpenSSL、Perl、NASM、NuGet 或 .NET SDK，也无需账号。离线构建可预先放置同一包到 `build/deps/openssl-native.3.5.9.nupkg`。按构建平台选择同一包中的 x64 或 ARM64 / v142 / MT 静态 libcrypto 和头文件；来源及签名核验记录见 `third_party/openssl/UPSTREAM.txt`。
 
 x64 Release 构建只在 DLL / 构建标记缺失或依赖版本、脚本、封装源码变化时执行脚本；普通主工程改动跳过此步骤。已有源码缓存时不下载，已有对象文件时增量编译。需要手工重建后端可运行 `powershell -ExecutionPolicy Bypass -File .\scripts\build-ssh.ps1`。首次构建需要联网，之后可用缓存离线构建。发布脚本把 libssh2 许可证合并到统一的 `LICENSE`。
 

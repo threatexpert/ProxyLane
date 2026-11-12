@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "../ProcessArchitecture.h"
 #include "AsyncSecureSocketLayer.h"
 #include "..\ProxyLog.h"
 #include "..\PlatformSupport.h"
@@ -104,8 +105,9 @@ BOOL CAsyncSecureSocketLayer::LoadTransport()
 	TCHAR* slash = _tcsrchr(path, _T('\\'));
 	if (!slash)
 		return FALSE;
-	_tcscpy_s(slash + 1, _countof(path) - (slash + 1 - path),
-		_T("ProxyLaneSecureTransport64.dll"));
+	LPCTSTR transportName = ProcessArchitecture::TransportFileName(ProcessArchitecture::CurrentModule());
+	if (!transportName) { m_transportLoadError = ERROR_NOT_SUPPORTED; return FALSE; }
+	_tcscpy_s(slash + 1, _countof(path) - (slash + 1 - path), transportName);
 	m_hTransport = LoadLibrary(path);
 	if (!m_hTransport)
 	{

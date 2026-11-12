@@ -1,7 +1,9 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "ElevatedLauncher.h"
 #include "ElevatedLaunchProtocol.h"
 #include "ProxyModule.h"
+#include "ProcessArchitecture.h"
+#include "RundllHost.h"
 #include "PRCPipeClient.h"
 
 #include <strsafe.h>
@@ -11,53 +13,6 @@ extern HMODULE g_hDllModule;
 
 namespace
 {
-	// Pass the already-authorized handles to the matching-bitness helper.
-	// Reopening by PID loses access when the child belongs to another user.
-	class CInjectionHandleList
-	{
-		typedef BOOL (WINAPI *InitializeFn)(LPPROC_THREAD_ATTRIBUTE_LIST, DWORD, DWORD, PSIZE_T);
-		typedef BOOL (WINAPI *UpdateFn)(LPPROC_THREAD_ATTRIBUTE_LIST, DWORD, DWORD_PTR, PVOID, SIZE_T, PVOID, PSIZE_T);
-		typedef VOID (WINAPI *DeleteFn)(LPPROC_THREAD_ATTRIBUTE_LIST);
-		DeleteFn m_delete;
-		std::vector<BYTE> m_storage;
-	public:
-		HANDLE handles[2];
-		LPPROC_THREAD_ATTRIBUTE_LIST list;
-		CInjectionHandleList() : m_delete(NULL), list(NULL)
-		{
-			handles[0] = handles[1] = NULL;
-		}
-		~CInjectionHandleList()
-		{
-			if (list) m_delete(list);
-			if (handles[0]) CloseHandle(handles[0]);
-			if (handles[1]) CloseHandle(handles[1]);
-		}
-		BOOL Initialize(HANDLE process, HANDLE thread)
-		{
-			HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
-			InitializeFn initialize = reinterpret_cast<InitializeFn>(GetProcAddress(kernel, "InitializeProcThreadAttributeList"));
-			UpdateFn update = reinterpret_cast<UpdateFn>(GetProcAddress(kernel, "UpdateProcThreadAttribute"));
-			m_delete = reinterpret_cast<DeleteFn>(GetProcAddress(kernel, "DeleteProcThreadAttributeList"));
-			// XP has no handle-list support; retain its existing PID-based path.
-			if (!initialize || !update || !m_delete)
-				return TRUE;
-			HANDLE self = GetCurrentProcess();
-			if (!DuplicateHandle(self, process, self, &handles[0], 0, TRUE, DUPLICATE_SAME_ACCESS) ||
-				!DuplicateHandle(self, thread, self, &handles[1], 0, TRUE, DUPLICATE_SAME_ACCESS))
-				return FALSE;
-			SIZE_T bytes = 0;
-			initialize(NULL, 1, 0, &bytes);
-			if (!bytes) return FALSE;
-			m_storage.resize(bytes);
-			LPPROC_THREAD_ATTRIBUTE_LIST candidate = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(&m_storage[0]);
-			if (!initialize(candidate, 1, 0, &bytes)) return FALSE;
-			list = candidate;
-			return update(list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, handles,
-				sizeof(handles), NULL, NULL);
-		}
-	};
-
 	BOOL IsCurrentProcessElevated()
 	{
 		OSVERSIONINFO versionInfo = { 0 };
@@ -81,35 +36,6 @@ namespace
 		return result && elevation.TokenIsElevated;
 	}
 
-	BOOL IsWow64ProcessDynamic(HANDLE process)
-	{
-		typedef BOOL(WINAPI* IsWow64ProcessFunction)(HANDLE, PBOOL);
-		IsWow64ProcessFunction function = reinterpret_cast<IsWow64ProcessFunction>(
-			GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "IsWow64Process"));
-		BOOL wow64 = FALSE;
-		return function && function(process, &wow64) && wow64;
-	}
-
-	BOOL Is64BitProcess(HANDLE process)
-	{
-#ifdef _WIN64
-		return !IsWow64ProcessDynamic(process);
-#else
-		if (!IsWow64ProcessDynamic(GetCurrentProcess()))
-			return FALSE;
-		return !IsWow64ProcessDynamic(process);
-#endif
-	}
-
-	BOOL IsCurrentModule64Bit()
-	{
-#ifdef _WIN64
-		return TRUE;
-#else
-		return FALSE;
-#endif
-	}
-
 	BOOL GetModuleDirectory(WCHAR* directory, size_t directoryCount)
 	{
 		if (!directory || directoryCount == 0)
@@ -125,7 +51,7 @@ namespace
 	}
 
 	BOOL BuildCompanionPaths(
-		BOOL targetIs64Bit,
+		const ProcessArchitecture::ProcessInfo& target,
 		WCHAR* hookPath,
 		size_t hookPathCount,
 		WCHAR* rundllPath,
@@ -142,21 +68,15 @@ namespace
 		if (FAILED(StringCchPrintfW(
 			hookPath,
 			hookPathCount,
-			L"%s\\ProxyLaneHook%s.dll",
+			L"%s\\%s",
 			moduleDirectory,
-			targetIs64Bit ? L"64" : L"32")))
+			ProcessArchitecture::HookFileName(target.process))))
 		{
 			return FALSE;
 		}
 
-		const WCHAR* systemFolder = L"System32";
-#ifdef _WIN64
-		if (!targetIs64Bit)
-			systemFolder = L"SysWOW64";
-#else
-		if (IsWow64ProcessDynamic(GetCurrentProcess()) && !targetIs64Bit)
-			systemFolder = L"SysWOW64";
-#endif
+		const WCHAR* systemFolder = ProcessArchitecture::SystemRundllDirectory(target);
+		if (!systemFolder) { SetLastError(ERROR_NOT_SUPPORTED); return FALSE; }
 		if (FAILED(StringCchPrintfW(
 			rundllPath,
 			rundllPathCount,
@@ -171,23 +91,6 @@ namespace
 		return hookAttributes != INVALID_FILE_ATTRIBUTES &&
 			!(hookAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
 			wcschr(hookPath, L',') == NULL;
-	}
-
-	BOOL SetWow64Redirection(BOOL disable, PVOID* oldValue)
-	{
-		typedef BOOL(WINAPI* DisableFunction)(PVOID*);
-		typedef BOOL(WINAPI* RevertFunction)(PVOID);
-		HMODULE kernel = GetModuleHandleW(L"kernel32.dll");
-		if (disable)
-		{
-			DisableFunction function = reinterpret_cast<DisableFunction>(
-				GetProcAddress(kernel, "Wow64DisableWow64FsRedirection"));
-			return function ? function(oldValue) : FALSE;
-		}
-
-		RevertFunction function = reinterpret_cast<RevertFunction>(
-			GetProcAddress(kernel, "Wow64RevertWow64FsRedirection"));
-		return function ? function(*oldValue) : FALSE;
 	}
 
 	BOOL Utf8FieldToWide(
@@ -285,14 +188,19 @@ BOOL ProxyLaneInjectSuspendedProcess(
 	if (!targetProcess || !targetThread || !pipeName || !pipeName[0])
 		return FALSE;
 
-	const BOOL targetIs64Bit = Is64BitProcess(targetProcess);
-	if (targetIs64Bit == IsCurrentModule64Bit())
+	ProcessArchitecture::ProcessInfo target;
+	if (!ProcessArchitecture::Query(targetProcess, target)) return FALSE;
+	const ProcessArchitecture::InjectionRoute route =
+		ProcessArchitecture::Route(ProcessArchitecture::CurrentModule(), target);
+	if (route == ProcessArchitecture::Unsupported)
+	{ SetLastError(ERROR_NOT_SUPPORTED); return FALSE; }
+	if (route == ProcessArchitecture::Direct)
 		return AttachToHandles(targetProcess, targetThread, pipeName) == 0xFF01;
 
 	WCHAR hookPath[MAX_PATH] = { 0 };
 	WCHAR rundllPath[MAX_PATH] = { 0 };
 	if (!BuildCompanionPaths(
-		targetIs64Bit,
+		target,
 		hookPath,
 		_countof(hookPath),
 		rundllPath,
@@ -313,11 +221,11 @@ BOOL ProxyLaneInjectSuspendedProcess(
 		return FALSE;
 	}
 
-	CInjectionHandleList inherited;
-	if (!inherited.Initialize(targetProcess, targetThread))
+	RundllHost::Attributes inherited;
+	if (!inherited.Initialize(target, targetProcess, targetThread))
 		return FALSE;
 	WCHAR handleArguments[128] = L"";
-	if (inherited.list)
+	if (inherited.handles[0])
 		StringCchPrintfW(handleArguments, _countof(handleArguments),
 			L" --process-handle=%lu --thread-handle=%lu",
 			HandleToULong(inherited.handles[0]), HandleToULong(inherited.handles[1]));
@@ -336,40 +244,18 @@ BOOL ProxyLaneInjectSuspendedProcess(
 		return FALSE;
 	}
 
-	STARTUPINFOEXW startupInfo = { 0 };
-	startupInfo.StartupInfo.cb = inherited.list ? sizeof(startupInfo) : sizeof(STARTUPINFOW);
-	startupInfo.lpAttributeList = inherited.list;
-	PROCESS_INFORMATION processInfo = { 0 };
-	PVOID oldRedirection = NULL;
-	BOOL redirectionDisabled = FALSE;
-#ifndef _WIN64
-	if (targetIs64Bit && IsWow64ProcessDynamic(GetCurrentProcess()))
-		redirectionDisabled = SetWow64Redirection(TRUE, &oldRedirection);
-#endif
-	if (!createProcessFunction)
-		createProcessFunction = CreateProcessW;
-	const BOOL created = createProcessFunction(
-		NULL,
-		helperCommand,
-		NULL,
-		NULL,
-		inherited.list != NULL,
-		inherited.list ? EXTENDED_STARTUPINFO_PRESENT : 0,
-		NULL,
-		NULL,
-		&startupInfo.StartupInfo,
-		&processInfo);
-	if (redirectionDisabled)
-		SetWow64Redirection(FALSE, &oldRedirection);
-	if (!created)
-		return FALSE;
+	PROCESS_INFORMATION processInfo = {};
+	if (!RundllHost::Create(target, helperCommand, inherited, processInfo,
+		createProcessFunction ? createProcessFunction : CreateProcessW)) return FALSE;
 
 	WaitForSingleObject(processInfo.hProcess, INFINITE);
 	DWORD exitCode = 0;
 	const BOOL gotExitCode = GetExitCodeProcess(processInfo.hProcess, &exitCode);
 	CloseHandle(processInfo.hThread);
 	CloseHandle(processInfo.hProcess);
-	return gotExitCode && exitCode == 0xFF01;
+	if (gotExitCode && exitCode == 0xFF01) return TRUE;
+	if (gotExitCode) SetLastError(ERROR_DLL_INIT_FAILED);
+	return FALSE;
 }
 
 void CALLBACK ElevatedLaunch(HWND, HINSTANCE, LPSTR commandLine, int)

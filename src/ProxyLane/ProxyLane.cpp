@@ -159,14 +159,16 @@ BOOL CProxyLaneApp::InitInstance()
 	InitCommonControlsEx(&InitCtrls);
 
 	CWinApp::InitInstance();
-#ifndef _WIN64
-	// On 64-bit Windows this process only forwards to ProxyLane64.exe, which sets
-	// up storage itself; creating the INI here would hide the first run from it.
-	const bool forwardsToX64 = IsWow64(GetCurrentProcess()) != FALSE;
-#else
-	const bool forwardsToX64 = false;
-#endif
-	const bool storageReady = forwardsToX64 || ConfigStorage::Initialize();
+	ProcessArchitecture::ProcessInfo selfArchitecture;
+	if (!ProcessArchitecture::Query(GetCurrentProcess(), selfArchitecture))
+	{
+		m_automationExitCode = AUTOMATION_EXIT_ARCH_FORWARD_FAILED;
+		return FALSE;
+	}
+	// The native host initializes storage; a forwarding launcher must not hide
+	// first-run setup by creating the INI before that host starts.
+	const bool forwardsToNative = selfArchitecture.native != ProcessArchitecture::CurrentModule();
+	const bool storageReady = forwardsToNative || ConfigStorage::Initialize();
 	const DWORD storageError = GetLastError();
 	Localization::Initialize();
 	if (!storageReady)
@@ -207,8 +209,7 @@ BOOL CProxyLaneApp::InitInstance()
 		return FALSE;
 	}
 
-#ifndef _WIN64
-	if (IsWow64(GetCurrentProcess()))
+	if (forwardsToNative)
 	{
 		if (m_automationOptions.enabled)
 		{
@@ -223,18 +224,25 @@ BOOL CProxyLaneApp::InitInstance()
 			}
 		}
 
-		CString strPath64;
-		LPTSTR pathBuffer = strPath64.GetBuffer(MAX_PATH);
+		CString nativePath;
+		LPTSTR pathBuffer = nativePath.GetBuffer(MAX_PATH);
 		const DWORD pathLength = ::GetModuleFileName(m_hInstance, pathBuffer, MAX_PATH);
 		pathBuffer[MAX_PATH - 1] = _T('\0');
-		strPath64.ReleaseBuffer();
-		if (!pathLength || strPath64.GetLength() < 4)
+		nativePath.ReleaseBuffer();
+		if (!pathLength || nativePath.GetLength() < 4)
 		{
 			m_automationExitCode = AUTOMATION_EXIT_ARCH_FORWARD_FAILED;
 			return FALSE;
 		}
 
-		strPath64 = strPath64.Mid(0, strPath64.GetLength() - 4) + _T("64.exe");
+		const int directoryEnd = nativePath.ReverseFind(_T('\\'));
+		LPCTSTR nativeFile = ProcessArchitecture::ApplicationFileName(selfArchitecture.native);
+		if (directoryEnd < 0 || !nativeFile)
+		{
+			m_automationExitCode = AUTOMATION_EXIT_ARCH_FORWARD_FAILED;
+			return FALSE;
+		}
+		nativePath = nativePath.Left(directoryEnd + 1) + nativeFile;
 
 		CString forwardedArguments(m_lpCmdLine);
 		CString bootstrapEventName;
@@ -267,7 +275,7 @@ BOOL CProxyLaneApp::InitInstance()
 		ShExecInfo.fMask = SEE_MASK_NOCLOSEPROCESS;
 		ShExecInfo.hwnd = NULL;
 		ShExecInfo.lpVerb = NULL;
-		ShExecInfo.lpFile = strPath64;
+		ShExecInfo.lpFile = nativePath;
 		ShExecInfo.lpParameters = forwardedArguments;
 		ShExecInfo.lpDirectory = NULL;
 		ShExecInfo.nShow = m_automationOptions.enabled ? SW_HIDE : SW_SHOW;
@@ -317,7 +325,6 @@ BOOL CProxyLaneApp::InitInstance()
 		m_automationExitCode = AUTOMATION_EXIT_ARCH_FORWARD_FAILED;
 		return FALSE;
 	}
-#endif
 
 	if (!PrepareAutomationCommandReceiver())
 		return FALSE;

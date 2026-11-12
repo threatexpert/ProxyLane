@@ -5,6 +5,7 @@
 #include "TimerQueue.h"
 #include "SshKeyFile.h"
 #include "PlatformSupport.h"
+#include "ProcessArchitecture.h"
 #include "../../third_party/libssh2/include/libssh2.h"
 #include <deque>
 #include <algorithm>
@@ -34,9 +35,8 @@ struct SshApi {
 #undef DECLARE_SSH
     int (__cdecl* pump)(LIBSSH2_SESSION*) = NULL;
     SshApi() {
-#ifndef _WIN64
-        return;
-#endif
+        LPCTSTR backend = ProcessArchitecture::SshFileName(ProcessArchitecture::CurrentModule());
+        if (!backend) return;
         // RtlGetVersion reports the real version without a Windows 10 manifest.
         typedef LONG (WINAPI* VersionFunction)(OSVERSIONINFOW*);
         VersionFunction versionFunction = reinterpret_cast<VersionFunction>(
@@ -48,11 +48,7 @@ struct SshApi {
         if (!size || size >= _countof(path)) return;
         TCHAR* slash = _tcsrchr(path, _T('\\'));
         if (!slash) return;
-#ifdef _WIN64
-        _tcscpy_s(slash + 1, _countof(path) - (slash + 1 - path), L"ProxyLaneSsh64.dll");
-#else
-        _tcscpy_s(slash + 1, _countof(path) - (slash + 1 - path), L"ProxyLaneSsh32.dll");
-#endif
+        if (_tcscpy_s(slash + 1, _countof(path) - (slash + 1 - path), backend)) return;
         module = LoadLibrary(path);
         if (!module) return;
         bool valid = true;

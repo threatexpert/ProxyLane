@@ -12,7 +12,8 @@ patch, not a moving remote branch or a developer's sibling checkout. The patch
 SHA256 is part of the source/build cache name and successful build stamp.
 Regenerate the patch against libssh2-1.11.1 after staging new fork source files;
 copy the matching include/libssh2.h here. Existing libssh2 APIs are preserved.
-The optional DLL is named ProxyLaneSsh64.dll. Existing
-protocols do not load it. SSH requires Windows 10 / Server 2016 or newer, x64. ECDSA/ECDH is enabled
+The optional DLL is named ProxyLaneSsh64.dll or ProxyLaneSshARM64.dll.
+Existing protocols do not load it. SSH requires Windows 10 or newer on native
+x64/ARM64 (ARM64 device validation pending). ECDSA/ECDH is enabled
 with statically linked OpenSSL; older Windows versions and a 32-bit host are not supported.
 The release packager merges COPYING into the single archive LICENSE.

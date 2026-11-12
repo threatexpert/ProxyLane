@@ -1,7 +1,8 @@
-// Page3.cpp : 实现文件
+﻿// Page3.cpp : 实现文件
 //
 
 #include "stdafx.h"
+#include "../ProxyLaneHook/RundllHost.h"
 #include "ProxyLane.h"
 #include "Page3.h"
 #include "MainTab.h"
@@ -514,30 +515,21 @@ BOOL CPage3::GetRunningHookedProcesses(std::vector<_myPROCESSINFO>& processes)
 
 BOOL InjectDll2(HANDLE hProc, DWORD dwPid, DWORD dwTid, LPCSTR lpszPipeName)
 {
-	STARTUPINFO si = { 0 };
-	PROCESS_INFORMATION pi;
-	PVOID WowRedirOldValue = NULL;
-
-	si.cb = sizeof(si);
-
-	BOOL bOK;
-	CString strInjectCmd;
-	CString strProxyLaneHook, strRundll;
-
-	strProxyLaneHook = ChooseProxyLaneHookModule(hProc);
-	strRundll = ChooseRundll32(strProxyLaneHook);
-
-	strInjectCmd.Format(_T("%s \"%s\",AttachTo --pid=%lu --tid=%lu --pipe=%s"),
-		strRundll, strProxyLaneHook, dwPid, dwTid, (LPCTSTR)(CString)lpszPipeName);
-
-	myWow64DisableWow64FsRedirection(&WowRedirOldValue);
-
-	bOK = CreateProcess(NULL, (LPTSTR)(LPCTSTR)strInjectCmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi);
-
-	myWow64RevertWow64FsRedirection(WowRedirOldValue);
-
-	if (!bOK)
-		return FALSE;
+	ProcessArchitecture::ProcessInfo target;
+	if (!ProcessArchitecture::Query(hProc, target)) return FALSE;
+	CString strProxyLaneHook = ChooseProxyLaneHookModule(hProc);
+	CString strRundll = ChooseRundll32(hProc);
+	if (strProxyLaneHook.IsEmpty() || strRundll.IsEmpty()) return FALSE;
+	CStringW command;
+	command.Format(L"\"%s\" \"%s\",AttachTo --pid=%lu --tid=%lu --pipe=%s",
+		(LPCWSTR)CStringW(strRundll), (LPCWSTR)CStringW(strProxyLaneHook), dwPid, dwTid,
+		(LPCWSTR)CStringW(lpszPipeName));
+	RundllHost::Attributes attributes;
+	if (!attributes.Initialize(target)) return FALSE;
+	PROCESS_INFORMATION pi = {};
+	BOOL created = RundllHost::Create(target, command.GetBuffer(), attributes, pi);
+	command.ReleaseBuffer();
+	if (!created) return FALSE;
 
 	DWORD dwEC = 0;
 
@@ -547,7 +539,9 @@ BOOL InjectDll2(HANDLE hProc, DWORD dwPid, DWORD dwTid, LPCSTR lpszPipeName)
 	CloseHandle(pi.hProcess);
 	CloseHandle(pi.hThread);
 
-	return dwEC == 0xFF01;
+	if (dwEC == 0xFF01) return TRUE;
+	SetLastError(ERROR_DLL_INIT_FAILED);
+	return FALSE;
 }
 
 BOOL InjectDll(HANDLE hProc, DWORD dwPid, DWORD dwTid, LPCSTR lpszPipeName)
@@ -563,17 +557,18 @@ BOOL InjectDll(HANDLE hProc, DWORD dwPid, DWORD dwTid, LPCSTR lpszPipeName)
 		SetLastError(error);
 		return FALSE;
 	}
-#ifdef _WIN64
-	if (is64Process(hProc))
+	ProcessArchitecture::ProcessInfo target;
+	if (!ProcessArchitecture::Query(hProc, target)) return FALSE;
+	switch (ProcessArchitecture::Route(ProcessArchitecture::CurrentModule(), target))
+	{
+	case ProcessArchitecture::Direct:
 		return AttachToI(dwPid, dwTid, lpszPipeName) == 0xFF01;
-	else
+	case ProcessArchitecture::Helper:
 		return InjectDll2(hProc, dwPid, dwTid, lpszPipeName);
-#else
-	if (!is64Process(hProc))
-		return AttachToI(dwPid, dwTid, lpszPipeName) == 0xFF01;
-	else
-		return InjectDll2(hProc, dwPid, dwTid, lpszPipeName);
-#endif
+	default:
+		SetLastError(ERROR_NOT_SUPPORTED);
+		return FALSE;
+	}
 }
 
 BOOL HookProcess(DWORD pid, LPCSTR pipeName, ULONGLONG expectedCreationTime = 0)
@@ -612,30 +607,17 @@ BOOL HookProcess(DWORD pid, LPCSTR pipeName, ULONGLONG expectedCreationTime = 0)
 	return bOK;
 }
 
-CString GetProxyLaneHookModule32Path()
+static CString GetProxyLaneHookModulePath(ProcessArchitecture::Architecture arch)
 {
+	LPCTSTR fileName = ProcessArchitecture::HookFileName(arch);
+	if (!fileName) { SetLastError(ERROR_NOT_SUPPORTED); return CString(); }
 	TCHAR modulePath[MAX_PATH] = { 0 };
-	if (!GetModuleFileName(NULL, modulePath, _countof(modulePath)))
-		return CString();
-	modulePath[_countof(modulePath) - 1] = _T('\0');
+	DWORD length = GetModuleFileName(NULL, modulePath, _countof(modulePath));
+	if (!length || length >= _countof(modulePath)) return CString();
 	CString directory(modulePath);
 	const int slash = directory.ReverseFind(_T('\\'));
-	if (slash < 0)
-		return CString();
-	return directory.Left(slash) + _T("\\ProxyLaneHook32.dll");
-}
-
-CString GetProxyLaneHookModule64Path()
-{
-	TCHAR modulePath[MAX_PATH] = { 0 };
-	if (!GetModuleFileName(NULL, modulePath, _countof(modulePath)))
-		return CString();
-	modulePath[_countof(modulePath) - 1] = _T('\0');
-	CString directory(modulePath);
-	const int slash = directory.ReverseFind(_T('\\'));
-	if (slash < 0)
-		return CString();
-	return directory.Left(slash) + _T("\\ProxyLaneHook64.dll");
+	if (slash < 0) return CString();
+	return directory.Left(slash + 1) + fileName;
 }
 
 BOOL myWow64DisableWow64FsRedirection(__out PVOID *OldValue)
@@ -677,90 +659,23 @@ BOOL myWow64RevertWow64FsRedirection( _In_  PVOID OldValue )
 	return FN(OldValue);
 }
 
-BOOL IsWow64(HANDLE hProc)
-{
-	typedef BOOL(WINAPI *LPFN_ISWOW64PROCESS) (HANDLE, PBOOL);
-
-	LPFN_ISWOW64PROCESS fnIsWow64Process;
-
-	BOOL bIsWow64 = FALSE;
-
-	//IsWow64Process is not available on all supported versions of Windows.
-	//Use GetModuleHandle to get a handle to the DLL that contains the function
-	//and GetProcAddress to get a pointer to the function if available.
-
-	fnIsWow64Process = (LPFN_ISWOW64PROCESS)GetProcAddress(
-		GetModuleHandle(TEXT("kernel32")), "IsWow64Process");
-
-	if (NULL != fnIsWow64Process)
-	{
-		if (!fnIsWow64Process(hProc, &bIsWow64))
-		{
-			//handle error
-		}
-	}
-	return bIsWow64;
-
-}
-
-BOOL is64Process(HANDLE hProc)
-{
-#ifdef _WIN64
-	if (IsWow64(hProc))
-		return FALSE;
-	else
-		return TRUE;
-#else
-	if (IsWow64(GetCurrentProcess()))
-	{
-		if (IsWow64(hProc))
-			return FALSE;
-		else
-			return TRUE;
-	}
-	else
-	{
-		return FALSE;
-	}
-#endif
-}
-
 CString ChooseProxyLaneHookModule(HANDLE hProc)
 {
-	if (is64Process(hProc))
-		return GetProxyLaneHookModule64Path();
-	else
-		return GetProxyLaneHookModule32Path();
+	ProcessArchitecture::ProcessInfo target;
+	if (!ProcessArchitecture::Query(hProc, target)) return CString();
+	return GetProxyLaneHookModulePath(target.process);
 }
 
-CString ChooseRundll32(CString &strDllPath)
+CString ChooseRundll32(HANDLE hProc)
 {
-	BOOL is64 = strDllPath.Right(6).CompareNoCase(_T("64.dll")) == 0;
-	CString strPath;
-
-	GetWindowsDirectory(strPath.GetBuffer(MAX_PATH), MAX_PATH);
-	strPath.ReleaseBuffer();
-
-	//SysWOW64, System32
-
-#ifdef _WIN64
-	if (is64)
-		return strPath + _T("\\System32\\rundll32.exe");
-	else
-		return strPath + _T("\\SysWOW64\\rundll32.exe");
-#else
-	if (IsWow64(GetCurrentProcess()))
-	{
-		if (is64)
-			return strPath + _T("\\System32\\rundll32.exe");
-		else
-			return strPath + _T("\\SysWOW64\\rundll32.exe");
-	}
-	else
-	{
-		return strPath + _T("\\System32\\rundll32.exe");
-	}
-#endif
+	ProcessArchitecture::ProcessInfo target;
+	if (!ProcessArchitecture::Query(hProc, target)) return CString();
+	LPCTSTR directory = ProcessArchitecture::SystemRundllDirectory(target);
+	if (!directory) { SetLastError(ERROR_NOT_SUPPORTED); return CString(); }
+	TCHAR windows[MAX_PATH] = { 0 };
+	UINT length = GetWindowsDirectory(windows, _countof(windows));
+	if (!length || length >= _countof(windows)) return CString();
+	return CString(windows) + _T("\\") + directory + _T("\\rundll32.exe");
 }
 
 
@@ -1047,11 +962,8 @@ static AppLaunchResult LaunchElevatedAndProxy(
 	}
 	encodedRequest.ReleaseBuffer(static_cast<int>(actualEncodedLength));
 
-#ifdef _WIN64
-	CString hookPath = GetProxyLaneHookModule64Path();
-#else
-	CString hookPath = GetProxyLaneHookModule32Path();
-#endif
+	CString hookPath = GetProxyLaneHookModulePath(ProcessArchitecture::CurrentModule());
+	if (hookPath.IsEmpty()) return APP_LAUNCH_ELEVATED_HELPER_FAILED;
 	if (hookPath.Find(_T(',')) >= 0)
 		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
 	const DWORD hookAttributes = GetFileAttributes(hookPath);
@@ -1061,7 +973,8 @@ static AppLaunchResult LaunchElevatedAndProxy(
 		return APP_LAUNCH_ELEVATED_HELPER_FAILED;
 	}
 
-	CString rundllPath = ChooseRundll32(hookPath);
+	CString rundllPath = ChooseRundll32(GetCurrentProcess());
+	if (rundllPath.IsEmpty()) return APP_LAUNCH_ELEVATED_HELPER_FAILED;
 	CString encodedRequestWide;
 	WCHAR* encodedWideBuffer = encodedRequestWide.GetBuffer(encodedRequest.GetLength());
 	const int convertedLength = MultiByteToWideChar(
@@ -1832,6 +1745,7 @@ void CPage3::OnBnClickedSelectApp()
 AppLaunchResult CPage3::LaunchInteractiveApplication(const InstalledApplications::Application& app,
 	AppLaunchElevationMode elevationMode, const RecentApplications::Entry* saved)
 {
+	m_launchInjectionError = ERROR_SUCCESS;
 	if (!g_MainTab || !g_MainTab->IsProxyRunning()) return APP_LAUNCH_CREATE_PROCESS_FAILED;
 	const CString runningProfile = g_MainTab->GetRunningProfileName();
 	const CString runningIdentity = g_MainTab->GetRunningRecentProfileId();
@@ -1898,6 +1812,23 @@ void CPage3::LaunchRecentApplication(const RecentApplications::Entry& entry)
 	ShowApplicationLaunchResult(entry.app.name, result);
 }
 
+CString CPage3::InjectionFailureMessage() const
+{
+	CString message = Localization::Get(L"dialog.drop_inject_failed");
+	if (m_launchInjectionError)
+	{
+		WCHAR description[512] = {};
+		FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+			NULL, m_launchInjectionError, 0, description, _countof(description), NULL);
+		CString detail(description);
+		detail.Trim();
+		message += L"\r\n\r\n";
+		message += Localization::Format(L"dialog.injection_error_detail", m_launchInjectionError,
+			m_launchInjectionError, static_cast<LPCTSTR>(detail));
+	}
+	return message;
+}
+
 void CPage3::ShowApplicationLaunchResult(const CString& name, AppLaunchResult result)
 {
 	if (result == APP_LAUNCH_CANCELLED || result == APP_LAUNCH_FORWARDED) return;
@@ -1916,8 +1847,8 @@ void CPage3::ShowApplicationLaunchResult(const CString& name, AppLaunchResult re
 		messageKey = _T("dialog.drop_inject_failed");
 	else if (result == APP_LAUNCH_PACKAGED_INJECTION_FAILED)
 		messageKey = _T("apps.packaged_injection_failed");
-	MessageBox(Localization::Get(messageKey), Localization::Get(_T("dialog.drop_failed_title")),
-		MB_OK | MB_ICONERROR);
+	MessageBox(result == APP_LAUNCH_INJECTION_FAILED ? InjectionFailureMessage() : Localization::Get(messageKey),
+		Localization::Get(_T("dialog.drop_failed_title")), MB_OK | MB_ICONERROR);
 }
 
 static BOOL ResolveWindowFinderTarget(
@@ -3616,10 +3547,12 @@ BOOL CPage3::InjectNewProcess(LPHookNewProcessInfo lphnpi)
 
 	if(!g_GlobalProxy || !(pPRC = g_GlobalProxy->GetPRCInstance()))
 	{
+		SetLastError(ERROR_PIPE_NOT_CONNECTED);
 		return FALSE;
 	}
 	if(!pPRC->GetPRCPipeName(szPipeName, MAX_PATH))
 	{
+		SetLastError(ERROR_PIPE_NOT_CONNECTED);
 		return FALSE;
 	}
 
@@ -3630,14 +3563,24 @@ BOOL CPage3::InjectNewProcess(LPHookNewProcessInfo lphnpi)
 	if (!ShouldProxyChildProcess(&hnpi))
 	{
 		CloseHandle(hProcess);
+		SetLastError(ERROR_CANCELLED);
 		return FALSE;
 	}
 
 	CPage2 *pPage2 = g_MainTab->GetPage2();
+	SetLastError(ERROR_SUCCESS);
 	bRet = InjectDll(hProcess, hnpi.dwProcessId, hnpi.dwThreadId, szPipeName);
+	const DWORD injectionError = bRet > 0 ? ERROR_SUCCESS : GetLastError();
 	pPage2->OnChildInjectionResult(&hnpi, bRet > 0);
-
+	if (bRet <= 0)
+	{
+		CString text;
+		text.Format(L"Injection failed: PID %lu, target=\"%s\", Win32=%lu (0x%08lX).\r\n",
+			hnpi.dwProcessId, hnpi.szAppPath, injectionError, injectionError);
+		g_GlobalProxy->GetLogInstance()->LogText(text);
+	}
 	CloseHandle(hProcess);
+	SetLastError(injectionError);
 	return bRet > 0;
 }
 
@@ -3716,6 +3659,7 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 	const CString& initialArguments,
 	const CString& initialWorkingDirectory)
 {
+	m_launchInjectionError = ERROR_SUCCESS;
 	if (!fileName || !fileName[0])
 		return APP_LAUNCH_INVALID_TARGET;
 
@@ -3931,6 +3875,7 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 	BOOL injectionSucceeded = InjectNewProcess(&hnpi);
 	if (!injectionSucceeded && strictInjection)
 	{
+		m_launchInjectionError = GetLastError();
 		TerminateProcess(pi.hProcess, AUTOMATION_EXIT_INJECTION_FAILED);
 		CloseHandle(pi.hProcess);
 		CloseHandle(pi.hThread);

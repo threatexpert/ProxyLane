@@ -18,7 +18,7 @@
 namespace BrowserQuicPolicy {
 static std::atomic<bool> preference{false};
 void SetPreference(bool enabled) {
-#ifdef _WIN64
+#if defined(_M_X64) && !defined(_M_ARM64EC)
     preference.store(enabled);
 #endif
 }
@@ -50,7 +50,8 @@ void Forget(const void* owner) {
     std::lock_guard<std::mutex> guard(reportsMutex);
     for(auto i=reports.begin();i!=reports.end();)if(std::get<0>(i->first)==owner)i=reports.erase(i);else ++i;
 }
-#ifndef _WIN64
+// The browser locator decodes x64 instructions and x64 unwind tables only.
+#if !defined(_M_X64) || defined(_M_ARM64EC)
 void Initialize(LPCTSTR,bool) {} bool Enabled(){return false;} void SetupFailed(){}
 void ModuleLoaded(LPCWSTR,DWORD){} DWORD OnUdp(){return None;}
 bool NeedsPublish(){return false;} void Publish(CPRCPipeClient&){}
