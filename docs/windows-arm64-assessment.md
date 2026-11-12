@@ -545,3 +545,13 @@ hook_CreateProcessInternalW            RVA 0x8ae38
 测试增加平台条件覆盖，并在跨架构附加探针中于注入前保存 Kernel32/KernelBase 的 CreateProcessW 入口字节，注入并确认代理流量后检查原生 Intel 入口未被修改，再验证子进程和孙进程代理。探针使用 ready 文件确保附加发生在快照之后。ARM 仿真进程保留公开入口的判断有模拟测试覆盖，实际 PowerShell/Firefox 场景仍待本次变更后的 ARM 真机复测。
 
 本次构建及回归：Win32/x64 Release 构建和完整 Detours 回归通过，ARM64 Release 交叉构建通过。Windows 10 x64 上的 8 个启动、4 个附加后子进程用例及 37 次代理连接通过；4 个附加用例均验证公开 CreateProcessW 入口未被修改。Hook32/64 静态 TLS 检查通过。ARM64 和 Intel 分别打包，使用同一轮 Hook32/64，Intel 包不含 ARM64 文件。XP/Windows 7 实机未测试。日志见 build/qa/arm-emulation-create-gate。
+
+### 2026-11-12：提权进程的 DoH 日志名称显示为 Unknown
+
+用户报告同一提权 gonc.exe 的代理日志显示名称，但 DoH 开始和结果日志显示 Unknown。原因是 DoH 日志将 receptionCentre 传为 NULL，跳过 Hook 登记的进程身份，只尝试 OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ) / GetModuleFileNameExW；普通权限宿主无法读取提权进程时名称为空。这是共享日志路径问题，不限于 ARM64，日志中的 DNS 结果和代理流量不受此显示问题影响。
+
+修复让 TCP/UDP 地址解析和 DNS 接管路径传入所属 PRC，优先按 PID 与创建时间读取已登记身份；每个应用请求保存独立名称快照供开始和结果日志使用，不把名称放入跨进程共享查询。无法取得登记身份时保留系统查询回退，并校验进程创建时间，避免 PID 复用误标。日志辅助函数保留调用方错误码，不改变 DoH 缓存、事件驱动、转发或 UDP 回包来源地址。
+
+回归使用独立测试进程的空 DACL 实际制造进程查询拒绝访问，并通过 PRC 登记与可执行文件名不同的 RegisteredDoh.exe，检查成功、缓存命中、共享查询和失败日志仍使用登记名称。测试只限制自身进程，并保留句柄恢复 DACL，不修改用户进程权限。真实 ARM 提权场景仍需用户复测。
+
+本次验证：Win32/x64 Release 构建及 Detours 回归通过，ARM64 Release 交叉构建通过。受限进程 DoH 集成测试覆盖成功、缓存、共享查询、取消、代理链、失败和 bootstrap 地址重试；DNS 中继 SOCKS5、HTTP、代理链及 SERVFAIL 测试通过。Google 测试端点连接超时后，改用可达的 AliDNS 端点完成在线验证。Hook32/64 最终 DLL 静态 TLS 检查通过；XP 实机未测试。ARM64/Intel 包已分别生成，核对每个二进制与构建输出一致、两包 Hook32/64 一致，Intel 包不含 ARM64 文件。测试日志和核对记录见 build/qa/doh-process-identity，发布包见 dist/doh-process-identity。

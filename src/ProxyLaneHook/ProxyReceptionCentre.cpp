@@ -805,14 +805,15 @@ BOOL CProxyReceptionCentre::RegisterReleasedChild(LPHookNewProcessInfo child)
 BOOL CProxyReceptionCentre::GetProcessIdentity(
 	DWORD processId,
 	LPWSTR appPath,
-	DWORD appPathCount)
+	DWORD appPathCount,
+	ULONGLONG processCreateTime)
 {
 	if (!processId || !appPath || appPathCount == 0)
 		return FALSE;
 	appPath[0] = L'\0';
 
 	HookProcessIdentityInfo identity = { 0 };
-	if (!m_processRegistry->Get(processId, 0, &identity)) return FALSE;
+	if (!m_processRegistry->Get(processId, processCreateTime, &identity)) return FALSE;
 	ULONGLONG actual = 0;
 	if (QueryProcessCreateTime(processId, &actual) && actual != identity.processCreateTime)
 		return FALSE;

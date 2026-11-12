@@ -77,7 +77,7 @@ BOOL CTcpProxyTask::SetTaskInfo(SOCKET sClient, LPPRCClient lpPRCClient, LPProxy
         if (DohPolicy::Needed(m_PRCClient, m_ProxyInfo)) {
             if (!m_pClient->Attach(sClient, FD_CLOSE)) break;
             if (lpChain) m_dohChain = *lpChain;
-            m_doh = CDohQuery::Resolve(m_PRCClient, m_ProxyInfo, lpChain, false, &m_dohLog);
+            m_doh = CDohQuery::Resolve(m_PRCClient, m_ProxyInfo, lpChain, false, &m_dohLog, {}, m_pTaskmgr->m_pPRC);
             if (!m_doh->NotifyWhenReady(m_dohWake)) { WSASetLastError(WSAENOBUFS); break; }
             return TRUE;
         }

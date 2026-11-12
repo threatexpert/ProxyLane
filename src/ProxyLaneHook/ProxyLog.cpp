@@ -145,20 +145,23 @@ void LogNewProxyTask(const LPPRCClient lpC)
 }
 
 static LPWSTR GetLogProcessName(CProxyReceptionCentre *receptionCentre,
-	DWORD processId, LPWSTR processPath, DWORD pathLength)
+	DWORD processId, LPWSTR processPath, DWORD pathLength, ULONGLONG expectedCreateTime = 0)
 {
 	if (!processPath || pathLength == 0)
 		return NULL;
 	processPath[0] = L'\0';
 
 	if (!receptionCentre ||
-		!receptionCentre->GetProcessIdentity(processId, processPath, pathLength))
+		!receptionCentre->GetProcessIdentity(processId, processPath, pathLength, expectedCreateTime))
 	{
 		HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
 			FALSE, processId);
 		if (process)
 		{
-			GetModuleFileNameExW(process, NULL, processPath, pathLength);
+			FILETIME created, exited, kernel, user;
+			if (!expectedCreateTime || (GetProcessTimes(process, &created, &exited, &kernel, &user) &&
+				((static_cast<ULONGLONG>(created.dwHighDateTime) << 32) | created.dwLowDateTime) == expectedCreateTime))
+				GetModuleFileNameExW(process, NULL, processPath, pathLength);
 			processPath[pathLength - 1] = L'\0';
 			CloseHandle(process);
 		}
@@ -245,25 +248,38 @@ void LogDnsRedirect(const LPPRCClient lpC, LPCWSTR processName, CProxyReceptionC
 		(LPCTSTR)name, lpC->dwPid, (LPCTSTR)original, (LPCTSTR)effective);
 }
 
-void LogDnsRelay(DWORD pid, LPCSTR name, LPCSTR type, LPCSTR result)
+CString GetDnsLogProcessName(CProxyReceptionCentre* receptionCentre, const PRCClient& client)
 {
+    const int savedError = WSAGetLastError();
     WCHAR path[MAX_PATH] = {};
-    LPCWSTR process = GetLogProcessName(NULL, pid, path, _countof(path));
+    LPCWSTR name = GetLogProcessName(receptionCentre, client.dwPid, path, _countof(path), client.processCreateTime);
+    CString result(name && *name ? name : L"Unknown");
+    WSASetLastError(savedError);
+    return result;
+}
+
+void LogDnsRelay(DWORD pid, LPCSTR name, LPCSTR type, LPCSTR result, LPCWSTR processName)
+{
+    const int savedError = WSAGetLastError();
+    WCHAR path[MAX_PATH] = {};
+    LPCWSTR process = processName ? processName : GetLogProcessName(NULL, pid, path, _countof(path));
     CStringA displayName(name ? name : "");
     if (displayName.GetLength() > 1 && displayName.Right(1) == ".")
         displayName.Truncate(displayName.GetLength() - 1);
     PrintText(_T("[DoH] %s (%lu) : %hs %hs -> %hs\r\n"), process && *process ? process : L"Unknown", pid, (LPCSTR)displayName, type, result);
+    WSASetLastError(savedError);
 }
 
-void LogDnsRelayRoute(const PRCClient* client, LPCSTR result)
+void LogDnsRelayRoute(const PRCClient* client, LPCSTR result, CProxyReceptionCentre* receptionCentre)
 {
     if (!client) return;
-    WCHAR path[MAX_PATH] = {};
-    LPCWSTR process = GetLogProcessName(NULL, client->dwPid, path, _countof(path));
+    const int savedError = WSAGetLastError();
+    CString process = GetDnsLogProcessName(receptionCentre, *client);
     CString endpoint = FormatLogEndpoint(client->dstAddr);
     PrintText(_T("[DoH] %s (%lu) : %s DNS %s -> %hs\r\n"),
-        process && *process ? process : L"Unknown", client->dwPid,
+        (LPCWSTR)process, client->dwPid,
         client->sType == SOCK_DGRAM ? L"UDP" : L"TCP", (LPCTSTR)endpoint, result);
+    WSASetLastError(savedError);
 }
 
 void CProxyLog::OnProxyFailure(const LPPRCClient client, LPCWSTR processName,

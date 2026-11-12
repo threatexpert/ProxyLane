@@ -633,7 +633,7 @@ BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer *routePeer,
             if (DohPolicy::Intercept(it->client, m_ProxyInfo) &&
                 application.GetPort() != it->client.srcAddr.GetPort()) {
                 if (!it->firstDatagramLogged) {
-                    LogDnsRelayRoute(&it->client, "rejected datagram: application source port differs from registered socket");
+                    LogDnsRelayRoute(&it->client, "rejected datagram: application source port differs from registered socket", m_pTaskmgr->m_pPRC);
                     it->firstDatagramLogged = TRUE;
                 }
                 return FALSE;
@@ -645,11 +645,11 @@ BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer *routePeer,
                 if (it->capture) it->capture->Data(0, data, length);
                 m_pTaskmgr->m_pPRC->RecordTraffic(false, length);
                 if (it->dnsRequests.size() >= 32) {
-                    LogDnsRelayRoute(&it->client, "DNS request queue full");
+                    LogDnsRelayRoute(&it->client, "DNS request queue full", m_pTaskmgr->m_pPRC);
                     return FALSE;
                 }
                 CDnsDohRequest request;
-                if (!request.Begin(it->client, m_ProxyInfo, m_dnsChain.empty() ? NULL : &m_dnsChain, data, length)) return FALSE;
+                if (!request.Begin(it->client, m_ProxyInfo, m_dnsChain.empty() ? NULL : &m_dnsChain, data, length, m_pTaskmgr->m_pPRC)) return FALSE;
                 it->dnsRequests.push_back(std::move(request));
                 if (!it->dnsRequests.back().NotifyWhenReady(m_dohWake)) {
                     CloseTask("DoH completion notification failed"); return FALSE;
@@ -659,7 +659,7 @@ BOOL CUdpProxyTask::ForwardClientDatagram(CPRCUdpPeer *routePeer,
             if (DohPolicy::Needed(it->client, m_ProxyInfo)) {
                 if (!(it->client.routingFlags & PRC_CLIENT_FLAG_DOH_RESOLVED)) {
                     if (!it->doh) {
-                        it->doh = CDohQuery::Resolve(it->client, m_ProxyInfo, NULL, false, &it->dohLog);
+                        it->doh = CDohQuery::Resolve(it->client, m_ProxyInfo, NULL, false, &it->dohLog, {}, m_pTaskmgr->m_pPRC);
                         if (!it->doh->NotifyWhenReady(m_dohWake)) {
                             CloseTask("DoH completion notification failed"); return FALSE;
                         }
