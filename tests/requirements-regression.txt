@@ -1,0 +1,5 @@
+# SSH/DoH fixtures and Detours/cross-architecture tests; not product dependencies.
+# Install in a venv: python -m pip install -r tests/requirements-regression.txt
+paramiko>=3.5
+cryptography
+psutil

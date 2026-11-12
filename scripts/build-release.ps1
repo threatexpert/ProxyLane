@@ -70,6 +70,20 @@ if (Get-Command rustup -ErrorAction SilentlyContinue) {
     $installed = & rustup toolchain list
     if ($LASTEXITCODE -or -not ($installed -match '^1\.88\.0-x86_64-pc-windows-msvc')) {
         $missing.Add('Run: rustup toolchain install 1.88.0-x86_64-pc-windows-msvc --profile minimal')
+    } else {
+        # ARM packages also build Intel companions and run x64 tests.
+        $requiredTargets = @('x86_64-pc-windows-msvc')
+        if ($needsArm) { $requiredTargets += 'aarch64-pc-windows-msvc' }
+        $installedTargets = @(& rustup target list --installed --toolchain 1.88.0-x86_64-pc-windows-msvc)
+        if ($LASTEXITCODE) {
+            $missing.Add('Cannot query Rust targets. Run: rustup target list --installed --toolchain 1.88.0-x86_64-pc-windows-msvc')
+        } else {
+            foreach ($target in $requiredTargets) {
+                if ($installedTargets -notcontains $target) {
+                    $missing.Add("Run: rustup target add $target --toolchain 1.88.0-x86_64-pc-windows-msvc")
+                }
+            }
+        }
     }
 }
 if ($needsArm) {

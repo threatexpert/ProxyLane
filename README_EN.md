@@ -192,8 +192,8 @@ For a new fork, start with the [complete build guide](docs/BUILDING_EN.md) ([简
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -CheckEnvironmentOnly
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Package
-# Build and package Intel and ARM64; omit the Clang path if discoverable
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Architecture All -Package -ClangBinDirectory 'C:\tools\llvm\bin'
+# Build and package Intel and ARM64; discover Clang on PATH or in its default directory
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Architecture All -Package
 ```
 
 Intel products go to `bin/`, ARM64 to `bin/ARM64/Release/`, ZIPs/checksums to `dist/`, and logs/build records to `build/release/`. Caches are preserved. Individual entry points follow.

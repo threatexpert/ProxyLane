@@ -199,8 +199,8 @@ gonc -e ":s5s -u -http" -l -k -psk YOUR_PSK -tls 1083
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -CheckEnvironmentOnly
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Package
-# 同时构建并打包 Intel 和 ARM64；Clang 在 PATH/默认安装位置时可省略路径
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Architecture All -Package -ClangBinDirectory 'C:\tools\llvm\bin'
+# 同时构建并打包 Intel 和 ARM64；自动发现 PATH/默认安装位置的 Clang
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Architecture All -Package
 ```
 
 Intel 输出到 `bin/`，ARM64 输出到 `bin/ARM64/Release/`，包和 `.sha256` 输出到 `dist/`；日志与构建记录位于 `build/release/`。默认保留缓存。以下为单独构建入口。
