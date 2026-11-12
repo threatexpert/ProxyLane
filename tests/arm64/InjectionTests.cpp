@@ -100,6 +100,47 @@ static ULONG64 ReadRemoteQword(HANDLE process, ULONG64 address)
     return value;
 }
 
+struct SmallStackInjection
+{
+    HANDLE process, thread;
+    LPCWSTR dll;
+    LPCSTR pipe;
+    int result;
+    DWORD error;
+};
+
+static DWORD WINAPI InjectOnSmallStack(void* parameter)
+{
+    SmallStackInjection& call = *static_cast<SmallStackInjection*>(parameter);
+    try
+    {
+        call.result = InjectDllArm64W(call.process, call.thread, call.dll, call.pipe);
+        call.error = GetLastError();
+        return 0;
+    }
+    catch (...)
+    {
+        return 1;
+    }
+}
+
+static void ScheduleOnSmallStack(HANDLE process, HANDLE thread, LPCWSTR dll, LPCSTR pipe)
+{
+    SmallStackInjection call = { process, thread, dll, pipe, -1, ERROR_SUCCESS };
+    // The old resolver alone used over 192 KiB. Reserve only 128 KiB so this
+    // exercises the production injector under a constrained caller stack.
+    HANDLE worker = CreateThread(NULL, 128 * 1024, InjectOnSmallStack, &call,
+        STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+    Check(worker != NULL, "Create small-stack injection thread");
+    DWORD wait = WaitForSingleObject(worker, INFINITE);
+    DWORD exitCode = 1;
+    BOOL gotExitCode = GetExitCodeThread(worker, &exitCode);
+    CloseHandle(worker);
+    Check(wait == WAIT_OBJECT_0 && gotExitCode && exitCode == 0, "Small-stack worker failed");
+    SetLastError(call.error);
+    Check(call.result == 1, "Schedule injection from 128 KiB stack");
+}
+
 int main(int argc, char** argv)
 {
     if (argc == 3 && std::string(argv[1]) == "--child") return ChildMain(argv[2]);
@@ -154,6 +195,26 @@ int main(int argc, char** argv)
                 child.Complete();
                 std::cout << (startup ? "startup" : "running") << " case " << failure << " passed\n";
             }
+        }
+        // Firefox's child-creation hook executes on a caller-owned thread.
+        // Test both startup and running attachment with a small caller stack,
+        // then verify the real remote callback and the child's normal exit.
+        for (int mode = 0; mode < 2; ++mode)
+        {
+            bool startup = mode == 0;
+            Child child;
+            child.Start(++sequence, startup, TRUE, startup ? 1 : 0);
+            ScheduleOnSmallStack(child.pi.hProcess, startup ? child.pi.hThread : NULL,
+                dll.c_str(), child.name.c_str());
+            if (startup)
+            {
+                Check(ResumeThread(child.pi.hThread) == 1, "Small-stack injection changed suspension");
+                child.WaitReady();
+            }
+            Check(WaitForSingleObject(child.hook, 15000) == WAIT_OBJECT_0, "Small-stack callback timeout");
+            Check(child.state->calls == 1 && child.state->mainEntered == 1, "Small-stack callback/main entry");
+            child.Complete();
+            std::cout << (startup ? "startup" : "running") << " injection on 128 KiB stack passed\n";
         }
         // Regress the real system ARM64X executables in their native ARM64
         // execution mode, not merely a pure-ARM64 test executable. The fixture

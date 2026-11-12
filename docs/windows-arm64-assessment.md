@@ -515,3 +515,23 @@ LoadLibraryExW 使用独立的 HOOKMODULE_LIBRARYLOADER：只有当前进程已�
 `syswow32` 保留用户原话，尚未核实是否指 SysWOW64，不据此认定父进程实际架构。记录来源是用户手工实测，不代表完整自动化矩阵已经运行通过。浏览器专用 QUIC 策略干预仍按前述决定暂缓。最新汇总见 README_ARM64.md。
 
 用户进一步确认代理链也已测试正常，代理链状态补记为“用户 Windows 11 ARM 真机测试通过”。未提供具体链路配置，本记录不扩展为所有协议排列组合的覆盖声明。
+
+### Firefox ARM64 创建子进程时的栈溢出
+
+用户提供 Firefox 160.0、Windows 11 ARM 22631 的崩溃报告，异常为 EXCEPTION_STACK_OVERFLOW。ProxyLaneHookARM64.dll 的 CodeView GUID/age 与本地符号完全匹配（7AC3B7BAF1F041E899D227C66896238A9，时间戳 0x6AF54587）。符号化调用链为：
+
+```text
+_alloca_probe                          RVA 0x1020
+InjectDllArm64W                        RVA 0x8fcec，调用 ResolveNativeApis
+AttachToHandles                       RVA 0xdaf98
+ProxyLaneInjectSuspendedProcess        RVA 0x8d90
+CHookWinsock::FinishChildCreation      RVA 0x8012c
+CHookWinsock::inhook_CreateProcessInternalW  RVA 0x8bc20
+hook_CreateProcessInternalW            RVA 0x8ae38
+```
+
+旧版 ResolveNativeApis 序言通过 x15=0x303e、lsl #4 申请 197600 字节栈空间，另有 16 字节保存帧；其中三个 WCHAR[32768] 路径数组合计 196608 字节。在 Firefox 的调用线程剩余栈空间不足时，进入该函数的栈探测即溢出。现有调用栈没有显示循环递归，此问题也不涉及已暂缓的浏览器 QUIC 策略干预。
+
+修复将三个路径缓冲区作为一次按需堆分配，离开函数时自动释放并保留 Win32 错误码；分配失败返回 ERROR_NOT_ENOUGH_MEMORY。保留原有完整路径容量及目标映像校验，不新增静态 TLS。InjectionTestsARM64 增加在 128 KiB 栈线程中执行启动注入和运行中附加的用例，验证远端 Hook 回调、调用者挂起计数和子进程正常退出。ARM 真机上的新增测试及 Firefox 修复效果仍需复测，不能用交叉编译结果替代。
+
+本次验证：ARM64 Release/Debug 构建通过；Release DLL 中 ResolveNativeApis 的固定栈帧从 197616 字节降为 1072 字节（包含保存寄存器的空间，不包含所调用函数）。引导代码模拟测试通过，Intel 跨架构回归通过 8 个启动用例、4 个附加后子进程用例和 37 次代理连接；Hook32/64 最终 DLL 的静态 TLS 检查通过。XP 实机未测试。构建、符号化及回归日志保存于 build/qa/firefox-arm64-stack。

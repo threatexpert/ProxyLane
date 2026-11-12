@@ -15,6 +15,8 @@
 | UAC / 管理员启动 | 已实现，使用系统 rundll32，无独立提权 helper | 用户 ARM 真机测试通过 |
 | 浏览器专用 QUIC 策略干预 | ARM64 适配未实现；按用户决定暂缓 | 不纳入本轮验收范围 |
 
+Firefox ARM64 专项问题：用户报告原生 Firefox 160 在创建子进程时发生栈溢出。匹配崩溃 DLL 符号后定位到 ARM64 注入器的三个长路径局部数组（合计 192 KiB）。本次已改为堆分配，并增加 128 KiB 调用线程栈的注入回归用例；Firefox ARM 真机修复效果待复测。这不撤销上表已有场景的成功记录，也不表示所有浏览器场景均已通过。
+
 完整跨架构“矩阵”是一组测试用例，不是一项尚未实现的功能。编译通过及 Intel 回归通过不能替代 ARM 真机验收，也不代表任意 ARM64EC 混合模块都兼容。
 
 2026-11-12 用户补充 ARM 真机反馈：子进程代理、SSH、MITM/TLS、UAC 均测试可用，随后确认代理链也已测试正常。以下父子进程场景均可代理子进程：
@@ -73,6 +75,7 @@ python tests/CrossArchitectureE2ETests.py --bin <完整解压的ARM64包目录> 
 ## English
 
 Experimental Windows 11 ARM64 package. Injection/child handling, proxy chains, SSH, MITM/TLS and elevated launch are implemented and built, with user-reported ARM device test success. Completion of the full automated cross-architecture matrix has not been confirmed.
+Native Firefox 160 exposed an injector stack overflow during child creation: three local path buffers consumed 192 KiB. They now use heap storage, and injection tests include a 128 KiB caller stack. Firefox on ARM still needs a device retest of this fix; earlier successful scenarios remain recorded separately.
 On 2026-11-12 the user reported successful proxying of both amd64 and i386 gonc children launched from a native ARM64 cmd, and from another cmd described as residing in `syswow32`. The latter directory name is recorded verbatim; whether it means SysWOW64 and that parent's active ABI have not been verified. Native ARM64X shell injection and the x64 PowerShell child-process fix also have user-reported device success.
 As decided on 2026-11-12, ARM64 adaptation of the browser-specific QUIC policy intervention is not implemented and is deferred, outside the current acceptance scope. The ARM64 host does not enable this policy, including for emulated x64 browsers. This limitation concerns browser-internal policy hooks, not the implementation of ordinary UDP proxying.
 Run `ProxyLaneARM64.exe` with all seven bundled binaries. The ARM64 host uses native transport/MITM/SSH backends. Matching-version Hook32 and Hook64 support the x86/x64 target paths; no Intel GUI or backend binaries are needed for these targets.

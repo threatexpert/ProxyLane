@@ -5,6 +5,7 @@
 #include <psapi.h>
 #include <stddef.h>
 #include <vector>
+#include <memory>
 #include <string.h>
 
 namespace
@@ -83,16 +84,35 @@ namespace
         return ProcessArchitecture::RequireNativeArm64Hybrid(process) != FALSE;
     }
 
+    struct NativeApiPaths
+    {
+        WCHAR local[32768], image[32768], mapped[32768];
+    };
+    struct FreeNativeApiPaths
+    {
+        void operator()(NativeApiPaths* paths) const
+        {
+            DWORD error = GetLastError();
+            HeapFree(GetProcessHeap(), 0, paths);
+            SetLastError(error);
+        }
+    };
+
     bool ResolveNativeApis(HANDLE process, Parameters& params)
     {
         HMODULE local = GetModuleHandleW(L"ntdll.dll");
         if (!local) return false;
-        WCHAR localPath[32768], imagePath[32768], mappedPath[32768];
-        DWORD length = GetMappedFileNameW(GetCurrentProcess(), local, localPath, _countof(localPath));
+        // This runs on the application's thread when it creates a child.
+        // Three long-path buffers would consume 192 KiB of its stack; Firefox
+        // can create children on threads with a smaller remaining stack.
+        std::unique_ptr<NativeApiPaths, FreeNativeApiPaths> paths(
+            static_cast<NativeApiPaths*>(HeapAlloc(GetProcessHeap(), 0, sizeof(NativeApiPaths))));
+        if (!paths) { SetLastError(ERROR_NOT_ENOUGH_MEMORY); return false; }
+        DWORD length = GetMappedFileNameW(GetCurrentProcess(), local, paths->local, _countof(paths->local));
         if (!length) return false;
-        if (length >= _countof(localPath)) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return false; }
-        DWORD imageLength = _countof(imagePath);
-        if (!QueryFullProcessImageNameW(process, PROCESS_NAME_NATIVE, imagePath, &imageLength)) return false;
+        if (length >= _countof(paths->local)) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return false; }
+        DWORD imageLength = _countof(paths->image);
+        if (!QueryFullProcessImageNameW(process, PROCESS_NAME_NATIVE, paths->image, &imageLength)) return false;
         IMAGE_NT_HEADERS64 localNt = {};
         if (!Headers(GetCurrentProcess(), reinterpret_cast<ULONG_PTR>(local), localNt)) return false;
 
@@ -107,16 +127,16 @@ namespace
             if (memory.Type == MEM_IMAGE && base != lastAllocation)
             {
                 lastAllocation = base;
-                length = GetMappedFileNameW(process, memory.AllocationBase, mappedPath, _countof(mappedPath));
+                length = GetMappedFileNameW(process, memory.AllocationBase, paths->mapped, _countof(paths->mapped));
                 if (!length) return false;
-                if (length >= _countof(mappedPath)) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return false; }
-                if (!_wcsicmp(mappedPath, imagePath))
+                if (length >= _countof(paths->mapped)) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return false; }
+                if (!_wcsicmp(paths->mapped, paths->image))
                 {
                     IMAGE_NT_HEADERS64 nt = {};
                     if (!Headers(process, base, nt) || !CompatibleArm64Image(process, base, nt)) return false;
                     mainVerified = true;
                 }
-                if (!_wcsicmp(mappedPath, localPath))
+                if (!_wcsicmp(paths->mapped, paths->local))
                 {
                     IMAGE_NT_HEADERS64 nt = {};
                     if (!Headers(process, base, nt)) return false;
