@@ -1,4 +1,4 @@
-﻿<h1 align="center">ProxyLane</h1>
+<h1 align="center">ProxyLane</h1>
 
 <p align="center">
   <strong>Windows 应用进程级透明代理 · HTTPS / QUIC 流量解密</strong><br>
@@ -16,6 +16,8 @@
 ProxyLane 让指定 Windows 应用使用独立的代理配置，无需修改系统全局代理或安装内核驱动。它通过用户态进程注入与网络 API Hook 实现代理，并可让子进程继承设置。
 
 主体代理功能兼容 **Windows XP 至 Windows 11**，提供 Win32 与 x64 组件。
+
+常规 `ProxyLane-版本-Windows.zip` 仅面向 x86/x64 Windows，不包含 ARM64 组件。ARM64 使用独立的 `ProxyLane-版本-Windows-ARM64.zip` 开发测试包；其功能范围和未完成的实机验收见包内说明。
 
 除了代理，也可以用它分析应用流量：查看 HTTP/1.1、HTTP/2、HTTP/3 请求响应、DNS 和 Raw／Hex 数据，解密 HTTPS 与 QUIC v1，并录制后离线查看。选择 `NOPROXY` 即可在不使用外部代理的情况下监视流量。
 

@@ -1,4 +1,4 @@
-﻿<h1 align="center">ProxyLane</h1>
+<h1 align="center">ProxyLane</h1>
 
 <p align="center">
   <strong>Transparent per-process proxy for Windows · HTTPS / QUIC traffic decryption</strong><br>
@@ -16,6 +16,8 @@
 ProxyLane gives selected Windows applications their own proxy settings without changing the system-wide proxy or installing a kernel driver. It uses user-mode process injection and network API hooks, and can pass proxy settings to child processes.
 
 Core proxy features support **Windows XP through Windows 11**, with Win32 and x64 components.
+
+The regular `ProxyLane-version-Windows.zip` targets x86/x64 Windows and contains no ARM64 binaries. ARM64 uses a separate experimental `ProxyLane-version-Windows-ARM64.zip`; see its bundled README for supported paths and pending device validation.
 
 It also helps inspect application traffic: view HTTP/1.1, HTTP/2 and HTTP/3 requests and responses, DNS and Raw/Hex data, decrypt HTTPS and QUIC v1, and save recordings for offline viewing. Select `NOPROXY` to monitor traffic without an external proxy.
 

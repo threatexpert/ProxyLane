@@ -4,6 +4,35 @@
 开发分支：`codex/windows-arm64-assessment`。
 本分支正在分阶段适配，尚不能发布为支持 ARM64 的完整产品。下文旧阶段记录保留为历史，当前状态以最新章节为准。
 
+## 2026-11-12：独立打包
+
+常规包保持 `ProxyLane-版本-Windows.zip`，只包含 x86/x64 产品组件。
+ARM64 独立输出 `ProxyLane-版本-Windows-ARM64.zip`，只包含 5 个 ARM64 产品文件
+（GUI、Hook、安全传输、MITM/DoH DLL、CA 工具）、专用说明和许可证，不含测试探针及调试符号。
+ARM64 SSH 后端仍未构建，跨架构注入与实机验证状态不因打包而改变。
+
+```powershell
+# x86/x64：默认从 bin 读取
+.\scripts\package-release.ps1
+# ARM64：默认从 bin/ARM64/Release 读取
+.\scripts\package-arm64.ps1
+# 等价的公共入口
+.\scripts\package-release.ps1 -Architecture ARM64
+```
+
+两个入口都支持 `-BinaryDirectory` 和 `-OutputDirectory`。使用固定清单和 PE Machine/可选头检查，
+避免目录中出现其他架构、测试文件或旧产物时被一起打包。x86/x64 打包前自动运行
+`tests/HookStaticTlsTests.py`，需要 Python。
+
+已生成两种 1.3.10 ZIP 并核对文件清单、ZIP CRC 和包内每个 PE 的架构；
+负向检查确认将 x64 DLL 改名成 ARM64 DLL、或给 x86 Hook 引入静态 TLS 目录时均拒绝打包。
+验证清单在 `build/qa/package-architecture-verification.json`。
+
+Windows 11 ARM 可以运行 x86/x64 仿真应用，但当前 `ProcessArchitecture::Route` 只开放
+ARM64→ARM64；ARM 系统上其他八种父子架构组合均不支持。普通子进程创建流程会报告注入失败，
+并释放 ProxyLane 自己增加的挂起，子进程因此可能未被代理而继续运行。Windows x64 上已通过的
+四种 x86/x64 组合测试不能替代 ARM 仿真环境验证。
+
 ## 2026-11-12：同步 main 与构建回归
 
 同步主线 `6fabf2c`（包含 DoH、SSH、协议分析、UI 更新及 XP 静态 TLS 修复）。
