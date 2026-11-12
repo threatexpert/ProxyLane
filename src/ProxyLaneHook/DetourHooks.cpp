@@ -1,6 +1,11 @@
 #include "DetourHooks.h"
 #include <detours.h>
 
+PVOID ResolveDetourHookTarget(PVOID target)
+{
+    return target ? DetourCodeFromPointer(target, NULL) : NULL;
+}
+
 namespace
 {
     struct TransactionLock

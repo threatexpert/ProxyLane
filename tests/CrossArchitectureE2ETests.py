@@ -90,23 +90,25 @@ Transport=PLAIN
 """ % listener.getsockname()[1], encoding="utf-8")
         owner = None
         try:
-            for parent in architectures:
-                for child in architectures:
-                    grandchild = architectures[(architectures.index(child) + 1) % len(architectures)]
-                    report = directory / ("startup-%s-%s.txt" % (parent, child))
-                    before = len(observations)
-                    owner = subprocess.Popen([str(directory / gui), "--auto", "--profile", "CrossArchitecture",
-                        "--run", str(probe[parent]), "--", str(report), str(probe[child]), str(probe[grandchild])],
-                        cwd=directory, creationflags=subprocess.CREATE_NO_WINDOW)
-                    wait_for(report.exists, owner)
-                    for depth, architecture in enumerate((parent, child, grandchild)):
-                        contents = Path(str(report) + ".child" * depth).read_text(encoding="utf-8-sig")
-                        expected = str(directory / ("ProxyLaneHook%s.dll" % suffix[architecture]))
-                        assert contents.startswith("PASS ") and expected.casefold() in contents.casefold(), contents
-                    assert len(observations) - before == 3, observations[before:]
-                    print("PASS startup %s -> %s -> %s: 3 proxied connections" % (parent, child, grandchild), flush=True)
-                    stop_tree(owner)
-                    owner = None
+            for api in ("kernel32", "kernelbase"):
+                for parent in architectures:
+                    for child in architectures:
+                        grandchild = architectures[(architectures.index(child) + 1) % len(architectures)]
+                        report = directory / ("startup-%s-%s-%s.txt" % (api, parent, child))
+                        before = len(observations)
+                        owner = subprocess.Popen([str(directory / gui), "--auto", "--profile", "CrossArchitecture",
+                            "--run", str(probe[parent]), "--"] + (["--kernelbase"] if api == "kernelbase" else []) +
+                            [str(report), str(probe[child]), str(probe[grandchild])],
+                            cwd=directory, creationflags=subprocess.CREATE_NO_WINDOW)
+                        wait_for(report.exists, owner)
+                        for depth, architecture in enumerate((parent, child, grandchild)):
+                            contents = Path(str(report) + ".child" * depth).read_text(encoding="utf-8-sig")
+                            expected = str(directory / ("ProxyLaneHook%s.dll" % suffix[architecture]))
+                            assert contents.startswith("PASS ") and expected.casefold() in contents.casefold(), contents
+                        assert len(observations) - before == 3, observations[before:]
+                        print("PASS startup via %s: %s -> %s -> %s, 3 proxied connections" % (api, parent, child, grandchild), flush=True)
+                        stop_tree(owner)
+                        owner = None
 
             # Keep one PRC alive while exercising running-process attachment
             # from each caller ABI through the same RundllHost used by the GUI.
@@ -121,7 +123,10 @@ Transport=PLAIN
             for source in architectures:
                 for target in architectures:
                     report = directory / ("attach-%s-%s.txt" % (source, target))
-                    waiting = subprocess.Popen([str(probe[target]), "--wait", str(report)], cwd=directory,
+                    child = architectures[(architectures.index(target) + 1) % len(architectures)]
+                    before = len(observations)
+                    waiting = subprocess.Popen([str(probe[target]), "--wait", "--kernelbase", str(report),
+                        str(probe[child]), str(probe[source])], cwd=directory,
                         stdin=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW)
                     try:
                         subprocess.run([str(probe[source]), "--attach", str(waiting.pid), pipe,
@@ -129,16 +134,18 @@ Transport=PLAIN
                             cwd=directory, check=True, timeout=25)
                         waiting.communicate(b"G\n", timeout=25)
                         assert waiting.returncode == 0, report.read_text(encoding="utf-8-sig") if report.exists() else waiting.returncode
-                        contents = report.read_text(encoding="utf-8-sig")
-                        expected = str(directory / ("ProxyLaneHook%s.dll" % suffix[target]))
-                        assert contents.startswith("PASS ") and expected.casefold() in contents.casefold(), contents
-                        print("PASS attachment %s -> %s with proxy traffic" % (source, target), flush=True)
+                        for depth, architecture in enumerate((target, child, source)):
+                            contents = Path(str(report) + ".child" * depth).read_text(encoding="utf-8-sig")
+                            expected = str(directory / ("ProxyLaneHook%s.dll" % suffix[architecture]))
+                            assert contents.startswith("PASS ") and expected.casefold() in contents.casefold(), contents
+                        assert len(observations) - before == 3, observations[before:]
+                        print("PASS attachment %s -> %s, followed by child/grandchild via KernelBase" % (source, target), flush=True)
                     finally:
                         stop_tree(waiting)
-            expected_count = 4 * len(architectures) ** 2 + 1
+            expected_count = 9 * len(architectures) ** 2 + 1
             assert len(observations) == expected_count and all(isinstance(x, tuple) for x in observations), observations
-            print("PASS %d startup pairs, %d attachment pairs, %d proxied connections" %
-                  (len(architectures) ** 2, len(architectures) ** 2, expected_count), flush=True)
+            print("PASS %d startup cases, %d attachment/child cases, %d proxied connections" %
+                  (2 * len(architectures) ** 2, len(architectures) ** 2, expected_count), flush=True)
         finally:
             if owner is not None:
                 stop_tree(owner)

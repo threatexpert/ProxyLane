@@ -86,11 +86,17 @@ int wmain(int argc, wchar_t** argv)
         return Attach(wcstoul(argv[2], NULL, 10), argv[3], argv[4]);
     int first = 1;
     bool attachment = false;
+    bool kernelBase = false;
     if (argc > 1 && wcscmp(argv[1], L"--wait") == 0)
     {
         // Running-process attachment: do no network I/O before the runner releases us.
         if (getchar() != 'G') return 2;
         attachment = true;
+        ++first;
+    }
+    if (argc > first && wcscmp(argv[first], L"--kernelbase") == 0)
+    {
+        kernelBase = true;
         ++first;
     }
     if (argc <= first) return 3;
@@ -120,14 +126,30 @@ int wmain(int argc, wchar_t** argv)
     }
     if (!result && first < argc)
     {
-        std::wstring command = L"\"" + std::wstring(argv[first++]) + L"\" \"" + report + L".child\"";
+        std::wstring command = L"\"" + std::wstring(argv[first++]) + L"\" " +
+            (kernelBase ? L"--kernelbase " : L"") + L"\"" + report + L".child\"";
         for (; first < argc; ++first) command += L" \"" + std::wstring(argv[first]) + L"\"";
         STARTUPINFOW startup = { sizeof(startup) };
         PROCESS_INFORMATION process = {};
-        if (!CreateProcessW(NULL, &command[0], NULL, NULL, FALSE, CREATE_NO_WINDOW,
+        auto create = kernelBase ? reinterpret_cast<decltype(&::CreateProcessW)>(
+            GetProcAddress(GetModuleHandleW(L"kernelbase.dll"), "CreateProcessW")) : CreateProcessW;
+        if (!create) return 30;
+        if (kernelBase)
+        {
+            // Failed public creation must restore the per-thread nesting guard
+            // and preserve the Windows error before the next successful launch.
+            std::wstring missing = std::wstring(report) + L".missing.exe";
+            if (create(missing.c_str(), NULL, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process))
+            { TerminateProcess(process.hProcess, 31); return 31; }
+            if (GetLastError() != ERROR_FILE_NOT_FOUND) return 32;
+        }
+        if (!create(NULL, &command[0], NULL, NULL, FALSE,
+            CREATE_NO_WINDOW | (kernelBase ? CREATE_SUSPENDED : 0),
             NULL, NULL, &startup, &process)) result = 6;
         else
         {
+            if (kernelBase && ResumeThread(process.hThread) != 1)
+            { TerminateProcess(process.hProcess, 33); result = 33; }
             DWORD code = 0;
             if (WaitForSingleObject(process.hProcess, 30000) != WAIT_OBJECT_0)
                 TerminateProcess(process.hProcess, 7);

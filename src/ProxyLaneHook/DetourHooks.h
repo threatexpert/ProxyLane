@@ -14,6 +14,10 @@ struct DetourHookFailure
     size_t bindingIndex; // size_t(-1) when the failure has no individual target.
 };
 
+// Resolve import/patch thunks the same way DetourAttach does. Use this when
+// two export names may designate the same entry, before adding both bindings.
+PVOID ResolveDetourHookTarget(PVOID target);
+
 // Prepare all bindings in one transaction, aborting on preparation failure.
 // No host thread is suspended: entry patches/pointer updates are not atomic
 // to concurrent callers. Initialize callback state before installation and

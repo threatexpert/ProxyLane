@@ -24,6 +24,7 @@ Hook32/64 与 Intel 包来自同一版本构建，不能用旧版本 DLL 替换�
 - 同架构直接执行注入；跨架构使用系统 `rundll32.exe`。x86 使用 SysWOW64，ARM64/x64 使用 System32 并显式选择运行模式。启动后核对宿主架构，再允许它执行注入。
 - GUI 启动/附加、提权启动以及已代理父进程创建的子进程均接入上述路由。三种架构之间的九种父子组合已实现路由，实际 ARM 运行验收待完成。
 - ARM64EC/x64 兼容模式使用已有 x64 Hook 路径，未单独承诺任意混合模块或非导出函数 Hook 都兼容。
+- Hook32/64 同时接管公开的 Kernel32/KernelBase CreateProcessW 和既有内部入口，避免混合系统代码绕过内部导出入口；动态 TLS 保证一次创建只处理一次子进程。该修复仍待 ARM 实机复测。
 - 注入排队成功不等于 Hook 初始化成功；应检查 PL 中的初始化结果和实际代理流量。
 
 普通子进程流程在注入失败后会释放 PL 自己增加的挂起，子进程可能继续运行而未被代理；调用者原本要求的挂起不由 PL 取消。严格“启动并代理”以及提权启动失败时终止本次创建的目标。
@@ -39,7 +40,7 @@ DoH 的本地 UDP 回包保留实际中继来源地址，不提供原 DNS 服务
 python tests/CrossArchitectureE2ETests.py --bin <完整解压的ARM64包目录> --probes <三个CrossArchitectureProbe程序所在目录>
 ```
 
-测试覆盖 9 种父子组合及孙进程、9 种调用方/目标架构的运行中附加；验证实际加载的 Hook 和 SOCKS5 数据收发，预期 37 次成功代理连接。测试只管理自己创建的进程并使用临时便携配置，不改动现有 PL 配置。它不代替 UAC、不同用户、浏览器、UDP 和混合模块的专项验证。
+测试分别通过 Kernel32 和 KernelBase 的 CreateProcessW 覆盖 9 种父子组合及孙进程（共 18 个启动用例），以及 9 种运行中附加后再创建子进程/孙进程的组合；验证实际加载的 Hook 和 SOCKS5 数据收发，预期 82 次成功代理连接。同时检查创建失败后的错误码与再次创建，以及调用者自己的 CREATE_SUSPENDED 是否保留。测试只管理自己创建的进程并使用临时便携配置，不改动现有 PL 配置。它不代替 UAC、不同用户、浏览器、UDP 和混合模块的专项验证。
 
 ## English
 
@@ -48,6 +49,6 @@ Run `ProxyLaneARM64.exe` with all seven bundled binaries. The ARM64 host uses na
 Injection selects the target's active ABI. Cross-architecture routes use system rundll32 with explicit machine selection and verify the helper before execution. Startup, running-process attachment, elevated launch and child injection share this routing. ARM64EC/x64 mode uses Hook64; arbitrary mixed-module hooks are not separately certified.
 An injection scheduling result is not a Hook initialization acknowledgment. On ordinary child injection failure, PL releases only its own suspension, so that child may continue without interception. Strict and elevated launch terminate the newly created target on injection failure.
 The package contains no standalone elevation helper, CA executable, debug symbols or test probes. Intel releases remain free of ARM64 binaries. Hook32 retains its XP static-TLS check; XP runtime validation has not been performed here.
-For device tests, run the Python command above using native 64-bit Python with psutil and all three probes. Expected results: 9 startup pairs, 9 attachment pairs, 37 proxied connections. UAC, SSH and broader application compatibility need separate device checks.
+For device tests, run the Python command above using native 64-bit Python with psutil and all three probes. Expected results: 18 startup cases through Kernel32/KernelBase, 9 attachment-then-child cases, 82 proxied connections. KernelBase cases also check failed creation and caller-owned suspension. UAC, SSH and broader application compatibility need separate device checks.
 
 [Windows on Arm emulation reference](https://learn.microsoft.com/en-us/windows/arm/apps-on-arm-x86-emulation)

@@ -478,3 +478,10 @@ ARM64/x64/x86 已接入共享架构路由：Windows 11 ProcessMachineTypeInfo �
 ARM64 包增加同版 Hook32/64，保留原生后端；Intel 包仍不带 ARM64。Intel 引导代码补充转发导出解析、指令缓存刷新和失败分配释放。
 
 新增 `tests/CrossArchitectureE2ETests.py` 与三种架构的 CrossArchitectureProbe：ARM 主机验收九种启动/父子组合及孙进程、九种运行中附加组合，要求实际 SOCKS5 流量。Intel 主机运行其四种组合子集，不能代替 ARM 设备运行。完整范围与运行方法见 README_ARM64.md。
+
+
+### x64 PowerShell 附加后的子进程入口修复
+
+用户报告 Windows 11 ARM 上兼容模式 PowerShell 内的 curl 别名可代理，但启动 System32/curl.exe 时没有子进程接管；原生 PowerShell 正常。仅 Hook CreateProcessInternalW 的导出入口不能覆盖混合系统模块内部直接调用路径。本次在 Hook32/64 中增加 Kernel32/KernelBase 的公开 CreateProcessW 入口，仍调用各自原始 trampoline，保持原 API 行为；动态 TLS 抑制嵌套入口的重复注入/恢复。按 Detours 实际解析入口去重，避免导出别名重复 patch。XP 没有 KernelBase，保留既有入口组合；原生 ARM64 Hook 继续使用内部 ARM 入口。
+
+矩阵增加直接 KernelBase 创建、附加后再创建子进程/孙进程、调用者挂起保留、失败后再次创建。ARM 设备运行与该 PowerShell 个案的修复效果仍待用户复测，不能由 Intel 回归替代。
