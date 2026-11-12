@@ -41,7 +41,8 @@ if ($Architecture -eq 'ARM64') {
         @{ Source = (Join-Path $binaryDirectory 'ProxyLaneSecureTransportARM64.dll'); Entry = 'ProxyLaneSecureTransportARM64.dll'; Versioned = $false; Machine = 0xaa64 },
         @{ Source = (Join-Path $binaryDirectory 'ProxyLaneMitmARM64.dll'); Entry = 'ProxyLaneMitmARM64.dll'; Versioned = $false; Machine = 0xaa64 },
         @{ Source = (Join-Path $binaryDirectory 'ProxyLaneSshARM64.dll'); Entry = 'ProxyLaneSshARM64.dll'; Versioned = $false; Machine = 0xaa64 },
-        @{ Source = (Join-Path $repositoryRoot 'docs/README_ARM64.md'); Entry = 'README.md'; Versioned = $false }
+        @{ Source = (Join-Path $repositoryRoot 'README.md'); Entry = 'README.md'; Versioned = $false },
+        @{ Source = (Join-Path $repositoryRoot 'README_EN.md'); Entry = 'README_EN.md'; Versioned = $false }
     )
     $archivePlatform = 'Windows-ARM64'
 } else {
@@ -183,10 +184,13 @@ finally {
 }
 
 $archiveInfo = Get-Item -LiteralPath $archivePath
+$checksumPath = $archivePath + '.sha256'
+($hash.ToLowerInvariant() + '  ' + $archiveInfo.Name) | Set-Content -LiteralPath $checksumPath -Encoding ASCII
 [PSCustomObject]@{
     Version = $version
     Architecture = $Architecture
     Archive = $archiveInfo.FullName
     SizeBytes = $archiveInfo.Length
     SHA256 = $hash
+    ChecksumFile = $checksumPath
 }

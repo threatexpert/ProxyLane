@@ -17,7 +17,9 @@ ProxyLane gives selected Windows applications their own proxy settings without c
 
 Core proxy features support **Windows XP through Windows 11**, with Win32 and x64 components.
 
-The regular `ProxyLane-version-Windows.zip` targets x86/x64 Windows and contains no ARM64 binaries. ARM64 uses a separate experimental `ProxyLane-version-Windows-ARM64.zip`; see its bundled README for supported paths and pending device validation.
+Use `ProxyLane-version-Windows.zip` for x86/x64 Windows and `ProxyLane-version-Windows-ARM64.zip` for Windows 11 ARM64. Both packages include the same Chinese and English user guides.
+
+Run `ProxyLaneARM64.exe` from the ARM64 package with the ARM64 Microsoft Visual C++ runtime installed and all bundled DLLs present. It includes native backends and Hook32/64 for emulated Intel applications. Injection, child proxying, proxy chains, SSH, MITM/TLS and UAC have user-reported device test success; completion of the full automated cross-architecture matrix has not been confirmed. Browser-specific QUIC policy intervention is deferred on the ARM64 host, including its emulated browsers; ordinary UDP proxying is not excluded by that limitation. See the source repository's [ARM64 acceptance notes](docs/README_ARM64.md).
 
 It also helps inspect application traffic: view HTTP/1.1, HTTP/2 and HTTP/3 requests and responses, DNS and Raw/Hex data, decrypt HTTPS and QUIC v1, and save recordings for offline viewing. Select `NOPROXY` to monitor traffic without an external proxy.
 
@@ -27,7 +29,7 @@ It also helps inspect application traffic: view HTTP/1.1, HTTP/2 and HTTP/3 requ
 
 ## Quick Start
 
-1. Extract the entire release package, keeping the executables and DLLs together. On 64-bit Windows, use `ProxyLane64.exe`.
+1. Extract the package for your architecture, keeping executables and DLLs together. Run `ProxyLane64.exe` on x64 Windows, `ProxyLane.exe` on 32-bit Windows, or `ProxyLaneARM64.exe` on Windows 11 ARM64.
 2. Under **Proxy Settings**, select or create a profile and enter the proxy type, server address, port and credentials.
 3. Enable TCP proxying, UDP proxying and **Proxy child processes** as needed. Click **Test Current** to check the connection, then **Start Proxy**.
 4. Under **Apps and Processes**, choose an app to launch, or drop an executable or shortcut into ProxyLane. To attach to a running app, select its process and click **Proxy Selected Processes**.
@@ -185,19 +187,31 @@ Replace `YOUR_PSK` with your own key. TLS 1.3 is supported with TLS 1.2 server c
 
 ## Building
 
+For a new fork, start with the [complete build guide](docs/BUILDING_EN.md) ([简体中文](docs/BUILDING.md)). Install the VS 2019 components from `.vsconfig` and the documented Rust/Python tools. The standard entry works in ordinary PowerShell, discovers VS, checks prerequisites, builds incrementally and runs basic checks:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -CheckEnvironmentOnly
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Package
+# Build and package Intel and ARM64; omit the Clang path if discoverable
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Architecture All -Package -ClangBinDirectory 'C:\tools\llvm\bin'
+```
+
+Intel products go to `bin/`, ARM64 to `bin/ARM64/Release/`, ZIPs/checksums to `dist/`, and logs/build records to `build/release/`. Caches are preserved. Individual entry points follow.
+
 ### Requirements
 
 - Visual Studio 2019 with Desktop development with C++ and MFC components.
 - Visual C++ `v141_xp` toolset and Windows 7.1A SDK for the application and Hook DLLs.
 - `v142` toolset and Windows 10 SDK for the test project.
 - CMake 3.15+, `tar`, `v142` and Windows 10 SDK for the x64 SSH backend.
-- Rust MSVC toolchain, with `rustup` and `cargo` on PATH. The MITM build uses pinned version `1.88.0`.
+- Rust MSVC toolchain, with `rustup` and `cargo` on PATH. Secure transport and MITM both use pinned version `1.88.0`.
+- Python 3.8+, Git and `tar` for release checks and dependency preparation. ARM64 additionally needs v142 ARM64 ATL/MFC and Clang; see the complete guide.
 
 Prepare the Rust toolchain from the repository root:
 
 ```powershell
 rustup toolchain install 1.88.0-x86_64-pc-windows-msvc
-rustup target add x86_64-pc-windows-msvc
+rustup target add x86_64-pc-windows-msvc --toolchain 1.88.0-x86_64-pc-windows-msvc
 ```
 
 ### Build the Application
@@ -243,11 +257,13 @@ After building both Win32/x64 Release configurations and the two Rust DLLs, run 
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
+# After building ARM64
+powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1 -Architecture ARM64
 ```
 
-The script checks that the application and Hook DLL versions match, creates `dist/ProxyLane-version-Windows.zip`, and reports its SHA-256. Use `-OutputDirectory D:\releases` to choose another output directory.
+The script checks PE architectures, matching application/Hook versions and Hook static TLS. It creates `dist/ProxyLane-version-Windows.zip` or `dist/ProxyLane-version-Windows-ARM64.zip` with a companion `.sha256` file. Use `-OutputDirectory D:\releases` for another destination. Packaging alone does not compile; the standard entry above is recommended.
 
-The package includes both application architectures and Hook DLLs, the 64-bit secure-transport and MITM DLLs, both README files, and a `LICENSE` containing third-party notices. No active INI is shipped. Test and Direct defaults are created on first launch, so extracting an upgrade does not overwrite user settings. Test executables and command-line helpers are excluded.
+The Intel package contains both hosts and Hooks, plus x64 secure-transport, MITM and SSH DLLs. ARM64 packages contain the native host/backends and ARM64/x64/x86 Hooks. Both ship identical `README.md`, `README_EN.md` and combined `LICENSE` files. No active INI is shipped. Test and Direct defaults are created on first launch, so extracting an upgrade does not overwrite user settings. Test executables and command-line helpers are excluded.
 
 ## Project Structure
 

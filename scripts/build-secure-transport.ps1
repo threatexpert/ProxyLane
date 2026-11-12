@@ -21,9 +21,9 @@ $targets = @{
 New-Item -ItemType Directory -Path $binaryDirectory -Force | Out-Null
 foreach ($platform in ($Platforms | Select-Object -Unique)) {
     $target = $targets[$platform].Triple
-    & rustup target add $target
+    & rustup target add $target --toolchain '1.88.0-x86_64-pc-windows-msvc'
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & cargo build --manifest-path (Join-Path $project 'Cargo.toml') --release --locked --target $target
+    & cargo +1.88.0-x86_64-pc-windows-msvc build --manifest-path (Join-Path $project 'Cargo.toml') --release --locked --target $target
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Copy-Item -LiteralPath (Join-Path $project "target\$target\release\proxylane_secure_transport.dll") `
         -Destination (Join-Path $binaryDirectory $targets[$platform].File) -Force

@@ -17,7 +17,9 @@ ProxyLane 让指定 Windows 应用使用独立的代理配置，无需修改系�
 
 主体代理功能兼容 **Windows XP 至 Windows 11**，提供 Win32 与 x64 组件。
 
-常规 `ProxyLane-版本-Windows.zip` 仅面向 x86/x64 Windows，不包含 ARM64 组件。ARM64 使用独立的 `ProxyLane-版本-Windows-ARM64.zip` 开发测试包；其功能范围和未完成的实机验收见包内说明。
+常规 `ProxyLane-版本-Windows.zip` 面向 x86/x64 Windows；Windows 11 ARM64 使用 `ProxyLane-版本-Windows-ARM64.zip`。两种包提供相同的中英文使用说明。
+
+ARM64 包运行 `ProxyLaneARM64.exe`，需 ARM64 Microsoft Visual C++ 运行库；保留包内全部 DLL。它包含原生后端及用于 x86/x64 仿真应用的 Hook32/64。注入、子进程代理、代理链、SSH、MITM/TLS 和 UAC 已有用户真机测试通过反馈，完整自动化跨架构矩阵尚未全部确认。ARM64 宿主暂不支持浏览器专用 QUIC 策略干预（包括它代理的仿真浏览器），这不等于普通 UDP 代理不可用。详细验收记录见源码中的 [ARM64 说明](docs/README_ARM64.md)。
 
 除了代理，也可以用它分析应用流量：查看 HTTP/1.1、HTTP/2、HTTP/3 请求响应、DNS 和 Raw／Hex 数据，解密 HTTPS 与 QUIC v1，并录制后离线查看。选择 `NOPROXY` 即可在不使用外部代理的情况下监视流量。
 
@@ -27,7 +29,7 @@ ProxyLane 让指定 Windows 应用使用独立的代理配置，无需修改系�
 
 ## 快速开始
 
-1. 完整解压发行包，保留程序与 DLL 在同一目录。64 位 Windows 建议运行 `ProxyLane64.exe`。
+1. 完整解压对应架构的发行包，保留程序与 DLL 在同一目录。x64 Windows 运行 `ProxyLane64.exe`，32 位 Windows 运行 `ProxyLane.exe`，Windows 11 ARM64 运行 `ProxyLaneARM64.exe`。
 2. 在 **代理设置** 中选择或新建配置，填写代理类型、服务器地址、端口及认证信息。
 3. 按需启用 **代理 TCP**、**代理 UDP** 和 **代理子进程**，点击 **测试当前设置** 检查连接，再点击 **启动代理**。
 4. 到 **应用与进程** 页面选择应用启动，或直接拖入程序、快捷方式。也可以选中已运行的进程，点击 **代理所选进程**。
@@ -192,19 +194,31 @@ gonc -e ":s5s -u -http" -l -k -psk YOUR_PSK -tls 1083
 
 ## 编译
 
+新 fork 请先阅读 [完整构建指南](docs/BUILDING.md)（[English](docs/BUILDING_EN.md)），按根目录 `.vsconfig` 准备 VS 2019 组件及 Rust、Python 等工具。统一入口可从普通 PowerShell 执行，自动定位 VS、预检依赖、增量编译并运行基础检查：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -CheckEnvironmentOnly
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Package
+# 同时构建并打包 Intel 和 ARM64；Clang 在 PATH/默认安装位置时可省略路径
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Architecture All -Package -ClangBinDirectory 'C:\tools\llvm\bin'
+```
+
+Intel 输出到 `bin/`，ARM64 输出到 `bin/ARM64/Release/`，包和 `.sha256` 输出到 `dist/`；日志与构建记录位于 `build/release/`。默认保留缓存。以下为单独构建入口。
+
 ### 环境准备
 
 - Visual Studio 2019，安装 C++ 桌面开发及 MFC 组件。
 - Visual C++ `v141_xp` 工具集和 Windows 7.1A SDK，用于主程序与 Hook DLL。
 - `v142` 工具集和 Windows 10 SDK，用于测试项目。
 - CMake 3.15+、`tar`、`v142` 和 Windows 10 SDK，用于 x64 SSH 后端。
-- Rust MSVC 工具链，确保 `rustup` 和 `cargo` 在 PATH 中；MITM 模块使用固定版本 `1.88.0`。
+- Rust MSVC 工具链，确保 `rustup` 和 `cargo` 在 PATH 中；安全传输和 MITM 模块均使用固定版本 `1.88.0`。
+- Python 3.8+、Git、`tar`，用于发布检查及依赖准备。ARM64 另需 v142 ARM64 ATL/MFC、Clang，详见完整指南。
 
 在项目根目录准备 Rust 工具链：
 
 ```powershell
 rustup toolchain install 1.88.0-x86_64-pc-windows-msvc
-rustup target add x86_64-pc-windows-msvc
+rustup target add x86_64-pc-windows-msvc --toolchain 1.88.0-x86_64-pc-windows-msvc
 ```
 
 ### 构建主程序
@@ -250,11 +264,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check-locales.ps1
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
+# 已完成 ARM64 构建时
+powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1 -Architecture ARM64
 ```
 
-脚本检查主程序与 Hook DLL 的版本是否一致，生成 `dist/ProxyLane-版本-Windows.zip`，并输出 SHA-256。可用 `-OutputDirectory D:\releases` 指定输出目录。
+脚本检查实际 PE 架构、主程序与 Hook DLL 版本及 Hook 静态 TLS，生成 `dist/ProxyLane-版本-Windows.zip` 或 `dist/ProxyLane-版本-Windows-ARM64.zip`，并写入配套 `.sha256` 文件。可用 `-OutputDirectory D:\releases` 指定输出目录。单独打包不重新编译；推荐使用上面的统一入口。
 
-发行包包含双架构主程序和 Hook DLL、64 位安全传输与 MITM DLL、中英文 README，以及汇总第三方声明的 `LICENSE`。发行包不包含活动配置文件，首次运行自动生成 Test 和 Direct 默认配置，升级解压不会覆盖用户的 INI；测试程序和命令行辅助工具不进入发行包。
+Intel 包包含双架构主程序和 Hook DLL、x64 安全传输、MITM、SSH DLL。ARM64 包包含原生主程序和后端，以及 ARM64/x64/x86 三种 Hook。两种包使用完全相同的 `README.md`、`README_EN.md` 和汇总第三方声明的 `LICENSE`。不包含活动配置文件，首次运行自动生成 Test 和 Direct 默认配置，升级解压不会覆盖用户的 INI；测试程序和命令行辅助工具不进入发行包。
 
 ## 项目结构
 
