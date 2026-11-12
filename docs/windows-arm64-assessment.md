@@ -513,3 +513,5 @@ LoadLibraryExW 使用独立的 HOOKMODULE_LIBRARYLOADER：只有当前进程已�
 用户随后确认子进程代理、SSH、MITM/TLS、UAC 均已测试可用，更新上述验收状态为“用户 ARM 真机测试通过”。跨架构子进程场景包括：原生 ARM64 cmd 分别启动 amd64 gonc、i386 gonc，以及用户描述为 `syswow32` 目录内的 cmd 分别启动 amd64 gonc、i386 gonc，四个场景均可代理子进程。
 
 `syswow32` 保留用户原话，尚未核实是否指 SysWOW64，不据此认定父进程实际架构。记录来源是用户手工实测，不代表完整自动化矩阵已经运行通过。浏览器专用 QUIC 策略干预仍按前述决定暂缓。最新汇总见 README_ARM64.md。
+
+用户进一步确认代理链也已测试正常，代理链状态补记为“用户 Windows 11 ARM 真机测试通过”。未提供具体链路配置，本记录不扩展为所有协议排列组合的覆盖声明。

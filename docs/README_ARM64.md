@@ -1,6 +1,6 @@
 # ProxyLane Windows ARM64 开发测试包
 
-本包面向 Windows 11 ARM64。注入与子进程代理、SSH、MITM/TLS、UAC 已获用户 ARM 真机测试通过反馈；完整自动化跨架构矩阵尚未确认全部跑完。
+本包面向 Windows 11 ARM64。注入与子进程代理、代理链、SSH、MITM/TLS、UAC 已获用户 ARM 真机测试通过反馈；完整自动化跨架构矩阵尚未确认全部跑完。
 
 ## 实现状态与验证状态
 
@@ -10,13 +10,14 @@
 | --- | --- | --- |
 | ARM64/x64/x86 目标注入、附加及跨架构子进程代理 | 已实现，三种 Hook 已构建并打包 | 用户所测场景通过，具体组合见下；完整自动化矩阵尚未确认全部跑完 |
 | SSH 后端 | 已实现，原生 ARM64 DLL 已构建并打包 | 用户 ARM 真机测试通过 |
+| 代理链 | 已实现 | 用户 ARM 真机测试正常 |
 | MITM/TLS 后端 | 已实现，原生 ARM64 DLL 已构建并打包 | 用户 ARM 真机测试通过 |
 | UAC / 管理员启动 | 已实现，使用系统 rundll32，无独立提权 helper | 用户 ARM 真机测试通过 |
 | 浏览器专用 QUIC 策略干预 | ARM64 适配未实现；按用户决定暂缓 | 不纳入本轮验收范围 |
 
 完整跨架构“矩阵”是一组测试用例，不是一项尚未实现的功能。编译通过及 Intel 回归通过不能替代 ARM 真机验收，也不代表任意 ARM64EC 混合模块都兼容。
 
-2026-11-12 用户补充 ARM 真机反馈：子进程代理、SSH、MITM/TLS、UAC 均测试可用。以下父子进程场景均可代理子进程：
+2026-11-12 用户补充 ARM 真机反馈：子进程代理、SSH、MITM/TLS、UAC 均测试可用，随后确认代理链也已测试正常。以下父子进程场景均可代理子进程：
 
 | 父进程 | 子进程 | 结果 |
 | --- | --- | --- |
@@ -55,7 +56,7 @@ Hook32/64 与 Intel 包来自同一版本构建，不能用旧版本 DLL 替换�
 - 注入排队成功不等于 Hook 初始化成功；应检查 PL 中的初始化结果和实际代理流量。
 
 普通子进程流程在注入失败后会释放 PL 自己增加的挂起，子进程可能继续运行而未被代理；调用者原本要求的挂起不由 PL 取消。严格“启动并代理”以及提权启动失败时终止本次创建的目标。
-SSH、MITM/TLS、UAC 及上述跨架构子进程场景均已有实现，并获用户 ARM 真机测试通过反馈。浏览器专用 QUIC 策略干预的 ARM64 适配未实现，已明确暂缓。
+代理链、SSH、MITM/TLS、UAC 及上述跨架构子进程场景均已有实现，并获用户 ARM 真机测试通过反馈。浏览器专用 QUIC 策略干预的 ARM64 适配未实现，已明确暂缓。
 DoH 的本地 UDP 回包保留实际中继来源地址，不提供原 DNS 服务器来源地址透明性。
 
 ## ARM 真机矩阵验收
@@ -71,7 +72,7 @@ python tests/CrossArchitectureE2ETests.py --bin <完整解压的ARM64包目录> 
 
 ## English
 
-Experimental Windows 11 ARM64 package. Injection/child handling, SSH, MITM/TLS and elevated launch are implemented and built, with user-reported ARM device test success. Completion of the full automated cross-architecture matrix has not been confirmed.
+Experimental Windows 11 ARM64 package. Injection/child handling, proxy chains, SSH, MITM/TLS and elevated launch are implemented and built, with user-reported ARM device test success. Completion of the full automated cross-architecture matrix has not been confirmed.
 On 2026-11-12 the user reported successful proxying of both amd64 and i386 gonc children launched from a native ARM64 cmd, and from another cmd described as residing in `syswow32`. The latter directory name is recorded verbatim; whether it means SysWOW64 and that parent's active ABI have not been verified. Native ARM64X shell injection and the x64 PowerShell child-process fix also have user-reported device success.
 As decided on 2026-11-12, ARM64 adaptation of the browser-specific QUIC policy intervention is not implemented and is deferred, outside the current acceptance scope. The ARM64 host does not enable this policy, including for emulated x64 browsers. This limitation concerns browser-internal policy hooks, not the implementation of ordinary UDP proxying.
 Run `ProxyLaneARM64.exe` with all seven bundled binaries. The ARM64 host uses native transport/MITM/SSH backends. Matching-version Hook32 and Hook64 support the x86/x64 target paths; no Intel GUI or backend binaries are needed for these targets.
