@@ -13,13 +13,11 @@
 
 ---
 
-ProxyLane gives selected Windows applications their own proxy settings without changing the system-wide proxy or installing a kernel driver. It uses user-mode process injection and network API hooks, and can pass proxy settings to child processes.
+ProxyLane gives selected Windows applications their own proxy settings, supporting single proxies and multi-hop proxy chains without changing the system-wide proxy or installing a kernel driver. It uses user-mode process injection and network API hooks, and can pass proxy settings to child processes.
 
-Core proxy features support **Windows XP through Windows 11**, with Win32 and x64 components.
+ProxyLane supports **x86/x64 systems running Windows XP through Windows 11**, as well as **Windows 11 ARM64**.
 
-Use `ProxyLane-version-Windows.zip` for x86/x64 Windows and `ProxyLane-version-Windows-ARM64.zip` for Windows 11 ARM64. Both packages include the same Chinese and English user guides.
-
-Run `ProxyLaneARM64.exe` from the ARM64 package with the ARM64 Microsoft Visual C++ runtime installed and all bundled DLLs present. It includes native backends and Hook32/64 for emulated Intel applications. Injection, child proxying, proxy chains, SSH, MITM/TLS and UAC have user-reported device test success; completion of the full automated cross-architecture matrix has not been confirmed. Browser-specific QUIC policy intervention is deferred on the ARM64 host, including its emulated browsers; ordinary UDP proxying is not excluded by that limitation. See the source repository's [ARM64 acceptance notes](docs/README_ARM64.md).
+If your computer runs Windows 11 ARM64, select the `ProxyLane-version-Windows-ARM64.zip` release package when downloading. The ARM64 host does not yet support browser-specific QUIC policy intervention. See the [ARM64 notes](https://github.com/threatexpert/ProxyLane/blob/main/docs/README_ARM64.md) for details.
 
 It also helps inspect application traffic: view HTTP/1.1, HTTP/2 and HTTP/3 requests and responses, DNS and Raw/Hex data, decrypt HTTPS and QUIC v1, and save recordings for offline viewing. Select `NOPROXY` to monitor traffic without an external proxy.
 

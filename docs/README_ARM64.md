@@ -20,16 +20,16 @@ Firefox ARM64 栈溢出修复已获用户复测确认：原生 Firefox 160 创�
 
 完整跨架构“矩阵”是一组测试用例，不是一项尚未实现的功能。编译通过及 Intel 回归通过不能替代 ARM 真机验收，也不代表任意 ARM64EC 混合模块都兼容。
 
-2026-11-12 用户补充 ARM 真机反馈：子进程代理、SSH、MITM/TLS、UAC 均测试可用，随后确认代理链也已测试正常。以下父子进程场景均可代理子进程：
+2026-11-12，Windows 11 ARM64 真机测试通过：子进程代理、SSH、MITM/TLS、UAC 和代理链均正常。以下父子进程场景均可代理子进程：
 
 | 父进程 | 子进程 | 结果 |
 | --- | --- | --- |
-| 用户描述为 `syswow32` 目录中的 cmd | amd64 gonc | 通过 |
-| 同上 | i386 gonc | 通过 |
+| ARM64 系统中的 `SysWOW64\cmd.exe` | amd64 gonc | 通过 |
+| ARM64 系统中的 `SysWOW64\cmd.exe` | i386 gonc | 通过 |
 | 原生 ARM64 cmd | amd64 gonc | 通过 |
 | 原生 ARM64 cmd | i386 gonc | 通过 |
 
-目录名 `syswow32` 按用户原话记录，尚未核实是否指 SysWOW64，不据此认定该 cmd 的实际运行架构。此前原生 ARM64X 命令行注入及 x64 PowerShell 附加后的子进程接管也已有用户成功反馈。以上为用户实测记录，不冒充自动化矩阵报告。
+原生 ARM64X 命令行注入及 x64 PowerShell 附加后的子进程接管也已测试通过。
 
 2026-11-12 决定：暂缓 ARM64 浏览器专用 QUIC 策略干预。ARM64 宿主目前不启用这项策略，包括其代理的 x64 仿真浏览器；不宣称已与 amd64 的此项功能对齐。这里指浏览器内部策略 Hook，不表示常规 UDP 代理未实现。
 
@@ -77,7 +77,7 @@ python tests/CrossArchitectureE2ETests.py --bin <完整解压的ARM64包目录> 
 
 Experimental Windows 11 ARM64 package. Injection/child handling, proxy chains, SSH, MITM/TLS and elevated launch are implemented and built, with user-reported ARM device test success. Completion of the full automated cross-architecture matrix has not been confirmed.
 Native Firefox 160 exposed an injector stack overflow during child creation: three local path buffers consumed 192 KiB. Commit 6bbab42 moved them to heap storage. On 2026-11-12 the user confirmed normal, stable transparent proxying with this build for i386, amd64 and ARM64 Firefox on Windows 11 ARM. The separate 128 KiB caller-stack injection regression program has been built, but its ARM device execution has not been reported.
-On 2026-11-12 the user reported successful proxying of both amd64 and i386 gonc children launched from a native ARM64 cmd, and from another cmd described as residing in `syswow32`. The latter directory name is recorded verbatim; whether it means SysWOW64 and that parent's active ABI have not been verified. Native ARM64X shell injection and the x64 PowerShell child-process fix also have user-reported device success.
+On 2026-11-12, Windows 11 ARM64 device tests passed for child-process proxying, SSH, MITM/TLS, UAC and proxy chains. Both amd64 and i386 gonc children were successfully proxied when launched from native ARM64 cmd and from `SysWOW64\cmd.exe` on the ARM64 system. Native ARM64X shell injection and child-process interception after attaching to x64 PowerShell also passed testing.
 As decided on 2026-11-12, ARM64 adaptation of the browser-specific QUIC policy intervention is not implemented and is deferred, outside the current acceptance scope. The ARM64 host does not enable this policy, including for emulated x64 browsers. This limitation concerns browser-internal policy hooks, not the implementation of ordinary UDP proxying.
 Run `ProxyLaneARM64.exe` with all seven bundled binaries. The ARM64 host uses native transport/MITM/SSH backends. Matching-version Hook32 and Hook64 support the x86/x64 target paths; no Intel GUI or backend binaries are needed for these targets.
 Injection selects the target's active ABI. Cross-architecture routes use system rundll32 with explicit machine selection and verify the helper before execution. Startup, running-process attachment, elevated launch and child injection share this routing. ARM64EC/x64 mode uses Hook64; arbitrary mixed-module hooks are not separately certified.

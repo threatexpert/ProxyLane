@@ -13,13 +13,11 @@
 
 ---
 
-ProxyLane 让指定 Windows 应用使用独立的代理配置，无需修改系统全局代理或安装内核驱动。它通过用户态进程注入与网络 API Hook 实现代理，并可让子进程继承设置。
+ProxyLane 让指定 Windows 应用使用独立的代理配置，支持单级代理和多级代理链，无需修改系统全局代理或安装内核驱动。它通过用户态进程注入与网络 API Hook 实现代理，并可让子进程继承设置。
 
-主体代理功能兼容 **Windows XP 至 Windows 11**，提供 Win32 与 x64 组件。
+ProxyLane 支持 **Windows XP 至 Windows 11 的 x86/x64 系统**，以及 **Windows 11 ARM64**。
 
-常规 `ProxyLane-版本-Windows.zip` 面向 x86/x64 Windows；Windows 11 ARM64 使用 `ProxyLane-版本-Windows-ARM64.zip`。两种包提供相同的中英文使用说明。
-
-ARM64 包运行 `ProxyLaneARM64.exe`，需 ARM64 Microsoft Visual C++ 运行库；保留包内全部 DLL。它包含原生后端及用于 x86/x64 仿真应用的 Hook32/64。注入、子进程代理、代理链、SSH、MITM/TLS 和 UAC 已有用户真机测试通过反馈，完整自动化跨架构矩阵尚未全部确认。ARM64 宿主暂不支持浏览器专用 QUIC 策略干预（包括它代理的仿真浏览器），这不等于普通 UDP 代理不可用。详细验收记录见源码中的 [ARM64 说明](docs/README_ARM64.md)。
+如果你的电脑运行 Windows 11 ARM64，下载时请选择 `ProxyLane-版本-Windows-ARM64.zip` 发布包。ARM64 宿主暂不支持浏览器专用 QUIC 策略干预，详细见 [ARM64 说明](https://github.com/threatexpert/ProxyLane/blob/main/docs/README_ARM64.md)。
 
 除了代理，也可以用它分析应用流量：查看 HTTP/1.1、HTTP/2、HTTP/3 请求响应、DNS 和 Raw／Hex 数据，解密 HTTPS 与 QUIC v1，并录制后离线查看。选择 `NOPROXY` 即可在不使用外部代理的情况下监视流量。
 
