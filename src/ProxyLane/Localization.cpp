@@ -221,6 +221,7 @@ void Localization::ApplyDialog(CWnd* dialog, UINT dialogId)
 		{ IDC_STATIC_GROUP_OTHER, _T("page1.network_options") }, { IDC_CHECK_HOOKTCP, _T("page1.proxy_tcp") },
 		{ IDC_CHECK_HOOK_UDP, _T("page1.proxy_udp") }, { IDC_CHECK_HOOKCHILDPROCESS, _T("page1.proxy_children") },
 		{ IDC_CHECK_BLOCKUDP, _T("page1.block_udp") }, { IDC_CHECK_BLOCK_IPV6, _T("page1.block_ipv6") },
+		{ IDC_CHECK_BLOCK_PING, _T("page1.block_ping") },
 		{ IDC_STATIC_DNS_LABEL, _T("page1.dns") },
 		{ IDC_RADIO_DNSLOCAL, _T("page1.dns_local") }, { IDC_RADIO_DNSREMOTE, _T("page1.dns_remote") },
         { IDC_RADIO_DNSDOH, L"page1.dns_doh" },

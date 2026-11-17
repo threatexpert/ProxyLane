@@ -66,6 +66,16 @@ int ProfileShareCodecTestsMain()
     assert(ProfileShare::Base64Url("f") == "Zg");
     assert(ProfileShare::Base64Url("fo") == "Zm8");
     assert(ProfileShare::Base64Url("foo") == "Zm9v");
+    {
+        assert(!ProfileShare::Decode(code).value("block_ping", false));
+        Json ping = original; ping["block_ping"] = true;
+        assert(ProfileShare::Decode(ProfileShare::Encode(ping)) == ping);
+        assert(ProfileShare::RequiredFeatures(ping).count("icmp.block-ping.v1"));
+        RejectValue(ping); // Never silently enable a new policy in a legacy code.
+        RejectWith(V3({{"required_features", Json::array()}, {"profile", ping}}), "share.feature_mismatch");
+        ping["block_ping"] = "true";
+        Reject(V3({{"required_features", Json::array({"icmp.block-ping.v1"})}, {"profile", ping}}));
+    }
     for (const char* type : {"SOCKS5", "HTTP", "NOPROXY"})
     {
         Json value = original;

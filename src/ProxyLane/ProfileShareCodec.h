@@ -46,6 +46,7 @@ inline const std::set<std::string>& KnownFields()
     static const std::set<std::string> fields = [] {
         auto result = LegacyFields();
         result.insert("doh_url"); result.insert("doh_bootstrap");
+        result.insert("block_ping");
         return result;
     }();
     return fields;
@@ -80,7 +81,7 @@ inline void CheckFields(const Json& value, const std::set<std::string>& allowed)
 
 inline const std::set<std::string>& SupportedFeatures()
 {
-    static const std::set<std::string> features = {"dns.doh.v1", "dns.doh.v2", "ssh.private-key.v1"};
+    static const std::set<std::string> features = {"dns.doh.v1", "dns.doh.v2", "ssh.private-key.v1", "icmp.block-ping.v1"};
     return features;
 }
 
@@ -92,6 +93,7 @@ inline std::set<std::string> RequiredFeatures(const Json& value)
     if (value["dns_mode"] == 2 || value.contains("doh_url") || value.contains("doh_bootstrap"))
         result.insert("dns.doh.v2");
     if (UsesPrivateKey(value)) result.insert("ssh.private-key.v1");
+    if (value.contains("block_ping")) result.insert("icmp.block-ping.v1");
     return result;
 }
 
@@ -165,6 +167,8 @@ inline void Validate(const Json& value)
         throw Error("profile.invalid_endpoint");
     const char* booleans[] = {"hook_tcp", "hook_udp", "block_udp", "block_ipv6",
         "hook_children", "redirect_private_dns"};
+    if (value.contains("block_ping") && !value.at("block_ping").is_boolean())
+        throw Error("share.invalid_fields");
     for (const char* key : booleans)
         if (!value.contains(key) || !value.at(key).is_boolean()) throw Error("share.invalid_fields");
     if (!value.contains("dns_mode") || !value["dns_mode"].is_number_integer() || value["dns_mode"] < 0 || value["dns_mode"] > 2)

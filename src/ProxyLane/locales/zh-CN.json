@@ -178,6 +178,8 @@
   "page1.proxy_children": "代理子进程",
   "page1.block_udp": "禁止 UDP（优先于代理 UDP）",
   "page1.block_ipv6": "阻止 IPv6",
+  "page1.block_ping": "屏蔽 Ping",
+  "page1.block_ping_hint": "阻止受代理进程通过 Windows ICMP 回显接口向外发送 Ping 请求，改由本机回环地址响应。成功不代表原目标可达。",
   "page1.dns": "DNS 解析：",
   "page1.dns_local": "本地解析",
   "page1.dns_remote": "由上游代理解析",

@@ -136,6 +136,7 @@ void CPage1::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_CHECK_HOOK_UDP, m_btnHookUDP);
 	DDX_Control(pDX, IDC_CHECK_BLOCKUDP, m_btnBlockUDP);
 	DDX_Control(pDX, IDC_CHECK_BLOCK_IPV6, m_btnBlockIPv6);
+	DDX_Control(pDX, IDC_CHECK_BLOCK_PING, m_btnBlockPing);
 	DDX_Control(pDX, IDC_RADIO_DNSLOCAL, m_btnDNSLocal);
 	DDX_Control(pDX, IDC_RADIO_DNSREMOTE, m_btnDNSRemote);
     DDX_Control(pDX, IDC_RADIO_DNSDOH, m_btnDNSDoh);
@@ -199,6 +200,7 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_BN_CLICKED(IDC_CHECK_HOOK_UDP, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_CHECK_BLOCKUDP, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_CHECK_BLOCK_IPV6, &CPage1::OnProfileFieldChanged)
+	ON_BN_CLICKED(IDC_CHECK_BLOCK_PING, &CPage1::OnProfileFieldChanged)
 	ON_BN_CLICKED(IDC_RADIO_DNSLOCAL, &CPage1::OnDnsSettingsChanged)
 	ON_BN_CLICKED(IDC_RADIO_DNSREMOTE, &CPage1::OnDnsSettingsChanged)
     ON_BN_CLICKED(IDC_RADIO_DNSDOH, &CPage1::OnDnsSettingsChanged)
@@ -223,9 +225,21 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_WM_TIMER()
 END_MESSAGE_MAP()
 
+BOOL CPage1::PreTranslateMessage(MSG* message)
+{
+	if (m_blockPingTip.GetSafeHwnd()) m_blockPingTip.RelayEvent(message);
+	return CModernDialog::PreTranslateMessage(message);
+}
+
 BOOL CPage1::OnInitDialog()
 {
 	CModernDialog::OnInitDialog();
+	if (m_blockPingTip.Create(this, TTS_ALWAYSTIP | TTS_NOPREFIX))
+	{
+		m_blockPingTipText = Localization::Get(L"page1.block_ping_hint");
+		m_blockPingTip.SetMaxTipWidth(UiTheme::ScaleForWindow(m_hWnd, 420));
+		m_blockPingTip.AddTool(&m_btnBlockPing, m_blockPingTipText);
+	}
 
     m_btnDohPreset.SetVisualStyle(CModernButton::STYLE_GHOST);
     m_btnDohPreset.SetBackdropColor(RGB(255, 255, 255));
@@ -637,7 +651,7 @@ void CPage1::LayoutSettingsPage()
             row += rowH;
         };
         flow({IDC_CHECK_HOOKTCP, IDC_CHECK_HOOK_UDP, IDC_CHECK_HOOKCHILDPROCESS}, 44, innerX);
-        flow({IDC_CHECK_BLOCKUDP, IDC_CHECK_BLOCK_IPV6}, 44, innerX);
+        flow({IDC_CHECK_BLOCKUDP, IDC_CHECK_BLOCK_IPV6, IDC_CHECK_BLOCK_PING}, 44, innerX);
         const int dnsLabelW = textWidth(IDC_STATIC_DNS_LABEL) + S(12);
         place(IDC_STATIC_DNS_LABEL, innerX, row + S(4), dnsLabelW, labelH);
         const int dnsOptionsW = textWidth(IDC_RADIO_DNSLOCAL) + textWidth(IDC_RADIO_DNSREMOTE)
@@ -896,6 +910,7 @@ BOOL CPage1::GetProxySettingsFromUi(LPProxySettingsInfo lpPSI)
 	psi.bHookUDP = m_btnHookUDP.GetCheck() == BST_CHECKED;
 	psi.bBlockUDP = m_btnBlockUDP.GetCheck() == BST_CHECKED;
 	psi.bBlockIPv6 = m_btnBlockIPv6.GetCheck() == BST_CHECKED;
+	psi.bBlockPing = m_btnBlockPing.GetCheck() == BST_CHECKED;
 	psi.bHookCreateProcess = m_btnHookChildProcess.GetCheck();
 	psi.nDNSOption = m_btnDNSDoh.GetCheck() ? PSI_DNSOPT_DOH : m_btnDNSLocal.GetCheck() ? PSI_DNSOPT_LOCAL : PSI_DNSOPT_REMOTE;
 	psi.bHookLanIP = m_bHookLanIP;
@@ -2422,6 +2437,7 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_btnHookUDP.SetCheck(BST_CHECKED);
 		m_btnBlockUDP.SetCheck(BST_UNCHECKED);
 		m_btnBlockIPv6.SetCheck(BST_UNCHECKED);
+		m_btnBlockPing.SetCheck(BST_UNCHECKED);
 		m_btnDNSLocal.SetCheck(BST_UNCHECKED);
 		m_btnDNSRemote.SetCheck(BST_CHECKED);
         m_btnDNSDoh.SetCheck(BST_UNCHECKED);
@@ -2468,6 +2484,7 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		m_btnHookUDP.SetCheck(item->bHookUDP ? BST_CHECKED : BST_UNCHECKED);
 		m_btnBlockUDP.SetCheck(item->bBlockUDP ? BST_CHECKED : BST_UNCHECKED);
 		m_btnBlockIPv6.SetCheck(item->bBlockIPv6 ? BST_CHECKED : BST_UNCHECKED);
+		m_btnBlockPing.SetCheck(item->bBlockPing ? BST_CHECKED : BST_UNCHECKED);
 		m_btnHookChildProcess.SetCheck(item->bHookChildProcess ? BST_CHECKED : BST_UNCHECKED);
 		m_btnDNSLocal.SetCheck(item->dnsOpt==PSI_DNSOPT_LOCAL ? BST_CHECKED : BST_UNCHECKED);
 		m_btnDNSRemote.SetCheck(item->dnsOpt == PSI_DNSOPT_REMOTE);
@@ -2530,6 +2547,7 @@ void CPage1::UIGetCfg( CfgProxyItem *item )
 	item->bHookUDP = m_btnHookUDP.GetCheck() == BST_CHECKED;
 	item->bBlockUDP = m_btnBlockUDP.GetCheck() == BST_CHECKED;
 	item->bBlockIPv6 = m_btnBlockIPv6.GetCheck() == BST_CHECKED;
+	item->bBlockPing = m_btnBlockPing.GetCheck() == BST_CHECKED;
 	item->bHookChildProcess = m_btnHookChildProcess.GetCheck() == BST_CHECKED;
 	item->dnsOpt = m_btnDNSDoh.GetCheck() ? PSI_DNSOPT_DOH : m_btnDNSLocal.GetCheck() ? PSI_DNSOPT_LOCAL : PSI_DNSOPT_REMOTE;
     m_editDohUrl.GetWindowText(item->strDohUrl); item->strDohUrl.Trim();
@@ -2603,7 +2621,7 @@ void CPage1::ShowTab(int nTab)
 {
 	static const int idsBasic[] = {
 		IDC_CHECK_HOOKTCP, IDC_CHECK_HOOK_UDP, IDC_CHECK_HOOKCHILDPROCESS, IDC_CHECK_BLOCKUDP,
-		IDC_CHECK_BLOCK_IPV6,
+		IDC_CHECK_BLOCK_IPV6, IDC_CHECK_BLOCK_PING,
 		IDC_RADIO_DNSLOCAL, IDC_RADIO_DNSREMOTE, IDC_RADIO_DNSDOH, IDC_STATIC_GROUP_OTHER, IDC_STATIC_DNS_LABEL,
         IDC_STATIC_DOH_URL, IDC_EDIT_DOH_URL, IDC_EDIT_DOH_BOOTSTRAP,
 		IDC_CHECK_REDIRECT_PRIVATE_DNS, IDC_EDIT_REDIRECT_DNS };

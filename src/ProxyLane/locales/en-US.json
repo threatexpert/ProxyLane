@@ -178,6 +178,8 @@
   "page1.proxy_children": "Proxy child processes",
   "page1.block_udp": "Block UDP (takes priority over UDP proxying)",
   "page1.block_ipv6": "Block IPv6",
+  "page1.block_ping": "Block Ping",
+  "page1.block_ping_hint": "Keep Ping requests made through Windows ICMP Echo APIs in proxied processes on loopback. A successful local reply does not mean the original target is reachable.",
   "page1.dns": "DNS resolution:",
   "page1.dns_local": "Local",
   "page1.dns_remote": "Resolve via upstream proxy",

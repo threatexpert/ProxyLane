@@ -231,6 +231,10 @@ public:
 	CToggleButton m_btnHookUDP;
 	CToggleButton m_btnBlockUDP;
 	CToggleButton m_btnBlockIPv6;
+	CToggleButton m_btnBlockPing;
+	CToolTipCtrl m_blockPingTip;
+	CString m_blockPingTipText;
+	BOOL PreTranslateMessage(MSG* message) override;
 	CToggleButton m_btnDNSLocal;
 	CToggleButton m_btnDNSRemote;
     CToggleButton m_btnDNSDoh;

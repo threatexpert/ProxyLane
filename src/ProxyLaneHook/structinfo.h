@@ -280,6 +280,7 @@ typedef struct  _tagProxySettingsInfo
 	BOOL bBlockIPv6;           // 禁止非 loopback IPv6；::1 始终允许
 	BOOL bRedirectPrivateDNS;  // 服务器解析时将内网 :53 替换为公共 DNS
 	_SockAddr redirectDNSAddr;
+	BOOL bBlockPing;           // ICMP Echo uses local loopback replies; default off.
 }ProxySettingsInfo, *LPProxySettingsInfo;
 
 #define PSI_DNSOPT_LOCAL 0

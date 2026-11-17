@@ -127,6 +127,8 @@ try {
     }
     & python tests/HookStaticTlsTests.py
     if ($LASTEXITCODE) { throw 'Hook static TLS verification failed.' }
+    & python tests/PingHookCompatibilityTests.py
+    if ($LASTEXITCODE) { throw 'Hook ICMP import verification failed.' }
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check-locales.ps1
     if ($LASTEXITCODE) { throw 'Locale checks failed.' }
     $packages = @()

@@ -9,6 +9,7 @@
 #include "LibraryLoaderHook.h"
 #include "ProcessArchitecture.h"
 #include <psapi.h>
+#include <ipexport.h>
 #include "GlobalProxy.h"
 #include "token.h"
 #include "ElevatedLauncher.h"
@@ -345,6 +346,7 @@ CHookWinsock::CHookWinsock(void)
 	m_ModuleName[HOOKMODULE_WS2_32] = "Ws2_32.dll";
 	m_ModuleName[HOOKMODULE_ADVAPI32] = "Advapi32.dll";
 	m_ModuleName[HOOKMODULE_LIBRARYLOADER] = LibraryLoaderHook::ModuleName();
+	m_ModuleName[HOOKMODULE_IPHLPAPI] = "iphlpapi.dll";
 
 	if (IsWin8OrLater())
 		m_ModuleName[HOOKMODULE_KERNEL32] = "KernelBase.dll";
@@ -2675,6 +2677,68 @@ MyDetourProc(has_Return, int, WSAAPI, WSASend, (SOCKET s,LPWSABUF buffers,DWORD 
     return Original_WSASend(s,buffers,count,sent,flags,ov,completion);
 }
 
+// Only installed when BlockPing is enabled. Use real local ICMP replies and
+// leave reply buffers, events and APC callbacks entirely owned by Windows.
+// No static TLS, per-request state or completion hooks are needed on XP.
+// FARPROC matches the XP icmpapi.h callback ABI; it is only forwarded here.
+static BOOL PingOptionsAllowed(PIP_OPTION_INFORMATION options)
+{
+	// An IP source-route option could override the loopback destination. Do
+	// not allow it to turn this policy into an external packet; fail closed.
+	if (options && options->OptionsSize)
+	{
+		SetLastError(ERROR_NOT_SUPPORTED);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+MyDetourProc(has_Return, DWORD, WINAPI, IcmpSendEcho, (HANDLE handle,
+	IPAddr destination, LPVOID data, WORD size, PIP_OPTION_INFORMATION options,
+	LPVOID reply, DWORD capacity, DWORD timeout))
+{
+	if (!PingOptionsAllowed(options)) return 0;
+	return Original_IcmpSendEcho(handle, htonl(INADDR_LOOPBACK), data, size,
+		options, reply, capacity, timeout);
+}
+
+MyDetourProc(has_Return, DWORD, WINAPI, IcmpSendEcho2, (HANDLE handle,
+	HANDLE event, FARPROC callback, PVOID context, IPAddr destination,
+	LPVOID data, WORD size, PIP_OPTION_INFORMATION options,
+	LPVOID reply, DWORD capacity, DWORD timeout))
+{
+	if (!PingOptionsAllowed(options)) return 0;
+	return Original_IcmpSendEcho2(handle, event, callback, context,
+		htonl(INADDR_LOOPBACK), data, size, options, reply, capacity, timeout);
+}
+
+MyDetourProc(has_Return, DWORD, WINAPI, IcmpSendEcho2Ex, (HANDLE handle,
+	HANDLE event, FARPROC callback, PVOID context, IPAddr source, IPAddr destination,
+	LPVOID data, WORD size, PIP_OPTION_INFORMATION options,
+	LPVOID reply, DWORD capacity, DWORD timeout))
+{
+	if (!PingOptionsAllowed(options)) return 0;
+	// An explicitly selected external source is incompatible with loopback.
+	return Original_IcmpSendEcho2Ex(handle, event, callback, context,
+		htonl(INADDR_LOOPBACK), htonl(INADDR_LOOPBACK), data, size,
+		options, reply, capacity, timeout);
+}
+
+MyDetourProc(has_Return, DWORD, WINAPI, Icmp6SendEcho2, (HANDLE handle,
+	HANDLE event, FARPROC callback, PVOID context, SOCKADDR_IN6* source,
+	SOCKADDR_IN6* destination, LPVOID data, WORD size,
+	PIP_OPTION_INFORMATION options, LPVOID reply, DWORD capacity, DWORD timeout))
+{
+	if (!source || !destination) { SetLastError(ERROR_INVALID_PARAMETER); return 0; }
+	if (!PingOptionsAllowed(options)) return 0;
+	// Constant storage outlives asynchronous requests. Never change the
+	// caller's sockaddr or carry an external interface scope into loopback.
+	static const SOCKADDR_IN6 loopback = {AF_INET6, 0, 0, IN6ADDR_LOOPBACK_INIT, 0};
+	return Original_Icmp6SendEcho2(handle, event, callback, context,
+		const_cast<SOCKADDR_IN6*>(&loopback), const_cast<SOCKADDR_IN6*>(&loopback),
+		data, size, options, reply, capacity, timeout);
+}
+
 BOOL CHookWinsock::HookWinsock()
 {
 	if (m_ProcessCreationTls == TLS_OUT_OF_INDEXES)
@@ -2682,6 +2746,7 @@ BOOL CHookWinsock::HookWinsock()
 	int i;
 	for (i = 0; i < HOOKMODULE_COUNT; i++)
 	{
+		if (i == HOOKMODULE_IPHLPAPI && !m_psi.bBlockPing) continue;
 		if (!GetModuleHandleA(m_ModuleName[i]) && !LoadLibraryA(m_ModuleName[i]))
 		{
 			return SetHookFailure(::GetLastError(), "LoadLibraryA", m_ModuleName[i], "LoadLibraryA");
@@ -2714,6 +2779,25 @@ BOOL CHookWinsock::HookWinsock()
 			break;
 		if (!HookAPI(HOOKMODULE_WS2_32, _EHF(WSAIoctl), "WSAIoctl", _HOOKFUNC(WSAIoctl), _TRAMPFUNC(WSAIoctl)))
 			break;
+
+		if (m_psi.bBlockPing)
+		{
+			// XP exports the first two. Later IPv4 and optional IPv6 APIs are
+			// discovered dynamically, never added to the DLL import table.
+			HMODULE icmp = NULL;
+			// ICMP clients may load/free iphlpapi themselves. Keep its patched
+			// code and asynchronous system work alive for the process lifetime.
+			// GetModuleHandleEx is available on XP; this runs outside DllMain.
+			if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_PIN,
+				m_ModuleName[HOOKMODULE_IPHLPAPI], &icmp))
+				return SetHookFailure(::GetLastError(), "pin-module", m_ModuleName[HOOKMODULE_IPHLPAPI], "GetModuleHandleExA");
+			if (!HookAPI(HOOKMODULE_IPHLPAPI, _EHF(IcmpSendEcho), "IcmpSendEcho", _HOOKFUNC(IcmpSendEcho), _TRAMPFUNC(IcmpSendEcho)) ||
+				!HookAPI(HOOKMODULE_IPHLPAPI, _EHF(IcmpSendEcho2), "IcmpSendEcho2", _HOOKFUNC(IcmpSendEcho2), _TRAMPFUNC(IcmpSendEcho2))) break;
+			if (GetProcAddress(icmp, "IcmpSendEcho2Ex") &&
+				!HookAPI(HOOKMODULE_IPHLPAPI, _EHF(IcmpSendEcho2Ex), "IcmpSendEcho2Ex", _HOOKFUNC(IcmpSendEcho2Ex), _TRAMPFUNC(IcmpSendEcho2Ex))) break;
+			if (GetProcAddress(icmp, "Icmp6SendEcho2") &&
+				!HookAPI(HOOKMODULE_IPHLPAPI, _EHF(Icmp6SendEcho2), "Icmp6SendEcho2", _HOOKFUNC(Icmp6SendEcho2), _TRAMPFUNC(Icmp6SendEcho2))) break;
+		}
 
 		if (IsVistaOrLater())
 		{

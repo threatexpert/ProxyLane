@@ -21,6 +21,7 @@ const Field textFields[] = {
 const Field checkFields[] = {
     {IDC_CHECK_HOOKTCP, "hook_tcp"}, {IDC_CHECK_HOOK_UDP, "hook_udp"},
     {IDC_CHECK_BLOCKUDP, "block_udp"}, {IDC_CHECK_BLOCK_IPV6, "block_ipv6"},
+    {IDC_CHECK_BLOCK_PING, "block_ping"},
     {IDC_CHECK_HOOKCHILDPROCESS, "hook_children"},
     {IDC_CHECK_REDIRECT_PRIVATE_DNS, "redirect_private_dns"}
 };
@@ -273,6 +274,7 @@ void CPage1::OnCopyProfile()
         }
         for (const auto& field : checkFields)
             value[field.key] = IsDlgButtonChecked(field.id) == BST_CHECKED;
+        if (!value["block_ping"].get<bool>()) value.erase("block_ping");
         for (const auto& field : ruleFields)
         {
             GetDlgItemText(field.id, text);
@@ -390,7 +392,7 @@ void CPage1::OnPasteProfile()
         m_edit_Port.SetWindowText(port);
         for (const auto& field : texts) SetDlgItemText(field.first, field.second);
         for (const auto& field : checkFields)
-            CheckDlgButton(field.id, value.at(field.key).get<bool>() ? BST_CHECKED : BST_UNCHECKED);
+            CheckDlgButton(field.id, value.value(field.key, false) ? BST_CHECKED : BST_UNCHECKED);
         const bool remote = value.at("dns_mode") == 1;
         const bool include = value.at("child_mode") == 1;
         const bool proxy = value.at("target_mode") == 1;

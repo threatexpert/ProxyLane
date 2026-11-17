@@ -58,6 +58,7 @@ BOOL CProxyProfileStore::Load(CfgProxyItem& item) const
 	item.bHookUDP = !!m_ini.GetDWORD(section, _T("HookUDP"), TRUE);
 	item.bBlockUDP = !!m_ini.GetDWORD(section, _T("BlockUDP"), FALSE);
 	item.bBlockIPv6 = !!m_ini.GetDWORD(section, _T("BlockIPv6"), FALSE);
+	item.bBlockPing = !!m_ini.GetDWORD(section, _T("BlockPing"), FALSE);
 	item.dnsOpt = m_ini.GetDWORD(section, _T("dnsOpt"), PSI_DNSOPT_REMOTE);
     if (item.dnsOpt < PSI_DNSOPT_LOCAL || item.dnsOpt > PSI_DNSOPT_DOH) return FALSE;
     // Older modes may prefill the editor; an incomplete DoH profile must not
@@ -237,6 +238,7 @@ BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 	if (!ini.SetDWORD(section, _T("HookUDP"), item.bHookUDP)) return false;
 	if (!ini.SetDWORD(section, _T("BlockUDP"), item.bBlockUDP)) return false;
 	if (!ini.SetDWORD(section, _T("BlockIPv6"), item.bBlockIPv6)) return false;
+	if (!ini.SetDWORD(section, _T("BlockPing"), item.bBlockPing)) return false;
 	if (!ini.DeleteKeyName(section, _T("UDPAddr"))) return false;
 	if (!ini.SetDWORD(section, _T("dnsOpt"), item.dnsOpt)) return false;
     if (!ini.SetString(section, L"DohUrl", item.strDohUrl)) return false;

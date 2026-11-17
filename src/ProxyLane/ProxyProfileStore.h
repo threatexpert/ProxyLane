@@ -18,6 +18,7 @@ struct CfgProxyItem
 	BOOL bHookUDP;
 	BOOL bBlockUDP;
 	BOOL bBlockIPv6;
+	BOOL bBlockPing = FALSE;
 	BOOL bHookChildProcess;
 	int dnsOpt;
     CString strDohUrl;
