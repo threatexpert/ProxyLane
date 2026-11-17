@@ -14,11 +14,14 @@ public:
         p->bBlockUDP = mode == "blocked" || mode == "doh-blocked";
         p->bBlockIPv6 = mode == "ipv6-blocked";
         p->bDisableMDNS = mode == "mdns-blocked";
+        // Loopback bypass must win even when LAN interception is enabled.
+        p->bHookLanIP = mode != "loopback-lan-off";
+        if (mode == "loopback-blocked") { p->bBlockUDP = TRUE; p->bBlockIPv6 = TRUE; }
         return TRUE;
     }
 };
 
-static void CheckFakeDns() {
+static _SockAddr CheckFakeDns(bool ipv6 = false) {
     const char* name = "udp-send-hook.invalid";
     auto host = gethostbyname(name);
     Check(host && host->h_addrtype == AF_INET && host->h_length == 4, "fake hostent");
@@ -37,6 +40,85 @@ static void CheckFakeDns() {
     Check(answer->h_addrtype == AF_INET && answer->h_length == 4 &&
         !memcmp(answer->h_addr_list[0], &ip, sizeof(ip)), "async and sync FakeIP agree");
     DestroyWindow(window);
+    _SockAddr target = {}; target.SetIPLong(ip); target.SetPort(9999);
+    if (ipv6) {
+        ADDRINFOW hints = {}; hints.ai_family = AF_INET6; hints.ai_socktype = SOCK_DGRAM;
+        PADDRINFOW result = NULL;
+        Check(GetAddrInfoW(L"udp-send-hook.invalid", L"9999", &hints, &result) == 0 && result, "IPv6 fake DNS");
+        Check(target.Set(result->ai_addr, (int)result->ai_addrlen), "IPv6 fake address");
+        FreeAddrInfoW(result);
+        Check(target.IsIPv6() && target.GetAddr6()->u.Byte[0] == 0xfd &&
+            target.GetAddr6()->u.Byte[1] == 0xff, "IPv6 FakeIP prefix");
+    }
+    return target;
+}
+
+static void CheckLoopback(const char* address) {
+    _SockAddr target = {}; Check(target.SetIP(address), "loopback address");
+    _SockAddr local = target;
+    if (target.IsIPv4Mapped()) { local.Clear(); local.SetIP("127.0.0.1"); }
+    SOCKET receiver = socket(local.sa_family, SOCK_DGRAM, 0);
+    Check(receiver != INVALID_SOCKET, "local receiver");
+    Check(bind(receiver, &local, local.Size()) == 0, "bind local receiver");
+    int localSize = sizeof(local);
+    Check(getsockname(receiver, &local, &localSize) == 0, "local receiver address");
+    target.SetPort(local.GetPort());
+    DWORD timeout = 1500;
+    setsockopt(receiver, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
+    for (int api = 0; api < 7; ++api) {
+        SOCKET sender = socket(target.sa_family, SOCK_DGRAM, 0);
+        Check(sender != INVALID_SOCKET, "local sender");
+        if (target.IsIPv4Mapped()) {
+            DWORD only6 = 0;
+            Check(setsockopt(sender, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&only6, sizeof(only6)) == 0, "dual stack sender");
+        }
+        char data[32]; sprintf_s(data, "local-packet-%d", api);
+        const DWORD length = (DWORD)strlen(data);
+        WSABUF buffer = {length, data}; DWORD sent = 0;
+        WSAOVERLAPPED overlapped = {};
+        const bool async = api >= 5;
+        if (async) { overlapped.hEvent = WSACreateEvent(); Check(overlapped.hEvent != WSA_INVALID_EVENT, "local send event"); }
+        int result = SOCKET_ERROR;
+        if (api == 0) {
+            result = sendto(sender, data, length, 0, &target, target.Size());
+            Check(result == (int)length, "local sendto byte count");
+        } else if (api == 1 || api == 5) {
+            result = WSASendTo(sender, &buffer, 1, &sent, 0, &target, target.Size(), async ? &overlapped : NULL, NULL);
+        } else if (api == 2 || api == 6) {
+            GUID id = WSAID_WSASENDMSG; LPFN_WSASENDMSG sendMessage = NULL; DWORD returned = 0;
+            Check(WSAIoctl(sender, SIO_GET_EXTENSION_FUNCTION_POINTER, &id, sizeof(id), &sendMessage,
+                sizeof(sendMessage), &returned, NULL, NULL) == 0, "local sendmsg lookup");
+            WSAMSG message = {}; message.name = &target; message.namelen = target.Size();
+            message.lpBuffers = &buffer; message.dwBufferCount = 1;
+            result = sendMessage(sender, &message, 0, &sent, async ? &overlapped : NULL, NULL);
+        } else {
+            Check((api == 3 ? connect(sender, &target, target.Size()) :
+                WSAConnect(sender, &target, target.Size(), NULL, NULL, NULL, NULL)) == 0, "local UDP connect");
+            _SockAddr peer = {}; int peerSize = sizeof(peer);
+            Check(getpeername(sender, &peer, &peerSize) == 0 && peer == target, "local peer is not redirected");
+            if (api == 3) {
+                result = send(sender, data, length, 0);
+                Check(result == (int)length, "local send byte count");
+            } else result = WSASend(sender, &buffer, 1, &sent, 0, NULL, NULL);
+        }
+        if (async) {
+            Check(result == 0 || (result == SOCKET_ERROR && WSAGetLastError() == WSA_IO_PENDING), "local overlapped send");
+            Check(WSAWaitForMultipleEvents(1, &overlapped.hEvent, TRUE, 3000, FALSE) == WSA_WAIT_EVENT_0, "local send completed");
+            DWORD flags = 0;
+            Check(WSAGetOverlappedResult(sender, &overlapped, &sent, FALSE, &flags) && sent == length, "local completed bytes");
+            WSACloseEvent(overlapped.hEvent);
+        } else if (api != 0 && api != 3) Check(result == 0 && sent == length, "local WSA send bytes");
+        // Receiving on this separately bound socket proves delivery to the
+        // real local endpoint, not an echo returned by the SOCKS fixture.
+        char received[64]; _SockAddr source = {}; int sourceSize = sizeof(source);
+        int count = recvfrom(receiver, received, sizeof(received), 0, &source, &sourceSize);
+        Check(count == length && !memcmp(received, data, length), "original local endpoint received datagram");
+        _SockAddr bound = {}; int boundSize = sizeof(bound);
+        Check(getsockname(sender, &bound, &boundSize) == 0 && source.GetPort() == bound.GetPort(), "local sender port is preserved");
+        closesocket(sender);
+    }
+    closesocket(receiver);
+    printf("PASS loopback %s: all 7 send/connect variants reach the local endpoint\n", address);
 }
 
 static int SendError(int variant, const _SockAddr& target) {
@@ -53,7 +135,8 @@ static int SendError(int variant, const _SockAddr& target) {
 
 static void CheckEcho(const _SockAddr& target) {
     for (int api = 0; api < 10; ++api) {
-        SOCKET s = Socket(true);
+        SOCKET s = socket(target.sa_family, SOCK_DGRAM, 0);
+        Check(s != INVALID_SOCKET, "echo sender");
         DWORD timeout = 3000;
         setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
         const bool connected = api >= 3 && api <= 7;
@@ -126,7 +209,11 @@ int main(int argc, char** argv) {
     Check(proxy->EnableProxy() != FALSE, "host start");
     char pipe[MAX_PATH]; proxy->GetPRCInstance()->GetPRCPipeName(pipe, sizeof(pipe));
     Check(gp_HookWinsock(pipe) != FALSE, "own hook installation");
-    if (settings.mode == "normal") {
+    if (settings.mode.find("loopback") == 0) {
+        for (const char* address : {"127.0.0.1", "127.42.3.4", "::1", "::ffff:127.0.0.1"}) CheckLoopback(address);
+    } else if (settings.mode == "fakeip" || settings.mode == "fakeip6") {
+        CheckEcho(CheckFakeDns(settings.mode == "fakeip6"));
+    } else if (settings.mode == "normal") {
         CheckFakeDns();
         for (int i = 0; i < 3; ++i) Check(SendError(i, target) == nativeErrors[i], "sendto retains native argument errors");
         CheckEcho(target);

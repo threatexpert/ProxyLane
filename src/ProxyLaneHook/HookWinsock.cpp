@@ -1738,6 +1738,11 @@ HookDecision CHookWinsock::HackSendTo(SOCKET s, _SockAddr &addrname,
 	if (nSockType != SOCK_DGRAM)
 		return HOOK_BYPASS;
 
+	// Match HackConnect: genuine loopback stays local regardless of LAN
+	// interception; dummy DNS addresses must still resolve through the PRC.
+	if (IsUdpAllowedLoopback(addrname))
+		return HOOK_BYPASS;
+
 	// getpeername on a connected proxied UDP socket intentionally exposes
 	// the real PRC route. Some clients feed that address back into sendto.
 	// It is already the transport endpoint of an existing route and must not

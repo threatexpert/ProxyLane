@@ -44,8 +44,9 @@ def exact(sock, count):
 
 
 class Proxy:
-    def __init__(self, kind):
+    def __init__(self, kind, udp_domain=None):
         self.kind = kind
+        self.udp_domain = udp_domain
         self.requests = []
         self.errors = []
         self.listener = socket.socket()
@@ -88,7 +89,13 @@ class Proxy:
                                 if peer in ready or not ready:
                                     return
                                 packet, source = udp.recvfrom(65536)
-                                assert packet[3] in (1, 4), "UDP must use a numeric DoH answer"
+                                if self.udp_domain is None:
+                                    assert packet[3] in (1, 4), "UDP must use a numeric DoH answer"
+                                else:
+                                    assert packet[3] == 3, "FakeIP must recover the original domain"
+                                    size = packet[4]
+                                    assert packet[5:5+size].decode() == self.udp_domain
+                                    assert struct.unpack("!H", packet[5+size:7+size])[0] == 9999
                                 self.requests.append(("udp", packet[3]))
                                 udp.sendto(packet, source)
                     assert cmd == 1
