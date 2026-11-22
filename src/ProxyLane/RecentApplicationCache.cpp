@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "RecentApplications.h"
 #include "IniFile.h"
+#include "ProfileIniSection.h"
 #include <map>
 #include <afxmt.h>
 
@@ -176,7 +177,7 @@ void RecentApplications::Preload(const CString& profile, const CString& path, co
 		// Reading an existing identity must not create history for an unsaved,
 		// renamed or deleted profile just because the selection changed.
 		CIniFile ini; ini.SetIniFileName(path);
-		id = ini.GetString(L"proxy_" + profile, L"RecentAppsId", L"");
+		id = ini.GetString(ProfileIniSection::FromName(profile), L"RecentAppsId", L"");
 	}
 	if (id.IsEmpty()) return;
 	Load* load = AcquireLoad(profile, path, id);

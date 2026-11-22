@@ -65,8 +65,10 @@ def run(bin_dir, scenario, language):
     destination.write_text('[options]\nlanguage=' + language + '\nlastselected=Before\n'
                            '[proxy_Before]\nType=NOPROXY\nHost=\nPort=0\n', encoding='utf-16')
     source = directory / 'Source.ini'
+    imported_name = 'Imported[100%]'
+    imported_reference = 'Imported[100%~PLc~5D'
     imported = ('; preserve comments and unknown values\n[options]\nlanguage=' + language +
-                '\nlastselected=Imported\n[proxy_Imported]\nType=NOPROXY\nPort=0\n'
+                f'\nlastselected={imported_reference}\n[proxy_{imported_reference}]\nType=NOPROXY\nPort=0\n'
                 '[proxy_Second]\nType=SOCKS5\nHost=localhost\nPort=1080\n'
                 '[future-extension]\nText=\u4fdd\u7559\u672a\u77e5\u5b57\u6bb5\n'
                 '[empty-extension]\n')
@@ -150,7 +152,7 @@ def run(bin_dir, scenario, language):
                 assert len(backups) == 1 and backups[0].read_bytes() == before
                 assert USER.IsWindowVisible(new_main)
                 # Verify actual loaded UI, not just the INI bytes.
-                assert text(USER.GetDlgItem(settings_page(new_main), 1022)) == ('Before' if recovered else 'Imported')
+                assert text(USER.GetDlgItem(settings_page(new_main), 1022)) == ('Before' if recovered else imported_name)
                 assert ('[proxy_Before]' in destination.read_text(encoding='utf-16')) == recovered
                 if scenario != 'snapshot':
                     assert source.read_bytes() == source_original

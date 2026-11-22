@@ -4,6 +4,7 @@
 #include "Localization.h"
 #include "AutomationOptions.h"
 #include "ProxyProfileStore.h"
+#include "ProfileIniSection.h"
 #include <set>
 
 namespace
@@ -103,7 +104,7 @@ UINT Validate(const CString& text, const CString& path)
             if (line.Right(1) != L"]") throw Localization::Get(L"import.invalid");
             CString section = line.Mid(1, line.GetLength() - 2); section.Trim();
             if (section.IsEmpty() || !sections.insert(section).second) throw Localization::Get(L"import.invalid");
-            recognized |= section.CompareNoCase(L"options") == 0 || section.Left(6).CompareNoCase(L"proxy_") == 0;
+            recognized |= section.CompareNoCase(L"options") == 0 || ProfileIniSection::IsProfileSection(section);
             inSection = true;
         }
         else if (!inSection || line.Find(L'=') <= 0) throw Localization::Get(L"import.invalid");
@@ -117,8 +118,8 @@ UINT Validate(const CString& text, const CString& path)
     {
         CIniFile::Section values;
         if (!ini.ReadSection(section, values)) throw Localization::Get(L"import.invalid");
-        if (section.Left(6).CompareNoCase(L"proxy_") != 0) continue;
-        CfgProxyItem item; item.strName = section.Mid(6);
+        if (!ProfileIniSection::IsProfileSection(section)) continue;
+        CfgProxyItem item; item.strName = ProfileIniSection::ToName(section);
         CString transport = ini.GetString(section, L"Transport");
         CString port = ini.GetString(section, L"Port");
         port.Trim();
@@ -127,7 +128,7 @@ UINT Validate(const CString& text, const CString& path)
         const bool valid = !item.strName.IsEmpty() && store.Load(item) &&
             (item.pi.GetProxyType() == PROXYTYPE_NOPROXY || validPort) &&
             (transport.IsEmpty() || transport.CompareNoCase(L"PLAIN") == 0 || transport.CompareNoCase(L"GONC_TLS_PSK") == 0);
-        if (!valid) invalid += L"\r\n" + section;
+        if (!valid) invalid += L"\r\n" + (item.strName.IsEmpty() ? section : item.strName);
         else ++count;
     }
     if (!invalid.IsEmpty()) throw Localization::Format(L"import.invalid_profiles", (LPCTSTR)invalid);

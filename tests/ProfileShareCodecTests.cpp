@@ -67,6 +67,11 @@ int ProfileShareCodecTestsMain()
     assert(ProfileShare::Base64Url("fo") == "Zm8");
     assert(ProfileShare::Base64Url("foo") == "Zm9v");
     {
+        Json brackets = original;
+        brackets["name"] = u8"香港[IEPL%5D]";
+        assert(ProfileShare::Decode(ProfileShare::Encode(brackets)) == brackets);
+    }
+    {
         assert(!ProfileShare::Decode(code).value("block_ping", false));
         Json ping = original; ping["block_ping"] = true;
         assert(ProfileShare::Decode(ProfileShare::Encode(ping)) == ping);

@@ -1,16 +1,12 @@
 #include "stdafx.h"
 #include "ProxyLane.h"
 #include "ProxyProfileStore.h"
+#include "ProfileIniSection.h"
 #include "RecentApplications.h"
 #include "ConfigStorage.h"
 #include "SshProfile.h"
 #include "SshKeyStore.h"
-
-namespace
-{
-	LPCTSTR kProfilePrefix = _T("proxy_");
-	const int kProfilePrefixLength = 6;
-}
+#include <set>
 
 CProxyProfileStore::CProxyProfileStore(CIniFile& ini)
 	: m_ini(ini)
@@ -52,7 +48,8 @@ CString CProxyProfileStore::DecodeFilter(const CString& packed)
 
 BOOL CProxyProfileStore::Load(CfgProxyItem& item) const
 {
-	CString section = kProfilePrefix + item.strName;
+	if (!ProfileIniSection::IsValidName(item.strName)) return FALSE;
+	const CString section = ProfileIniSection::FromName(item.strName);
 	item.bHookChildProcess = !!m_ini.GetDWORD(section, _T("HookChildProcess"), TRUE);
 	item.bHookTCP = !!m_ini.GetDWORD(section, _T("HookTCP"), TRUE);
 	item.bHookUDP = !!m_ini.GetDWORD(section, _T("HookUDP"), TRUE);
@@ -132,7 +129,7 @@ BOOL CProxyProfileStore::Load(CfgProxyItem& item) const
 			const CString hop = m_ini.GetString(section, key);
 			if (hop.IsEmpty())
 				break;
-			item.chainHops.push_back(hop);
+			item.chainHops.push_back(ProfileIniSection::FromReference(hop));
 		}
 		// A chain has no server of its own.
 		ZeroMemory(&item.pi, sizeof(item.pi));
@@ -156,22 +153,15 @@ BOOL CProxyProfileStore::Load(CfgProxyItem& item) const
 
 int CProxyProfileStore::LoadAll(std::list<CfgProxyItem>& items, CString& lastSelectedName) const
 {
-	lastSelectedName = m_ini.GetString(_T("options"), _T("lastselected"));
-	std::list<CString> sections;
-	if (m_ini.GetSectionList(sections) < 0)
+	lastSelectedName = ProfileIniSection::FromReference(m_ini.GetString(L"options", L"lastselected"));
+	std::vector<CString> names;
+	if (!ListNames(names))
 		return -1;
 
-	for (std::list<CString>::const_iterator it = sections.begin(); it != sections.end(); ++it)
+	for (const CString& name : names)
 	{
-		const CString& section = *it;
-		if (section.Left(kProfilePrefixLength).CompareNoCase(kProfilePrefix) != 0
-			|| section.GetLength() <= kProfilePrefixLength)
-		{
-			continue;
-		}
-
 		CfgProxyItem item;
-		item.strName = section.Mid(kProfilePrefixLength);
+		item.strName = name;
 		if (Load(item))
 			items.push_back(item);
 	}
@@ -185,11 +175,13 @@ BOOL CProxyProfileStore::ListNames(std::vector<CString>& names) const
 	if (m_ini.GetSectionList(sections) < 0)
 		return FALSE;
 	std::vector<CString> loaded;
+	// Older saves can leave multiple sections with the same readable name.
+	std::set<CString, CIniFile::KeyLess> seen;
 	for (const CString& section : sections)
 	{
-		if (section.Left(kProfilePrefixLength).CompareNoCase(kProfilePrefix) == 0 &&
-			section.GetLength() > kProfilePrefixLength)
-			loaded.push_back(section.Mid(kProfilePrefixLength));
+		const CString name = ProfileIniSection::ToName(section);
+		if (!name.IsEmpty() && seen.insert(name).second)
+			loaded.push_back(name);
 	}
 	names.swap(loaded);
 	return TRUE;
@@ -230,9 +222,14 @@ namespace
 
 BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 {
+	if (!ProfileIniSection::IsValidName(item.strName))
+	{
+		SetLastError(ERROR_INVALID_NAME);
+		return FALSE;
+	}
 	return ConfigStorage::Update(m_ini.GetIniFileName(), [&](const CString& path) {
 	CIniFile ini; ini.SetIniFileName(path); ini.staging = true;
-	CString section = kProfilePrefix + item.strName;
+	const CString section = ProfileIniSection::FromName(item.strName);
 	if (!ini.SetDWORD(section, _T("HookChildProcess"), item.bHookChildProcess)) return false;
 	if (!ini.SetDWORD(section, _T("HookTCP"), item.bHookTCP)) return false;
 	if (!ini.SetDWORD(section, _T("HookUDP"), item.bHookUDP)) return false;
@@ -270,7 +267,7 @@ BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 		key.Format(_T("Hop%d"), i);
 		if (i <= hopCount)
 		{
-			if (!ini.SetString(section, key, item.chainHops[i - 1])) return false;
+			if (!ini.SetString(section, key, ProfileIniSection::ToReference(item.chainHops[i - 1]))) return false;
 		}
 		else if (ini.GetString(section, key).IsEmpty())
 			break;
@@ -282,6 +279,7 @@ BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 
 BOOL CProxyProfileStore::SaveConnection(CfgProxyItem& item)
 {
+    if (!ProfileIniSection::IsValidName(item.strName)) { SetLastError(ERROR_INVALID_NAME); return FALSE; }
     if (!IsChainHop(item)) { SetLastError(ERROR_INVALID_DATA); return FALSE; }
     return ConfigStorage::Update(m_ini.GetIniFileName(), [&](const CString& path) {
         CIniFile ini; ini.SetIniFileName(path); ini.staging = true;
@@ -291,7 +289,7 @@ BOOL CProxyProfileStore::SaveConnection(CfgProxyItem& item)
         if (!current.Load(existing) || !IsChainHop(existing)) {
             SetLastError(ERROR_NOT_FOUND); return false;
         }
-        return WriteConnection(ini, kProfilePrefix + item.strName, item);
+        return WriteConnection(ini, ProfileIniSection::FromName(item.strName), item);
     });
 }
 
@@ -302,7 +300,7 @@ BOOL CProxyProfileStore::Delete(LPCTSTR name)
 
 void CProxyProfileStore::SetLastSelected(LPCTSTR name)
 {
-	m_ini.SetString(_T("options"), _T("lastselected"), name);
+	m_ini.SetString(L"options", L"lastselected", ProfileIniSection::ToReference(CString(name)));
 }
 
 BOOL CProxyProfileStore::IsChainHop(const CfgProxyItem& item)

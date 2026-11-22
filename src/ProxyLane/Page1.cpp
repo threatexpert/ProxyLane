@@ -16,6 +16,7 @@
 #include "Page3.h"
 #include "Page4.h"
 #include "IniFile.h"
+#include "ProfileIniSection.h"
 #include "Base64.h"
 #include "Localization.h"
 #include "..\ProxyLaneHook\DnsRedirectPolicy.h"
@@ -1395,6 +1396,12 @@ BOOL CPage1::SaveCurrentProfile(LPCTSTR profileName)
 			Localization::Get(_T("profile.save_failed_title")), MB_ICONINFORMATION);
 		return FALSE;
 	}
+	if (!ProfileIniSection::IsValidName(item.strName))
+	{
+		MessageBox(Localization::Get(L"profile.invalid_name"),
+			Localization::Get(L"profile.save_failed_title"), MB_ICONINFORMATION);
+		return FALSE;
+	}
 	// A profile keeps the type it was created with: never let a draft of the
 	// other type overwrite it.
 	{
@@ -1610,7 +1617,7 @@ CString CPage1::GetSelectedRecentProfileId()
 {
 	const CString name = GetCurrentProfileName();
 	// Preview existing history without creating an identity for an unsaved draft.
-	return name.IsEmpty() ? CString() : g_ini.GetString(_T("proxy_") + name, _T("RecentAppsId"));
+	return name.IsEmpty() ? CString() : g_ini.GetString(ProfileIniSection::FromName(name), L"RecentAppsId");
 }
 
 BOOL CPage1::ApplyRuntimeSettings()

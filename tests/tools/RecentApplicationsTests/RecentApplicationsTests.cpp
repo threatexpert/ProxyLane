@@ -2,6 +2,7 @@
 #include "RecentApplications.h"
 #include "LaunchPanelPaging.h"
 #include "IniFile.h"
+#include "ProfileIniSection.h"
 #include "ProxyProfileStore.h"
 #include "SshProfile.h"
 #include <iostream>
@@ -583,6 +584,40 @@ static void TestProfileSave(Fixture& f)
   "mixed chain resolves SSH key and credentials");
  Check(ini.SetString(L"proxy_Ssh",L"SshHostKey",L"") && profiles.Load(loadedSsh), "empty SSH key permits first test");
  Check(ini.SetString(L"proxy_Ssh",L"SshHostKey",L"invalid") && !profiles.Load(loadedSsh), "reject malformed SSH key");
+
+ Check(ProfileIniSection::FromName(L"A]") == L"proxy_A~PLc~5D" &&
+  ProfileIniSection::FromName(L"A%5D") == L"proxy_A%5D", "escape a bracket and retain literal percent text");
+ Check(ProfileIniSection::ToReference(L"A~pLc~") == L"A~pLc~00" &&
+  ProfileIniSection::FromReference(L"A~pLc~005D") == L"A~pLc~5D",
+  "escape a literal marker without decoding it again or changing case");
+ Check(ProfileIniSection::FromReference(ProfileIniSection::ToReference(L"~PLc]")) == L"~PLc]",
+  "decode an escape after a partial marker");
+
+ item.strName = L"Node[%5D~PLc~5D]";
+ const CString storedName = L"Node[%5D~PLc~005D~PLc~5D";
+ Check(profiles.Save(item), "save a profile with a closing bracket and a literal escape");
+ CfgProxyItem escaped = {}; escaped.strName = L"node[%5d~plc~5d]";
+ Check(profiles.Load(escaped) && escaped.pi.nProxyPort == 1081, "load escaped profile case-insensitively");
+ escaped.pi.nProxyPort = 1082;
+ Check(profiles.SaveConnection(escaped) &&
+  profiles.ResolveChain({L"Save", item.strName}, route, errorKey, errorName) && route[1].nProxyPort == 1082,
+  "edit and resolve escaped chain node by its display name");
+ CfgProxyItem chain = {}; chain.strName = L"EscapedChain"; chain.bChain = TRUE;
+ const std::vector<CString> hops = {L"Save", item.strName};
+ chain.chainHops = hops;
+ Check(profiles.Save(chain) && ini.GetString(L"proxy_EscapedChain", L"Hop2") == storedName &&
+  profiles.Load(chain) && chain.chainHops == hops, "store chain references readable by the old version");
+ CString identity;
+ Check(EnsureProfileId(item.strName, identity, path) && !identity.IsEmpty() &&
+  ini.GetString(L"proxy_" + storedName, L"RecentAppsId") == identity, "bind recent history to escaped profile");
+ Store escapedHistory(item.strName, path, identity);
+ std::vector<Entry> entries;
+ Check(escapedHistory.Remember(Item(900)) && escapedHistory.Read(entries) && entries.size() == 1,
+  "read and write recent history for escaped profile");
+ ReleaseIcons(entries);
+ Check(profiles.Delete(escaped.strName) && !profiles.Load(escaped) &&
+  escapedHistory.Read(entries) && entries.empty(), "delete escaped profile and its history case-insensitively");
+
  std::cout << "profile transaction, history preservation, SSH round trip and failed-save rollback: PASS\n";
 }
 

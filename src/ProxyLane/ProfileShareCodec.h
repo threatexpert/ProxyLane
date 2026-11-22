@@ -135,7 +135,7 @@ inline void Validate(const Json& value)
 {
     CheckFields(value, KnownFields());
     const std::string name = String(value, "name", 512);
-    if (name.empty() || name.find_first_of("[]\r\n") != std::string::npos ||
+    if (name.empty() || name.find_first_of("\r\n") != std::string::npos ||
         name.front() == ' ' || name.back() == ' ' || name.find('\t') != std::string::npos)
         throw Error("share.invalid_name");
     const std::string type = String(value, "type", 16);

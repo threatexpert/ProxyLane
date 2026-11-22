@@ -2,6 +2,7 @@
 #include "RecentApplications.h"
 #include "Localization.h"
 #include "IniFile.h"
+#include "ProfileIniSection.h"
 #include "ConfigStorage.h"
 #include "Base64.h"
 #include <errno.h>
@@ -64,15 +65,17 @@ namespace
 	{
 		id.Empty();
 		if (profile.IsEmpty()) return TRUE;
+		if (!ProfileIniSection::IsValidName(profile)) { SetLastError(ERROR_INVALID_NAME); return FALSE; }
+		const CString section = ProfileIniSection::FromName(profile);
 		CIniFile::Section values;
-		if (!ini.ReadSection(L"proxy_" + profile, values)) return FALSE;
+		if (!ini.ReadSection(section, values)) return FALSE;
 		// Do not resurrect a profile deleted by another instance.
 		if (values.empty()) return TRUE;
 		id = values[L"RecentAppsId"];
 		if (id.IsEmpty() && create)
 		{
 			id = NewId();
-			if (id.IsEmpty() || !ini.SetString(L"proxy_" + profile, L"RecentAppsId", id)) return FALSE;
+			if (id.IsEmpty() || !ini.SetString(section, L"RecentAppsId", id)) return FALSE;
 		}
 		if (!id.IsEmpty() && !ValidId(id)) { SetLastError(ERROR_INVALID_DATA); return FALSE; }
 		return TRUE;
@@ -287,7 +290,7 @@ BOOL RecentApplications::DeleteProfile(const CString& profile, const CString& pa
    for (const auto& section : sections)
     if (section.Left(prefix.GetLength()).CompareNoCase(prefix) == 0 && !ini.DeleteSection(section)) return false;
   }
-  return ini.DeleteSection(L"proxy_" + profile) != FALSE;
+  return ini.DeleteSection(ProfileIniSection::FromName(profile)) != FALSE;
  });
  if (saved) InvalidateCache(path, id, TRUE);
  return saved;

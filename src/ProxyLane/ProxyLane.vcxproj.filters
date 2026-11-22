@@ -213,6 +213,9 @@
     <ClInclude Include="ProxyController.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ProfileIniSection.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="ProxyProfileStore.h">
       <Filter>头文件</Filter>
     </ClInclude>
