@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  欢迎来 <a href="https://linux.do/t/topic/2980923">Linux.do</a>、<a href="https://v2ex.com/t/1242151">V2EX</a> 社区讨论
+  欢迎来 <a href="https://linux.do/t/topic/2980923">Linux.do</a>、<a href="https://v2ex.com/t/1242151">V2EX</a> 社区、微信群 <img src="assets/community/wechat-qr.svg" width="57" height="57" align="absmiddle" alt="微信群二维码"> 讨论
 </p>
 
 <p align="center">简体中文 | <a href="README_EN.md">English</a></p>

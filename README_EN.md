@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  Join the community discussion on <a href="https://linux.do/t/topic/2980923">Linux.do</a> and <a href="https://v2ex.com/t/1242151">V2EX</a>
+  Join the discussion on <a href="https://linux.do/t/topic/2980923">Linux.do</a>, on <a href="https://v2ex.com/t/1242151">V2EX</a>, or in the WeChat group <img src="assets/community/wechat-qr.svg" width="57" height="57" align="absmiddle" alt="WeChat group QR code">
 </p>
 
 <p align="center"><a href="README.md">简体中文</a> | English</p>
