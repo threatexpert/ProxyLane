@@ -26,9 +26,10 @@ namespace InstalledApplications
 		CString aumid;
 		CString arguments;
 		CString workingDirectory;
+		int showWindow;
 		std::vector<Source> sources;
 		HICON icon;
-		Application() : icon(NULL) {}
+		Application() : showWindow(SW_SHOWNORMAL), icon(NULL) {}
 		BOOL IsPackaged() const { return !aumid.IsEmpty(); }
 	};
 

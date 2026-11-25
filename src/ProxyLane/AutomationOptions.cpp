@@ -122,7 +122,7 @@ BOOL ParseAutomationOptions(
 		if (argument == _T("--")) break;
 		// Values are opaque; an application's argument may itself be "--help".
 		if (argument == L"--profile" || argument == L"--run" || argument == L"--arguments" ||
-			argument == L"--working-directory" || argument == L"--app-name" || argument == L"--bootstrap-event") { ++i; continue; }
+			argument == L"--working-directory" || argument == L"--app-name" || argument == L"--show-window" || argument == L"--shell-pipe" || argument == L"--bootstrap-event") { ++i; continue; }
 		if (argument.CompareNoCase(_T("/?")) == 0 ||
 			argument.CompareNoCase(_T("-?")) == 0 ||
 			argument.CompareNoCase(_T("--help")) == 0)
@@ -194,10 +194,28 @@ BOOL ParseAutomationOptions(
 			}
 			seenRun = TRUE;
 		}
-		else if (argument == L"--elevated" || argument == L"--packaged" || argument == L"--shortcut")
+		else if (argument == L"--shell-pipe")
+		{
+			if (!options.shellPipe.IsEmpty() || !ReadOptionValue(i, argc, argv, options.shellPipe, errorMessage, argument) ||
+				options.shellPipe.Left(20) != L"\\\\.\\pipe\\PRCPipeName") { errorMessage = L"Invalid --shell-pipe"; LocalFree(argv); return FALSE; }
+		}
+		else if (argument == L"--literal-arguments")
+		{
+			if (options.literalArguments) { errorMessage = L"Duplicate --literal-arguments"; LocalFree(argv); return FALSE; }
+			options.literalArguments = TRUE;
+		}
+		else if (argument == L"--show-window")
+		{
+			CString value;
+			if (options.showWindow != -1 || !ReadOptionValue(i, argc, argv, value, errorMessage, argument)) { LocalFree(argv); return FALSE; }
+			WCHAR* end = NULL; long show = wcstol(value, &end, 10);
+			if (value.IsEmpty() || !end || *end || show < 0 || show > 11) { errorMessage = L"Invalid --show-window"; LocalFree(argv); return FALSE; }
+			options.showWindow = static_cast<int>(show);
+		}
+		else if (argument == L"--elevated" || argument == L"--packaged" || argument == L"--shortcut" || argument == L"--wait-exit")
 		{
 			BOOL& flag = argument == L"--elevated" ? options.elevated :
-				(argument == L"--packaged" ? options.packaged : options.shortcut);
+				(argument == L"--packaged" ? options.packaged : (argument == L"--wait-exit" ? options.waitExit : options.shortcut));
 			if (flag) { errorMessage = L"Duplicate option: " + argument; LocalFree(argv); return FALSE; }
 			flag = TRUE;
 		}
@@ -311,6 +329,10 @@ CString BuildAutomationCommandLine(
 	if (options.elevated) commandLine += L" --elevated";
 	if (options.packaged) commandLine += L" --packaged";
 	if (options.shortcut) commandLine += L" --shortcut";
+	if (options.waitExit) commandLine += L" --wait-exit";
+	if (!options.shellPipe.IsEmpty()) commandLine += L" --shell-pipe " + QuoteCommandLineArgument(options.shellPipe);
+	if (options.literalArguments) commandLine += L" --literal-arguments";
+	if (options.showWindow != -1) { CString show; show.Format(L" --show-window %d", options.showWindow); commandLine += show; }
 
 	if (bootstrapEventName && bootstrapEventName[0])
 	{

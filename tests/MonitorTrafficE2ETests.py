@@ -89,7 +89,7 @@ def main():
         for path in source.glob(pattern): shutil.copy2(path, work/path.name)
     profile = 'MonitorLoad'+unique
     config = (root/'examples/ProxyLane.ini').read_text().replace('Test', profile)
-    config = config.replace('Port=1080', 'Port='+str(relay.server_address[1]))
+    config = config.replace('Port=7890', 'Port='+str(relay.server_address[1]))
     # This is a plaintext throughput test, independent of the example profile's
     # saved decryption preference (which may require CA onboarding).
     config = '\n'.join(line for line in config.splitlines() if not line.startswith('DecryptHTTPS='))

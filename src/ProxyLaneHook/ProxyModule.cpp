@@ -13,6 +13,7 @@
 #include "InjectDll.h"
 #include "InjectDllArm64.h"
 #include "DeferredMitigationPolicy.h"
+#include "ElevatedLauncher.h"
 
 CGlobalProxy *g_pPMGlobalProxy = NULL;
 CHookWinsock *g_pPMHookWs = NULL;
@@ -268,6 +269,42 @@ static UINT get_arg(LPSTR lpszIn, LPCSTR lpszOpt, LPSTR lpszBuf, int size)
 	}
 
 	return (UINT)(pW - lpszBuf);
+}
+
+BOOL WINAPI gp_InjectAndResumeShellChild(const PROCESS_INFORMATION* process,
+	LPCWSTR application, LPCWSTR command, LPCSTR pipeName)
+{
+	// No gp_HookWinsock: this helper needs injection and PRC, not its own proxy.
+	const DWORD error = [&]() -> DWORD {
+		if (!process || !process->hProcess || !process->hThread || !application || !pipeName || !*pipeName)
+			return ERROR_INVALID_PARAMETER;
+		HookNewProcessInfo child = {};
+		child.dwProcessId = process->dwProcessId;
+		child.dwThreadId = process->dwThreadId;
+		FILETIME created, exited, kernel, user;
+		if (!GetProcessTimes(process->hProcess, &created, &exited, &kernel, &user)) return GetLastError();
+		child.processCreateTime = (static_cast<ULONGLONG>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+		wcsncpy_s(child.szAppPath, application, _TRUNCATE);
+		wcsncpy_s(child.szCommandLine, command ? command : L"", _TRUNCATE);
+		CPRCPipeClient pipe;
+		if (!pipe.Connect(CString(pipeName))) return pipe.GetLastError() ? pipe.GetLastError() : ERROR_PIPE_NOT_CONNECTED;
+		bool replied = false;
+		if (!pipe.PRCShouldInjectNewProcess(&child, false, false, &replied))
+			return replied ? ERROR_ACCESS_DENIED : ERROR_BROKEN_PIPE;
+		SetLastError(ERROR_SUCCESS);
+		const BOOL injected = ProxyLaneInjectSuspendedProcess(process->hProcess, process->hThread,
+			process->dwProcessId, process->dwThreadId, pipeName, CreateProcessW);
+		const DWORD injectionError = GetLastError();
+		const BOOL notified = pipe.PRCNotifyChildInjectionResult(&child, injected);
+		if (!injected) return injectionError ? injectionError : ERROR_DLL_INIT_FAILED;
+		if (!notified) return ERROR_BROKEN_PIPE;
+		// This is bootstrap preparation success, not a synchronous DLL-ready receipt.
+		if (ResumeThread(process->hThread) == static_cast<DWORD>(-1)) return GetLastError();
+		pipe.PRCNotifyChildReleased(&child);
+		return ERROR_SUCCESS;
+	}();
+	SetLastError(error);
+	return error == ERROR_SUCCESS;
 }
 
 DWORD WINAPI AttachToHandles(HANDLE hProcess, HANDLE hThread, LPCSTR szPipeName)

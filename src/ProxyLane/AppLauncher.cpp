@@ -67,6 +67,24 @@ namespace
     }
 }
 
+void LogShellHelperFailure(LPCWSTR pipeName, LPCWSTR target, DWORD error)
+{
+    CString message;
+    message.Format(L"Shell launch failed: target=\"%s\", error=%lu; no direct fallback.", target, error);
+    OutputDebugStringW(message);
+    if (!pipeName || !*pipeName) return;
+    HANDLE pipe = CreateFileW(pipeName, GENERIC_READ | FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES, 0, NULL,
+        OPEN_EXISTING, FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
+    if (pipe == INVALID_HANDLE_VALUE) return;
+    HookLogtext text;
+    text.dwProcessId = GetCurrentProcessId();
+    text.len = (message.GetLength()+1)*sizeof(WCHAR);
+    PRCPipeDataHead header = {PRCPD_Logtext, 0, sizeof(text)+text.len};
+    if (Transfer(pipe, true, &header, sizeof(header), 3000) && Transfer(pipe, true, &text, sizeof(text), 3000))
+        Transfer(pipe, true, message.GetBuffer(), text.len, 3000);
+    CloseHandle(pipe);
+}
+
 bool RunInternalAppLauncher(LPCWSTR commandLine, DWORD& exitCode)
 {
     int count=0; LPWSTR* args=CommandLineToArgvW(commandLine,&count);

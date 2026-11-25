@@ -37,6 +37,9 @@
     <ClCompile Include="AutomationOptions.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="ShellUrlLaunch.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="Base64.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -122,6 +125,10 @@
     <ClInclude Include="AutomationOptions.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ShellUrlLaunch.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="AutomationProcessWait.h"><Filter>头文件</Filter></ClInclude>
     <ClInclude Include="Base64.h">
       <Filter>头文件</Filter>
     </ClInclude>

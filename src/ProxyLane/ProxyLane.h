@@ -24,6 +24,10 @@ public:
 	CProxyLaneApp();
 	const AutomationOptions& GetAutomationOptions() const { return m_automationOptions; }
 	void SetAutomationExitCode(int exitCode) { m_automationExitCode = exitCode; }
+	void SetAutomationTargetExitCode(DWORD code) {
+		m_automationOptions.shortcut = FALSE; // A target exit is not a launch failure notification.
+		m_automationExitCode = static_cast<int>(code);
+	}
 	void SignalAutomationReady();
 	BOOL PrepareAutomationCommandReceiver();
 	BOOL ActivateProfileCommandServer(LPCTSTR profileName, HWND notifyWindow);

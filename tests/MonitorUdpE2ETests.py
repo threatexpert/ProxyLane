@@ -139,7 +139,7 @@ def main():
         for path in source.glob(pattern): shutil.copy2(path, work/path.name)
     profile = 'MonitorLoad'+unique
     config = (root/'examples/ProxyLane.ini').read_text().replace('lastselected=Test', 'lastselected='+profile).replace('[proxy_Test]', '[proxy_'+profile+']')
-    config = config.replace('Port=1080', 'Port='+str(relay_port))
+    config = config.replace('Port=7890', 'Port='+str(relay_port))
     config = config.replace('[options]', '[options]\nlanguage=zh-CN').replace('HookUDP=0','HookUDP=1').replace('BlockUDP=1','BlockUDP=0')
     if args.direct:
         config = config.replace('Type=SOCKS5', 'Type=NOPROXY').replace('Host=127.0.0.1', 'Host=')

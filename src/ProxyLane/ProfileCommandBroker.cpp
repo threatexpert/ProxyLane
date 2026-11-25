@@ -10,6 +10,8 @@ namespace
 {
 	const DWORD kCommandMagic = 0x434C5050; // PPLC
 	const DWORD kCommandVersion = 3;
+	const DWORD kWaitCommandVersion = 4;
+	const DWORD kShellCommandVersion = 5;
 	const DWORD kMaxCommandBytes = 60 * 1024;
 	const DWORD kMaxProfileChars = 255;
 	const DWORD kMaxTargetChars = 32767;
@@ -33,6 +35,12 @@ namespace
 		DWORD size;
 		int exitCode;
 	};
+	struct WaitCommandResponse
+	{
+		CommandResponse header;
+		AutomationProcessIdentity process;
+	};
+	static_assert(sizeof(WaitCommandResponse) == 28, "wait reply layout");
 
 	class CCurrentUserSecurity
 	{
@@ -270,7 +278,8 @@ namespace
 		// one format for all launch metadata, including the notification fields.
 		const BOOL extended = options.shortcut || options.elevated || options.packaged ||
 			!options.applicationName.IsEmpty() || !options.initialArguments.IsEmpty() || !options.workingDirectory.IsEmpty();
-		header.version = extended ? kCommandVersion : 1;
+		header.version = options.waitExit ? kWaitCommandVersion : (extended ? kCommandVersion : 1);
+		if (options.literalArguments || options.showWindow != -1) header.version = kShellCommandVersion;
 		header.argumentCount = static_cast<DWORD>(options.targetArguments.size());
 		bytes.resize(sizeof(header));
 		if (!AppendString(bytes, options.profileName, kMaxProfileChars) ||
@@ -283,7 +292,7 @@ namespace
 			if (!AppendString(bytes, options.targetArguments[i], kMaxTargetChars))
 				return FALSE;
 		}
-		if (header.version == kCommandVersion)
+		if (header.version >= kCommandVersion)
 		{
 			if (!AppendString(bytes, options.initialArguments, kMaxTargetChars) ||
 				!AppendString(bytes, options.workingDirectory, kMaxTargetChars) ||
@@ -291,6 +300,10 @@ namespace
 			const DWORD flags = (options.elevated ? LaunchElevated : 0) |
 				(options.packaged ? LaunchPackaged : 0) | (options.shortcut ? LaunchFromShortcut : 0);
 			AppendDword(bytes, flags);
+		}
+		if (header.version == kShellCommandVersion) {
+			AppendDword(bytes, (options.waitExit ? 1 : 0) | (options.literalArguments ? 2 : 0));
+			AppendDword(bytes, static_cast<DWORD>(options.showWindow));
 		}
 		header.totalBytes = static_cast<DWORD>(bytes.size());
 		header.profileChars = static_cast<DWORD>(options.profileName.GetLength());
@@ -308,7 +321,7 @@ namespace
 			return FALSE;
 		CommandHeader header;
 		memcpy(&header, bytes, sizeof(header));
-		if (header.magic != kCommandMagic || (header.version != 1 && header.version != kCommandVersion) ||
+		if (header.magic != kCommandMagic || (header.version != 1 && header.version != kCommandVersion && header.version != kWaitCommandVersion && header.version != kShellCommandVersion) ||
 			header.totalBytes != byteCount || byteCount > kMaxCommandBytes ||
 			header.argumentCount > kMaxArguments)
 		{
@@ -316,6 +329,7 @@ namespace
 		}
 
 		options = AutomationOptions();
+		options.waitExit = header.version == kWaitCommandVersion;
 		const BYTE* cursor = bytes + sizeof(header);
 		const BYTE* end = bytes + byteCount;
 		if (!ReadString(cursor, end, options.profileName, kMaxProfileChars) ||
@@ -332,7 +346,7 @@ namespace
 				return FALSE;
 			options.targetArguments.push_back(argument);
 		}
-		if (header.version == kCommandVersion)
+		if (header.version >= kCommandVersion)
 		{
 			if (!ReadString(cursor, end, options.initialArguments, kMaxTargetChars) ||
 				!ReadString(cursor, end, options.workingDirectory, kMaxTargetChars) ||
@@ -342,6 +356,13 @@ namespace
 			options.elevated = (flags & LaunchElevated) != 0;
 			options.packaged = (flags & LaunchPackaged) != 0;
 			options.shortcut = (flags & LaunchFromShortcut) != 0;
+		}
+		if (header.version == kShellCommandVersion) {
+			DWORD flags, show;
+			if (!ReadDword(cursor, end, flags) || (flags & ~3) || !ReadDword(cursor, end, show) || (show != MAXDWORD && show > 11)) return FALSE;
+			options.waitExit = (flags & 1) != 0;
+			options.literalArguments = (flags & 2) != 0;
+			options.showWindow = static_cast<int>(show);
 		}
 		options.enabled = TRUE;
 		return cursor == end;
@@ -459,8 +480,9 @@ CProfileCommandBroker::~CProfileCommandBroker()
 
 ProfileCommandForwardResult CProfileCommandBroker::Forward(
 	const AutomationOptions& options,
-	int& exitCode)
+	int& exitCode, AutomationProcessIdentity& process)
 {
+	ZeroMemory(&process, sizeof(process));
 	exitCode = AUTOMATION_EXIT_COMMAND_FORWARD_FAILED;
 	CString pipeName;
 	CString mutexName;
@@ -516,18 +538,20 @@ ProfileCommandForwardResult CProfileCommandBroker::Forward(
 		return PROFILE_COMMAND_TRANSPORT_FAILED;
 	}
 
-	CommandResponse response = { 0 };
+	WaitCommandResponse response = {};
+	const DWORD responseSize = options.waitExit || options.literalArguments || options.showWindow != -1 ? sizeof(response) : sizeof(response.header);
 	DWORD bytesRead = 0;
 	BOOL readResult = ReadFile(
-		pipeHandle, &response, sizeof(response), &bytesRead, NULL);
+		pipeHandle, &response, responseSize, &bytesRead, NULL);
 	CloseHandle(pipeHandle);
-	if (!readResult || bytesRead != sizeof(response) ||
-		response.magic != kCommandMagic || response.version != reinterpret_cast<const CommandHeader*>(&request[0])->version ||
-		response.size != sizeof(response))
+	if (!readResult || bytesRead != responseSize ||
+		response.header.magic != kCommandMagic || response.header.version != reinterpret_cast<const CommandHeader*>(&request[0])->version ||
+		response.header.size != responseSize)
 	{
 		return PROFILE_COMMAND_TRANSPORT_FAILED;
 	}
-	exitCode = response.exitCode;
+	exitCode = response.header.exitCode;
+	process = response.process;
 	return PROFILE_COMMAND_HANDLED;
 }
 
@@ -751,10 +775,19 @@ BOOL CProfileCommandBroker::ProcessClient(HANDLE pipeHandle)
 	CommandResponse response = { kCommandMagic, kCommandVersion,
 		sizeof(CommandResponse), AUTOMATION_EXIT_INVALID_COMMAND_LINE };
 	if (bytesRead >= sizeof(CommandHeader)) response.version = reinterpret_cast<const CommandHeader*>(&buffer[0])->version;
+	AutomationProcessIdentity process = {};
+	auto reply = [&]() -> BOOL {
+		if (response.version == kWaitCommandVersion || response.version == kShellCommandVersion) {
+			WaitCommandResponse extended = { response, process };
+			extended.header.size = sizeof(extended);
+			return WritePipeMessage(pipeHandle, m_stopEvent, &extended, sizeof(extended));
+		}
+		return WritePipeMessage(pipeHandle, m_stopEvent, &response, sizeof(response));
+	};
 	if (!ParseCommand(&buffer[0], bytesRead, options) ||
 		options.profileName.CompareNoCase(m_profileName) != 0)
 	{
-		return WritePipeMessage(pipeHandle, m_stopEvent, &response, sizeof(response));
+		return reply();
 	}
 
 	CProfileCommandRequest* request = new CProfileCommandRequest();
@@ -766,7 +799,7 @@ BOOL CProfileCommandBroker::ProcessClient(HANDLE pipeHandle)
 			request->Release();
 		}
 		response.exitCode = AUTOMATION_EXIT_CREATE_PROCESS_FAILED;
-		return WritePipeMessage(pipeHandle, m_stopEvent, &response, sizeof(response));
+		return reply();
 	}
 	request->options = options;
 
@@ -776,7 +809,7 @@ BOOL CProfileCommandBroker::ProcessClient(HANDLE pipeHandle)
 		request->Release();
 		request->Release();
 		response.exitCode = AUTOMATION_EXIT_CREATE_PROCESS_FAILED;
-		return WritePipeMessage(pipeHandle, m_stopEvent, &response, sizeof(response));
+		return reply();
 	}
 
 	HANDLE waits[] = { m_stopEvent, request->completedEvent };
@@ -784,8 +817,9 @@ BOOL CProfileCommandBroker::ProcessClient(HANDLE pipeHandle)
 	if (waitResult == WAIT_OBJECT_0 + 1)
 	{
 		response.exitCode = request->exitCode;
+		process = request->process;
 		request->Release();
-		return WritePipeMessage(pipeHandle, m_stopEvent, &response, sizeof(response));
+		return reply();
 	}
 
 	InterlockedExchange(&request->cancelled, TRUE);

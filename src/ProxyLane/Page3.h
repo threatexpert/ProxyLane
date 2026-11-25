@@ -9,6 +9,7 @@
 #include "BrowserLaunchWatch.h"
 #include "LaunchPanel.h"
 #include "AsyncSnapshot.h"
+#include "AutomationProcessWait.h"
 #include <list>
 #include <map>
 #include <set>
@@ -202,7 +203,8 @@ private:
 	BOOL m_browserNotificationActive = FALSE;
 	BOOL m_showingBrowserWarning = FALSE;
 	BOOL IsBrowserCandidateHooked(const BrowserLaunchWatch::Identity& identity) const;
-	BrowserLaunchWatch::Observation CaptureBrowserCandidates(LPCTSTR path);
+	BrowserLaunchWatch::Observation CaptureBrowserCandidates(LPCTSTR path, BOOL shellLaunch);
+	std::vector<BrowserLaunchWatch::Identity> m_pendingBrowserSelection;
 	void WatchBrowserLaunch(BrowserLaunchWatch::Observation observation, DWORD pid, ULONGLONG time, DWORD started);
 	void CheckBrowserLaunches();
 	void ApplyBrowserProcessAction(const CString& name,
@@ -266,15 +268,16 @@ public:
 	void ClearBrowserNotifications();
 
 	void OnDropAppFile(TCHAR *pFileName);
-	AppLaunchResult LaunchAutomationApplication(const AutomationOptions& options);
+	AppLaunchResult LaunchAutomationApplication(const AutomationOptions& options, AutomationProcessIdentity* process = NULL);
 	AppLaunchResult LaunchAndProxyApp(
 		LPCTSTR fileName,
 		const std::vector<CString>& extraArguments,
 		BOOL strictInjection,
 		AppLaunchElevationMode elevationMode = APP_LAUNCH_ELEVATION_AUTO,
 		const CString& initialArguments = CString(),
-		const CString& initialWorkingDirectory = CString());
-	AppLaunchResult LaunchPackagedAppById(LPCTSTR aumid, const CString& arguments, AppLauncherResult* outcome = NULL);
+		const CString& initialWorkingDirectory = CString(), AutomationProcessIdentity* process = NULL,
+		BOOL literalArguments = FALSE, int showWindow = -1, BOOL shellLaunch = FALSE);
+	AppLaunchResult LaunchPackagedAppById(LPCTSTR aumid, const CString& arguments, AppLauncherResult* outcome = NULL, AutomationProcessIdentity* process = NULL);
 	BOOL GetAppLauncherHostInfo(AppLauncherHostInfo* info) override;
 	BOOL LaunchAppFromShell(const AppLauncherRequest& request, AppLauncherResult& result) override;
 	AppLaunchResult LaunchInteractiveApplication(const InstalledApplications::Application& app,
@@ -290,7 +293,7 @@ public:
 		LPCTSTR fileName,
 		const CString& manifestDir,
 		const std::vector<CString>& extraArguments,
-		const CString& initialArguments = CString());
+		const CString& initialArguments = CString(), AutomationProcessIdentity* process = NULL);
 	BOOL InjectNewProcess(LPHookNewProcessInfo lphnpi);
 	BOOL ShouldProxyChildProcess(LPHookNewProcessInfo lphnpi);
 

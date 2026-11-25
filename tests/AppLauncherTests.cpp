@@ -20,7 +20,7 @@ int wmain()
     Check(!ParseExplorerLaunch(path,L"explorer.exe C:\\",aumid),"ordinary Explorer untouched");
     Check(!ValidAumid(L"family!App!Other") && !ValidAumid(L"family!App/Other") && !ValidAumid(L"family!") && !ValidAumid(L"!App"),"invalid AUMIDs");
     Check(ValidId(L"{12345678-1234-1234-1234-123456789abc}") && !ValidId(L"arbitrary"),"request ID");
-    Check(sizeof(AppLauncherHostInfo)==536 && sizeof(AppLauncherRequest)==624 && sizeof(AppLauncherResult)==12,"wire layout");
+    Check(sizeof(AppLauncherHostInfo)==1048 && offsetof(AppLauncherHostInfo,profile)==AppLauncherHostInfoV1Size && sizeof(AppLauncherRequest)==624 && sizeof(AppLauncherResult)==12,"wire layout");
     Check(ProcessTime(GetCurrentProcess())!=0,"process identity");
     puts("PASS AppsFolder parser and wire records");return 0;
 }

@@ -20,7 +20,8 @@ struct AutomationOptions
 	AutomationOptions()
 		: enabled(FALSE)
 		, showHelp(FALSE)
-		, elevated(FALSE), packaged(FALSE), shortcut(FALSE)
+		, elevated(FALSE), packaged(FALSE), shortcut(FALSE), waitExit(FALSE)
+		, literalArguments(FALSE), showWindow(-1)
 	{
 	}
 
@@ -34,8 +35,12 @@ struct AutomationOptions
 	BOOL elevated;
 	BOOL packaged;
 	BOOL shortcut; // User-created link: report failures visibly, unlike unattended CLI calls.
+	BOOL waitExit; // Explicit launcher mode; ordinary --auto remains asynchronous.
+	BOOL literalArguments; // Shell has already interpreted the original request.
+	int showWindow; // -1 keeps the ordinary CLI's default STARTUPINFO.
 	std::vector<CString> targetArguments;
 	CString bootstrapEventName;
+	CString shellPipe; // Shell runas helper already owns the requested elevated token.
 };
 
 BOOL ParseAutomationOptions(

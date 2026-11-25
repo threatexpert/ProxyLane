@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AutomationOptions.h"
+#include "AutomationProcessWait.h"
 
 #include <vector>
 
@@ -27,6 +28,7 @@ public:
 	HANDLE completedEvent;
 	AutomationOptions options;
 	int exitCode;
+	AutomationProcessIdentity process = {};
 };
 
 class CProfileCommandBroker
@@ -37,7 +39,7 @@ public:
 
 	ProfileCommandForwardResult Forward(
 		const AutomationOptions& options,
-		int& exitCode);
+		int& exitCode, AutomationProcessIdentity& process);
 	BOOL AcquireLaunchGate(LPCTSTR profileName);
 	void ReleaseLaunchGate();
 

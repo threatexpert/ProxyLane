@@ -407,10 +407,13 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
         }
 		case PRCPD_GETSTARTUPINFO:
 			{
-				const bool launcherExtended=hdr.flag==3;
+				const bool shellExtended=hdr.flag==4;
+				const bool launcherExtended=hdr.flag==3 || shellExtended;
 				const bool extended=hdr.flag==2 || launcherExtended;
 				AppLauncherHostInfo launcher = {};
 				if(launcherExtended) m_pPRC->m_pGlobalProxy->GetLogInstance()->GetAppLauncherHostInfo(&launcher);
+				const DWORD launcherSize = shellExtended ? sizeof(launcher) : AppLauncherHostInfoV1Size;
+				if(!shellExtended && launcher.version==2) launcher.version=1;
 				PRCINFO info;
 				if (!m_pPRC->GetStartupInfo(&info))
 					goto SEC_ERROR;
@@ -418,7 +421,7 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 				//先写协议头
 				hdr.action = PRCPD_REPLY;
 				hdr.flag = 1;// means true
-				hdr.dataSize = sizeof(info)+(extended?sizeof(DWORD):0)+(launcherExtended?sizeof(launcher):0);
+				hdr.dataSize = sizeof(info)+(extended?sizeof(DWORD):0)+(launcherExtended?launcherSize:0);
 				if (! WritePipe(hPipe, &hdr, sizeof(hdr)))
 					goto SEC_ERROR;
 				//写数据
@@ -429,7 +432,7 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
                     DWORD policy=BrowserQuicPolicy::Preference()&&settings.bHookUDP&&!settings.bBlockUDP?1:0;
                     if(!WritePipe(hPipe,&policy,sizeof(policy)))goto SEC_ERROR;
                 }
-                if(launcherExtended && !WritePipe(hPipe,&launcher,sizeof(launcher)))goto SEC_ERROR;
+                if(launcherExtended && !WritePipe(hPipe,&launcher,launcherSize))goto SEC_ERROR;
 
 			}
 			break;
@@ -589,12 +592,13 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 					goto SEC_ERROR;
 
                 const bool recordOnly = hdr.flag == 1;
+                const bool queryOnly = hdr.flag == 2;
                 HookNewProcessInfo& hnpi = notice.child;
                 hnpi.szAppPath[_countof(hnpi.szAppPath)-1] = L'\0';
                 hnpi.szCommandLine[_countof(hnpi.szCommandLine)-1] = L'\0';
                 notice.parent.szAppPath[_countof(notice.parent.szAppPath)-1] = L'\0';
                 // Record successful creation before injection/filter decisions.
-                RecordProcessCreation(m_pPRC->m_pGlobalProxy->GetTlsControl(),
+                if (!queryOnly) RecordProcessCreation(m_pPRC->m_pGlobalProxy->GetTlsControl(),
                     notice, recordOnly ? "launcher" : "hook");
 				//先写协议头
 				hdr.action = PRCPD_REPLY;
@@ -602,7 +606,7 @@ DWORD WINAPI CPRCPipeServer::_InstanceThread(HANDLE hPipe, HANDLE hThread)
 				hdr.dataSize = 0;
 
 				hdr.flag = recordOnly || (BYTE)m_pPRC->m_pGlobalProxy->GetLogInstance()->ShouldInjectNewProcess(&hnpi);
-				if (!recordOnly && hdr.flag && !AuthorizeAppContainerChild(
+				if (!recordOnly && !queryOnly && hdr.flag && !AuthorizeAppContainerChild(
 					m_pPRC->m_pGlobalProxy, hnpi, pipeClientPid))
 				{
 					const DWORD error = GetLastError();

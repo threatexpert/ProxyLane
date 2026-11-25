@@ -451,6 +451,7 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="ProxyLaneHook.cpp" />
+    <ClCompile Include="ShellLaunchHooks.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="HookWinsock.cpp">
       <Optimization Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">MinSpace</Optimization>
       <FavorSizeOrSpeed Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Size</FavorSizeOrSpeed>
@@ -512,6 +513,7 @@
     <ClInclude Include="UdpBlockLogLimiter.h" />
     <ClInclude Include="AppContainerPipeAccess.h" />
     <ClInclude Include="HookWinsock.h" />
+    <ClInclude Include="ShellLaunchHooks.h" />
     <ClInclude Include="InjectDll.h" />
     <ClInclude Include="HookDispatch.h" />
     <ClInclude Include="DetourHooks.h" />

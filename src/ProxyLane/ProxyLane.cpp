@@ -11,6 +11,7 @@
 #include "Localization.h"
 #include "AppVersion.h"
 #include "AppLauncher.h"
+#include "ShellUrlLaunch.h"
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -76,12 +77,15 @@ BOOL CProxyLaneApp::PrepareAutomationCommandReceiver()
 	}
 
 	int forwardedExitCode = AUTOMATION_EXIT_COMMAND_FORWARD_FAILED;
+	AutomationProcessIdentity process = {};
 	ProfileCommandForwardResult forwardResult = m_profileCommandBroker.Forward(
-		m_automationOptions, forwardedExitCode);
+		m_automationOptions, forwardedExitCode, process);
 	if (forwardResult == PROFILE_COMMAND_HANDLED)
 	{
 		m_automationExitCode = forwardedExitCode;
 		m_profileCommandBroker.ReleaseLaunchGate();
+		if (m_automationOptions.waitExit && forwardedExitCode == AUTOMATION_EXIT_SUCCESS)
+			SetAutomationTargetExitCode(WaitForAutomationProcess(process));
 		return FALSE;
 	}
 	if (forwardResult == PROFILE_COMMAND_TRANSPORT_FAILED)
@@ -209,17 +213,97 @@ BOOL CProxyLaneApp::InitInstance()
 		return FALSE;
 	}
 
+	// Resolve Shell shortcuts in the PL helper, using PL's existing resolver.
+	// This instance inherits the Shell caller/Explorer environment; the GUI may
+	// have a different environment. Expand stored link arguments here exactly once.
+	if (m_automationOptions.enabled && m_automationOptions.waitExit && m_automationOptions.literalArguments &&
+		m_automationOptions.showWindow >= 0 && !m_automationOptions.packaged &&
+		!_wcsicmp(PathFindExtensionW(m_automationOptions.targetPath), L".lnk"))
+	{
+		InstalledApplications::Application shortcut;
+		CString arguments;
+		if (InstalledApplications::ResolveShortcut(m_automationOptions.targetPath, shortcut) &&
+			ExpandLaunchEnvironment(shortcut.arguments, arguments)) {
+			m_automationOptions.targetPath = shortcut.IsPackaged() ? shortcut.aumid : shortcut.path;
+			m_automationOptions.packaged = shortcut.IsPackaged();
+			if (!arguments.IsEmpty() && !m_automationOptions.initialArguments.IsEmpty()) arguments += L" ";
+			arguments += m_automationOptions.initialArguments;
+			m_automationOptions.initialArguments = arguments;
+			if (!shortcut.workingDirectory.IsEmpty()) m_automationOptions.workingDirectory = shortcut.workingDirectory;
+			if (m_automationOptions.showWindow == SW_SHOWNORMAL) m_automationOptions.showWindow = shortcut.showWindow;
+		}
+	}
+
+	// Resolve URL associations in the caller's environment, before handing the
+	// actual browser to the GUI's normal injected launch and reuse observation.
+	if (m_automationOptions.enabled && !m_automationOptions.packaged &&
+		ShellUrlLaunch::IsWebUrl(m_automationOptions.targetPath))
+	{
+		CString executable, arguments;
+		HRESULT resolved = m_automationOptions.initialArguments.IsEmpty() && m_automationOptions.targetArguments.empty()
+			? ShellUrlLaunch::Resolve(m_automationOptions.targetPath, executable, arguments) : E_INVALIDARG;
+		if (FAILED(resolved) || LaunchShortcut::IsProxyLaneExecutable(executable))
+		{
+			const DWORD error = FAILED(resolved) ? (HRESULT_FACILITY(resolved) == FACILITY_WIN32 ? HRESULT_CODE(resolved) : ERROR_NOT_SUPPORTED) : ERROR_INVALID_NAME;
+			LogShellHelperFailure(m_automationOptions.shellPipe, m_automationOptions.targetPath, error);
+			m_automationExitCode = AUTOMATION_EXIT_TARGET_INVALID;
+			return FALSE;
+		}
+		m_automationOptions.targetPath = executable;
+		m_automationOptions.initialArguments = arguments;
+		m_automationOptions.literalArguments = TRUE;
+	}
+
+	// Shell's runas has already performed UAC. Keep this token for the real
+	// target rather than forwarding to a medium-integrity GUI and prompting again.
+	if (m_automationOptions.enabled && m_automationOptions.waitExit && m_automationOptions.elevated &&
+		!m_automationOptions.packaged && !m_automationOptions.shellPipe.IsEmpty() && IsUserAnAdmin())
+	{
+		CString command = QuoteCommandLineArgument(m_automationOptions.targetPath);
+		if (!m_automationOptions.initialArguments.IsEmpty()) command += L" " + m_automationOptions.initialArguments;
+		STARTUPINFO startup = { sizeof(startup) }; PROCESS_INFORMATION process = {};
+		if (m_automationOptions.showWindow >= 0) { startup.dwFlags = STARTF_USESHOWWINDOW; startup.wShowWindow = static_cast<WORD>(m_automationOptions.showWindow); }
+		BOOL created = CreateProcessW(m_automationOptions.targetPath, command.GetBuffer(), NULL, NULL, FALSE, CREATE_SUSPENDED, NULL,
+			m_automationOptions.workingDirectory.IsEmpty() ? NULL : static_cast<LPCWSTR>(m_automationOptions.workingDirectory), &startup, &process);
+		command.ReleaseBuffer();
+		if (!created) {
+			DWORD error = GetLastError();
+			LogShellHelperFailure(m_automationOptions.shellPipe, m_automationOptions.targetPath, error);
+			m_automationExitCode = AUTOMATION_EXIT_CREATE_PROCESS_FAILED; return FALSE;
+		}
+		if (!gp_InjectAndResumeShellChild(&process, m_automationOptions.targetPath, command,
+			CStringA(m_automationOptions.shellPipe))) {
+			const DWORD error = GetLastError();
+			TerminateProcess(process.hProcess, AUTOMATION_EXIT_INJECTION_FAILED);
+			CloseHandle(process.hThread);
+			CloseHandle(process.hProcess);
+			LogShellHelperFailure(m_automationOptions.shellPipe, m_automationOptions.targetPath, error);
+			m_automationExitCode = AUTOMATION_EXIT_INJECTION_FAILED;
+			return FALSE;
+		}
+		CloseHandle(process.hThread);
+		DWORD code = 0;
+		if (WaitForSingleObject(process.hProcess, INFINITE) == WAIT_OBJECT_0) GetExitCodeProcess(process.hProcess, &code);
+		CloseHandle(process.hProcess);
+		SetAutomationTargetExitCode(code);
+		return FALSE;
+	}
+
 	if (forwardsToNative)
 	{
 		if (m_automationOptions.enabled)
 		{
 			int forwardedExitCode = AUTOMATION_EXIT_COMMAND_FORWARD_FAILED;
+			AutomationProcessIdentity process = {};
 			ProfileCommandForwardResult forwardResult =
-				m_profileCommandBroker.Forward(m_automationOptions, forwardedExitCode);
+				m_profileCommandBroker.Forward(m_automationOptions, forwardedExitCode, process);
 			if (forwardResult == PROFILE_COMMAND_HANDLED ||
 				forwardResult == PROFILE_COMMAND_TRANSPORT_FAILED)
 			{
 				m_automationExitCode = forwardedExitCode;
+				if (forwardResult == PROFILE_COMMAND_HANDLED && m_automationOptions.waitExit &&
+					forwardedExitCode == AUTOMATION_EXIT_SUCCESS)
+					SetAutomationTargetExitCode(WaitForAutomationProcess(process));
 				return FALSE;
 			}
 		}
@@ -292,14 +376,15 @@ BOOL CProxyLaneApp::InitInstance()
 					handles,
 					FALSE,
 					INFINITE);
-				if (waitResult == WAIT_OBJECT_0)
+				if (waitResult == WAIT_OBJECT_0 && !m_automationOptions.waitExit)
 				{
 					m_automationExitCode = AUTOMATION_EXIT_SUCCESS;
 				}
-				else if (waitResult == WAIT_OBJECT_0 + 1)
+				else if (waitResult == WAIT_OBJECT_0 + 1 || waitResult == WAIT_OBJECT_0)
 				{
 					DWORD childExitCode = AUTOMATION_EXIT_ARCH_FORWARD_FAILED;
-					GetExitCodeProcess(ShExecInfo.hProcess, &childExitCode);
+					if (WaitForSingleObject(ShExecInfo.hProcess, INFINITE) == WAIT_OBJECT_0)
+						GetExitCodeProcess(ShExecInfo.hProcess, &childExitCode);
 					m_automationExitCode = (int)childExitCode;
 				}
 				else

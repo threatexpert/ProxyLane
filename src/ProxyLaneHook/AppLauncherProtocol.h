@@ -12,7 +12,9 @@ struct AppLauncherHostInfo
     DWORD processId;
     ULONGLONG creationTime;
     WCHAR executable[MAX_PATH];
+    WCHAR profile[256]; // v2: the already-running profile for the CLI helper.
 };
+const DWORD AppLauncherHostInfoV1Size = 536;
 struct AppLauncherRequest
 {
     WCHAR id[40];

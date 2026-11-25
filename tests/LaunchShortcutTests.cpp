@@ -28,7 +28,8 @@ static void Equal(const AutomationOptions& a, const AutomationOptions& b)
     Check(a.profileName == b.profileName && a.targetPath == b.targetPath &&
         a.targetArguments == b.targetArguments && a.initialArguments == b.initialArguments &&
         a.workingDirectory == b.workingDirectory && a.elevated == b.elevated && a.packaged == b.packaged &&
-        a.applicationName == b.applicationName && a.shortcut == b.shortcut, "launch information round-trip");
+        a.applicationName == b.applicationName && a.shortcut == b.shortcut && a.waitExit == b.waitExit &&
+        a.literalArguments == b.literalArguments && a.showWindow == b.showWindow, "launch information round-trip");
 }
 static void TestArguments()
 {
@@ -82,7 +83,35 @@ static void TestArguments()
     AutomationOptions legacy; legacy.enabled = TRUE; legacy.profileName = L"A"; legacy.targetPath = L"app.exe"; legacy.targetArguments.push_back(L"a b");
     Check(SerializeCommand(legacy, bytes) && reinterpret_cast<const CommandHeader*>(bytes.data())->version == 1 &&
         ParseCommand(bytes.data(), static_cast<DWORD>(bytes.size()), parsed), "v1 compatibility"); Equal(legacy, parsed);
+    legacy.waitExit = TRUE;
+    Check(SerializeCommand(legacy, bytes) && reinterpret_cast<const CommandHeader*>(bytes.data())->version == 4 &&
+        ParseCommand(bytes.data(), static_cast<DWORD>(bytes.size()), parsed), "optional wait v4 codec"); Equal(legacy, parsed);
+    legacy.targetArguments.clear();
+    Check(ParseAutomationOptions(L"ProxyLane.exe " + BuildAutomationCommandLine(legacy, NULL), parsed, error), "wait CLI round-trip"); Equal(legacy, parsed);
+    Check(!ParseAutomationOptions(L"ProxyLane.exe --auto --profile A --run app.exe --wait-exit --wait-exit", parsed, error), "reject duplicate wait");
+    Check(ParseAutomationOptions(L"ProxyLane.exe --auto --profile A --run app.exe -- --wait-exit", parsed, error) && !parsed.waitExit, "target's wait flag stays opaque");
+    legacy.literalArguments = TRUE; legacy.showWindow = SW_HIDE;
+    Check(SerializeCommand(legacy, bytes) && reinterpret_cast<const CommandHeader*>(bytes.data())->version == 5 &&
+        ParseCommand(bytes.data(), static_cast<DWORD>(bytes.size()), parsed), "shell metadata codec"); Equal(legacy, parsed);
+    Check(ParseAutomationOptions(L"ProxyLane.exe " + BuildAutomationCommandLine(legacy, NULL), parsed, error), "shell CLI forwarding"); Equal(legacy, parsed);
+    Check(!ParseAutomationOptions(L"ProxyLane.exe --auto --profile A --run app.exe --show-window 99", parsed, error), "reject invalid show command");
     std::cout << "CLI quoting, launch metadata, notification metadata and released-protocol compatibility: PASS\n";
+}
+
+static void TestWaitIdentity()
+{
+    AutomationProcessIdentity identity = {};
+    Check(WaitForAutomationProcess(identity) == 0, "missing identity falls back to success");
+    FILETIME exited, kernel, user;
+    identity.pid = GetCurrentProcessId();
+    Check(GetProcessTimes(GetCurrentProcess(), &identity.created, &exited, &kernel, &user) != FALSE, "read identity");
+    HANDLE process = OpenAutomationProcess(identity);
+    Check(process != NULL, "matching identity can be opened"); CloseHandle(process);
+    identity.created.dwLowDateTime ^= 1;
+    Check(WaitForAutomationProcess(identity) == 0, "mismatched PID identity never waits");
+    identity.pid = 0xFFFFFFFC;
+    Check(WaitForAutomationProcess(identity) == 0, "unopenable PID falls back to success");
+    std::cout << "Wait identity matching and best-effort fallback: PASS\n";
 }
 
 static void TestRawTailBoundary()
@@ -194,7 +223,7 @@ int wmain()
     const CString flag = ConfigStorage::Directory(LaunchShortcut::ExecutablePath()) + L"\\portable.flag";
     HANDLE marker = CreateFile(flag, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
     const bool createdMarker = marker != INVALID_HANDLE_VALUE; if (createdMarker) CloseHandle(marker);
-    try { TestArguments(); TestRawTailBoundary(); TestEnvironment(); TestLinks(directory, icon); }
+    try { TestArguments(); TestWaitIdentity(); TestRawTailBoundary(); TestEnvironment(); TestLinks(directory, icon); }
     catch (const std::exception& error) { std::cerr << "FAIL: " << error.what() << " error=" << GetLastError() << "\n"; result = 1; }
     DeleteFile(directory + L"\\source.lnk"); SetFileAttributes(directory + L"\\launch.lnk", FILE_ATTRIBUTE_NORMAL);
     DeleteFile(directory + L"\\launch.lnk"); RemoveDirectory(directory);

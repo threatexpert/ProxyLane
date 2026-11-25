@@ -3,6 +3,7 @@ EXPORTS
 	ReleaseGlobalProxyInstance
 	gp_HookWinsock
 	gp_UnhookWinsock
+	gp_InjectAndResumeShellChild
 	AttachTo
 	AttachToI
 	ElevatedLaunch

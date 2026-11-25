@@ -20,6 +20,24 @@ from ExitWarningE2ETests import (USER, CALLBACK, wait_for, windows, settings_pag
 from ProcessListE2ETests import Item, api, open_process, allocate, release, read, write, close
 
 
+class NotifyIconData(C.Structure):
+    _fields_ = [('size', W.DWORD), ('window', W.HWND), ('id', W.UINT), ('flags', W.UINT),
+                ('callback', W.UINT), ('icon', W.HANDLE), ('tip', W.WCHAR * 128),
+                ('state', W.DWORD), ('state_mask', W.DWORD), ('info', W.WCHAR * 256),
+                ('timeout', W.UINT), ('title', W.WCHAR * 64), ('info_flags', W.DWORD),
+                ('guid', C.c_byte * 16), ('balloon_icon', W.HANDLE)]
+
+
+def dismiss_native_balloon(main):
+    # A synthetic NIN_BALLOONUSERCLICK does not dismiss Explorer's real balloon.
+    # Remove it while the app has already consumed the click, before the next
+    # test notification; otherwise its later HIDE callback belongs to the old one.
+    data = NotifyIconData(size=C.sizeof(NotifyIconData), window=main, id=102, flags=0x10)
+    notify = C.WinDLL('shell32').Shell_NotifyIconW
+    notify.argtypes = [W.DWORD, C.POINTER(NotifyIconData)]
+    assert notify(1, C.byref(data))
+
+
 def drop(main, path):
     payload = struct.pack('<IiiII', 20, 0, 0, 0, 1) + (str(path) + '\0\0').encode('utf-16-le')
     alloc = api('GlobalAlloc', W.HANDLE, W.UINT, C.c_size_t)
@@ -34,12 +52,12 @@ def drop(main, path):
     assert USER.PostMessageW(main, 0x233, memory, 0)  # Receiver owns HDROP.
 
 
-def run(probe, browser, language, actions=False):
+def run(probe, browser, language, actions=False, binaries=Path('bin'), shell_launch=False):
     directory = Path('build/qa/browser-reuse-' + uuid.uuid4().hex[:8]).resolve()
     directory.mkdir(parents=True)
     # Win32 launchers forward to this GUI on a 64-bit OS.
     for name in ('ProxyLane64.exe', 'ProxyLaneHook64.dll', 'ProxyLaneHook32.dll'):
-        shutil.copy2(Path('bin') / name, directory / name)
+        shutil.copy2(binaries / name, directory / name)
     executable = directory / browser
     shutil.copy2(probe, executable)
     (directory / 'portable.flag').touch()
@@ -85,24 +103,71 @@ Transport=PLAIN
         alternate.mkdir()
         shutil.copy2(probe, alternate / browser)
         unrelated = hold(alternate / browser)
-        owner = subprocess.Popen([str(directory / 'ProxyLane64.exe')], cwd=directory,
+        owner_command = [str(directory / 'ProxyLane64.exe')]
+        if shell_launch:
+            owner_command += ['--auto', '--profile', 'BrowserTest', '--run', str(executable)]
+        owner = subprocess.Popen(owner_command, cwd=directory,
                                  creationflags=subprocess.CREATE_NO_WINDOW)
         main = wait_for(lambda: next((w for w in windows(owner.pid) if not USER.GetParent(w)), None), 'main')
         settings = wait_for(lambda: settings_page(main), 'settings')
-        USER.PostMessageW(settings, 0x111, 1, 0)
+        if not shell_launch:
+            USER.PostMessageW(settings, 0x111, 1, 0)
+        else:
+            wait_for(lambda: (directory / 'launched.pid').exists(), 'automation startup target')
+            initial_pid = int((directory / 'launched.pid').read_text())
+            wait_for(lambda: not psutil.pid_exists(initial_pid), 'automation startup target exit')
+            wait_for(lambda: owned_pipe(owner.pid), 'automation proxy service')
+            # Use the app's tray-open action; background owners intentionally
+            # suppress unsolicited ShowWindow calls while m_stayInTray is set.
+            USER.SendMessageW(main, 0x8000 + 100, 102, 0x203)
         pipe = wait_for(lambda: owned_pipe(owner.pid), 'proxy service')
+        # Starting a profile may select Apps; verify actions from Profiles.
+        USER.GetDpiForWindow.argtypes = [W.HWND]
+        scale = USER.GetDpiForWindow(main) / 96
+        USER.SendMessageW(USER.GetParent(settings), 0x201, 1,
+                          int(30 * scale) | (int(136 * scale) << 16))
+        wait_for(lambda: USER.IsWindowVisible(settings), 'profiles page')
+        log_controls = []
+        @CALLBACK
+        def find_log(window, _):
+            if USER.GetDlgItem(window, 1043):
+                log_controls.append(USER.GetDlgItem(window, 1000))
+            return True
+        USER.EnumChildWindows(main, find_log, 0)
+        assert len(log_controls) == 1
+        clicked_notices = 0
+        cleared_notices = 0
 
         def hint():
+            nonlocal clicked_notices, cleared_notices
             result = next((w for w in windows(owner.pid) if USER.GetDlgItem(w, 1134)), None)
+            if result and cleared_notices < clicked_notices:
+                dismiss_native_balloon(main)
+                cleared_notices = clicked_notices
             if not result:
-                # Exercise the tray-click callback, not an automatic popup.
-                USER.PostMessageW(main, 0x8000 + 100, 102, 0x400 + 5)
+                # One user click per issued notification. Repeated synthetic
+                # clicks can arrive inside the next modal confirmation/dialog.
+                sent = text(log_controls[0]).count('系统已接受通知请求' if language == 'zh-CN'
+                                                  else 'The system accepted the notification request')
+                if sent > clicked_notices and USER.IsWindowEnabled(main):
+                    clicked_notices = sent
+                    USER.PostMessageW(main, 0x8000 + 100, 102, 0x400 + 5)
             return result
 
         def launch():
             marker = directory / 'launched.pid'
             marker.unlink(missing_ok=True)
-            drop(main, executable)
+            if shell_launch:
+                # Same metadata as the URL helper after association resolution.
+                # Host itself was started with --auto: the old global guard must
+                # not suppress this request's browser-reuse observation.
+                helper = subprocess.Popen([str(directory / 'ProxyLane64.exe'), '--auto',
+                    '--profile', 'BrowserTest', '--wait-exit', '--literal-arguments',
+                    '--show-window', '1', '--working-directory', str(directory), '--run', str(executable)],
+                    cwd=directory, creationflags=subprocess.CREATE_NO_WINDOW)
+                processes.append(helper)
+            else:
+                drop(main, executable)
             wait_for(lambda: marker.exists() and marker.stat().st_size, 'probe started through launcher')
 
         def no_hint(seconds):
@@ -154,6 +219,7 @@ Transport=PLAIN
             dismiss(dialog, 1138)
             confirm = message_box(6)
             dismiss(confirm, 7)
+            wait_for(lambda: not USER.IsWindow(confirm) and USER.IsWindowEnabled(main), 'cancel confirmation completed')
             assert candidate.poll() is None and candidate_network.is_running()
             assert USER.IsWindowVisible(settings)
 
@@ -257,7 +323,7 @@ Transport=PLAIN
                 assert read(handle, memory + 256, value, C.sizeof(value), None)
                 result.append(int(value.value))
 
-        assert set(selected_pids()) == {candidate.pid, candidate_network.pid}, selected_pids()
+        wait_for(lambda: set(selected_pids()) == {candidate.pid, candidate_network.pid}, 'candidate selection after posted click')
         assert candidate.poll() is None and unrelated.poll() is None
         USER.RedrawWindow.argtypes = [W.HWND, C.c_void_p, W.HANDLE, W.UINT]
         USER.RedrawWindow(main, None, None, 0x185)  # Paint pending page changes, including children.
@@ -281,7 +347,7 @@ Transport=PLAIN
         candidate.terminate()
         candidate.wait(timeout=10)
         dismiss(dialog, 1)
-        assert selected_pids() == []
+        wait_for(lambda: selected_pids() == [], 'clear expired candidate selection')
 
         # Same-name process in another path alone is insufficient evidence.
         launch()
@@ -301,7 +367,7 @@ Transport=PLAIN
         details = text(USER.GetDlgItem(dialog, 1134))
         assert str(hooked.pid) in details and str(hooked_network.pid) in details, details
         dismiss(dialog, 1)
-        assert set(selected_pids()) == {hooked.pid, hooked_network.pid}, selected_pids()
+        wait_for(lambda: set(selected_pids()) == {hooked.pid, hooked_network.pid}, 'partial instance selection after posted click')
 
         # Hook both required roles. The existing renderer remains unhooked and must be ignored.
         attach(directory, bits, hooked_network.pid, pipe)
@@ -311,6 +377,18 @@ Transport=PLAIN
         print(f'PASS: {browser}, {language}, quick exit, candidate selection, independent instance, '
               f'2.5s boundary, exited candidate, other installation, main-only warning and '
               f'main+network coverage with unhooked renderer; screenshot={directory}', flush=True)
+    except Exception:
+        if owner and 'main' in locals() and USER.IsWindow(main):
+            capture_dialog(main, directory / 'failure.png')
+            @CALLBACK
+            def save_log(window, _):
+                if USER.GetDlgItem(window, 1043):
+                    (directory / 'runtime.log').write_text(text(USER.GetDlgItem(window, 1000)), encoding='utf-8')
+                return True
+            USER.EnumChildWindows(main, save_log, 0)
+            print('Failure artifacts:', directory, 'main visible=', USER.IsWindowVisible(main),
+                  'profiles visible=', USER.IsWindowVisible(settings), flush=True)
+        raise
     finally:
         if memory:
             release(handle, memory, 0, 0x8000)
@@ -336,5 +414,7 @@ if __name__ == '__main__':
     parser.add_argument('--browser', choices=('msedge.exe', 'chrome.exe'), default='msedge.exe')
     parser.add_argument('--language', choices=('zh-CN', 'en-US'), default='zh-CN')
     parser.add_argument('--actions', action='store_true')
+    parser.add_argument('--bin', type=Path, default=Path('bin'))
+    parser.add_argument('--shell-launch', action='store_true')
     args = parser.parse_args()
-    run(args.probe.resolve(), args.browser, args.language, args.actions)
+    run(args.probe.resolve(), args.browser, args.language, args.actions, args.bin, args.shell_launch)

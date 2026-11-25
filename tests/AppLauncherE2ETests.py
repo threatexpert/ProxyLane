@@ -23,7 +23,7 @@ from ManagedStartupE2ETests import stop_tree
 from ExitWarningE2ETests import USER, CALLBACK, windows, text as window_text, wait_for
 
 
-def launcher_log(owner):
+def launcher_log(owner, markers=('[Launch]', '[启动]', 'AppsFolder activation:')):
     main = wait_for(lambda: next((w for w in windows(owner.pid) if not USER.GetParent(w)), None), 'launcher GUI')
     edits = []
     @CALLBACK
@@ -35,7 +35,7 @@ def launcher_log(owner):
     assert len(edits) == 1 and edits[0], edits
     def completed_log():
         value = window_text(edits[0])
-        return value if any(marker in value for marker in ('[Launch]', '[启动]', 'AppsFolder activation:')) else None
+        return value if any(marker in value for marker in markers) else None
     return wait_for(completed_log, 'AppsFolder launch result')
 
 
@@ -106,6 +106,10 @@ def protocol_cases(root, package, family, observations):
         # Old startup layouts remain available to flag 0 and flag 2 clients.
         assert len(transact(pipe, 1, 0)) == len(startup) - 540
         assert len(transact(pipe, 1, 2)) == len(startup) - 536
+        extended = transact(pipe, 1, 4)
+        assert len(extended) == len(startup) + 512
+        assert struct.unpack('<IIQ', extended[-1048:-1032]) == (2, host_pid, host_time)
+        assert extended[-512:].decode('utf-16le').split('\0')[0] == 'AppsFolderTest'
         def request(aumid, request_id=None):
             request_id = request_id or '{' + str(uuid.uuid4()) + '}'
             return (request_id.encode('utf-16le').ljust(80, b'\0') + aumid.encode('utf-16le').ljust(512, b'\0')
@@ -170,6 +174,14 @@ def main():
     parser.add_argument('--language', choices=('en-US', 'zh-CN'), default='en-US')
     parser.add_argument('--case', choices=('shell', 'bare', 'newconsole', 'token'), help='Run one launcher variant on x86 and x64')
     args = parser.parse_args()
+    # The disposable controller must not inherit the user's proxy: it hosts the
+    # mock SOCKS server and must launch exactly the binaries under test.
+    kernel = ctypes.WinDLL('kernel32')
+    kernel.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+    kernel.GetModuleHandleW.restype = ctypes.c_void_p
+    hook = 'ProxyLaneHook%d.dll' % (ctypes.sizeof(ctypes.c_void_p) * 8)
+    if kernel.GetModuleHandleW(hook):
+        assert ctypes.WinDLL(hook).gp_UnhookWinsock(), 'Inherited Hook cannot be detached'
     root = Path('build/qa/app-launcher-' + uuid.uuid4().hex[:8]).resolve()
     root.mkdir(parents=True)
     package = root / 'package'
@@ -252,9 +264,9 @@ Transport=PLAIN
                     time.sleep(.1)
                 assert report.exists(), 'installer timed out: ' + str(list(package.glob('*.done')))
                 text = report.read_text(encoding='utf-8-sig')
+                assert text.startswith('PASS'), text
                 logs = launcher_log(owner)
                 (root / ('launcher-%d-%s.log' % (bits, mode))).write_text(logs, encoding='utf-8')
-                assert text.startswith('PASS'), text
                 marker = '[启动]' if args.language == 'zh-CN' else '[Launch]'
                 lines = [line for line in logs.splitlines() if marker in line]
                 assert len(lines) == 1 and ('probe%d.exe (' % bits) in lines[0] and 'probe64.exe (' in lines[0], logs

@@ -113,21 +113,24 @@ BOOL CPRCPipeClient::GetPRCStartupInfo(LPPRCINFO lpStartupInfo, bool* quicPolicy
     PRCPipeDataHead hdr={};hdr.action=PRCPD_GETSTARTUPINFO;
     // Opt-in extension: old hosts ignore the flag and return the original size;
     // old clients receive the original layout from new hosts.
-    hdr.flag=launcher?3:(quicPolicy?2:0);if(quicPolicy)*quicPolicy=false;
+    hdr.flag=launcher?4:(quicPolicy?2:0);if(quicPolicy)*quicPolicy=false;
     if(launcher) ZeroMemory(launcher,sizeof(*launcher));
     if(!WritePipe(&hdr,sizeof(hdr))||!ReadPipe(&hdr,sizeof(hdr)))return FALSE;
     if(hdr.action!=PRCPD_REPLY||hdr.flag!=1 ||
         (hdr.dataSize!=sizeof(*lpStartupInfo)&&
         (!(quicPolicy||launcher)||hdr.dataSize!=sizeof(*lpStartupInfo)+sizeof(DWORD))&&
-        (!launcher||hdr.dataSize!=sizeof(*lpStartupInfo)+sizeof(DWORD)+sizeof(*launcher)))) {
+        (!launcher||hdr.dataSize!=sizeof(*lpStartupInfo)+sizeof(DWORD)+sizeof(*launcher))&&
+        (!launcher||hdr.dataSize!=sizeof(*lpStartupInfo)+sizeof(DWORD)+AppLauncherHostInfoV1Size))) {
         ::SetLastError(ERROR_INVALID_DATA); return FALSE;
     }
     if(!ReadPipe(lpStartupInfo,sizeof(*lpStartupInfo)))return FALSE;
     if(hdr.dataSize>sizeof(*lpStartupInfo)) {DWORD flags=0;if(!ReadPipe(&flags,sizeof(flags)))return FALSE;if(quicPolicy)*quicPolicy=(flags&1)!=0;}
-    if(launcher && hdr.dataSize==sizeof(*lpStartupInfo)+sizeof(DWORD)+sizeof(*launcher)) {
-        if(!ReadPipe(launcher,sizeof(*launcher)))return FALSE;
-        if(launcher->version!=1 || !launcher->processId || !launcher->creationTime ||
+    if(launcher && hdr.dataSize>sizeof(*lpStartupInfo)+sizeof(DWORD)) {
+        const DWORD size = hdr.dataSize-sizeof(*lpStartupInfo)-sizeof(DWORD);
+        if(!ReadPipe(launcher,size))return FALSE;
+        if((launcher->version!=1 && launcher->version!=2) || !launcher->processId || !launcher->creationTime ||
             !launcher->executable[0] || launcher->executable[MAX_PATH-1]) ZeroMemory(launcher,sizeof(*launcher));
+        if(size==AppLauncherHostInfoV1Size || launcher->profile[255]) launcher->profile[0]=0;
     }
     return TRUE;
 }
@@ -259,13 +262,14 @@ BOOL CPRCPipeClient::PRCGetProxySettingsInfo(LPProxySettingsInfo lpPSI)
 }
 
 
-BOOL CPRCPipeClient::PRCShouldInjectNewProcess(LPHookNewProcessInfo lphnpi, bool recordOnly)
+BOOL CPRCPipeClient::PRCShouldInjectNewProcess(LPHookNewProcessInfo lphnpi, bool recordOnly, bool queryOnly, bool* replied)
 {
+	if (replied) *replied = false;
 	PRCPipeDataHead hdr;
     const HookProcessCreationNotice notice = MakeProcessCreationNotice(*lphnpi);
 
 	hdr.action = PRCPD_SHOULD_INJECT_NEW_PROCESS;
-	hdr.flag = recordOnly ? 1 : 0;
+	hdr.flag = queryOnly ? 2 : (recordOnly ? 1 : 0);
 	hdr.dataSize = sizeof(notice);
 
 	if(!WritePipe(&hdr, sizeof(hdr)))
@@ -277,10 +281,11 @@ BOOL CPRCPipeClient::PRCShouldInjectNewProcess(LPHookNewProcessInfo lphnpi, bool
 	if(!ReadPipe(&hdr, sizeof(hdr)))
 		return FALSE;
 
-	if(hdr.action != PRCPD_REPLY || hdr.flag != 1 || hdr.dataSize != 0)
+	if(hdr.action != PRCPD_REPLY || hdr.flag > 1 || hdr.dataSize != 0)
 		return FALSE;
 
-	return TRUE;
+	if (replied) *replied = true;
+	return hdr.flag == 1;
 }
 
 BOOL CPRCPipeClient::PRCNotifyChildInjectionResult(

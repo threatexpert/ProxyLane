@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Release|Win32"><Configuration>Release</Configuration><Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="ReleaseXP|Win32"><Configuration>ReleaseXP</Configuration><Platform>Win32</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals"><ProjectGuid>{53B8F9EF-4777-4580-B79F-BA4AE917C251}</ProjectGuid><WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion><WindowsTargetPlatformVersion Condition="'$(Configuration)'=='ReleaseXP'">7.0</WindowsTargetPlatformVersion></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration"><ConfigurationType>Application</ConfigurationType><PlatformToolset>v142</PlatformToolset><CharacterSet>Unicode</CharacterSet><UseDebugLibraries>false</UseDebugLibraries></PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='ReleaseXP'"><PlatformToolset>v141_xp</PlatformToolset></PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <Import Project="..\..\..\third_party\detours\Detours.props" />
+  <PropertyGroup><OutDir>$(ProjectDir)..\..\..\build\tools\shell-launch-probe\$(Platform)\</OutDir><IntDir>$(OutDir)obj\</IntDir></PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='ReleaseXP'"><OutDir>$(ProjectDir)..\..\..\build\tools\shell-launch-probe\XP\</OutDir><IntDir>$(OutDir)obj\</IntDir><TargetName>ShellLaunchProbeXP</TargetName></PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile><RuntimeLibrary>MultiThreaded</RuntimeLibrary><WarningLevel>Level4</WarningLevel><ExceptionHandling>Sync</ExceptionHandling><PreprocessorDefinitions>UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
+    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>ole32.lib;oleaut32.lib;shell32.lib;uuid.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+  </ItemDefinitionGroup>
+  <ItemGroup><ClCompile Include="main.cpp" /></ItemGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='ReleaseXP'">
+    <ClCompile><PreprocessorDefinitions>PROXYLANE_XP_PROBE;WINVER=0x0501;_WIN32_WINNT=0x0501;%(PreprocessorDefinitions)</PreprocessorDefinitions><AdditionalOptions>/Zc:threadSafeInit- %(AdditionalOptions)</AdditionalOptions></ClCompile>
+    <Link><MinimumRequiredVersion>5.01</MinimumRequiredVersion></Link>
+  </ItemDefinitionGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

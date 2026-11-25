@@ -44,6 +44,9 @@ protected:
 	UINT m_fileDragGeneration;
 	BOOL m_confirmingExit = FALSE;
 	BOOL m_stayInTray = FALSE;
+	HANDLE m_automationTarget = NULL;
+	HANDLE m_automationWait = NULL;
+	static VOID CALLBACK AutomationTargetExited(PVOID context, BOOLEAN timedOut);
 	enum TrayNoticeKind { TRAY_NOTICE_NONE, TRAY_NOTICE_LAUNCH, TRAY_NOTICE_BROWSER };
 	TrayNoticeKind m_trayNoticeKind = TRAY_NOTICE_NONE;
 	CString m_pendingBrowserNotice;
@@ -86,6 +89,7 @@ public:
 	afx_msg LRESULT OnShellIconNotify( WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnTaskbarRestartNotify( WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnAutomationStart(WPARAM wParam, LPARAM lParam);
+	afx_msg LRESULT OnAutomationTargetExited(WPARAM exitCode, LPARAM);
 	afx_msg LRESULT OnProxyStatusChanged(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnProfileCommandRequest(WPARAM wParam, LPARAM lParam);
 	afx_msg LRESULT OnDeferredFileDragLeave(WPARAM wParam, LPARAM lParam);

@@ -164,7 +164,7 @@ bool ConfigStorage::Initialize()
     return g_createdDefaults = Update(path, [](const CString& staged) {
         static const wchar_t defaults[] =
             L"[options]\r\nlastselected=Test\r\nDecryptHTTPS=1\r\nDecryptQUIC=1\r\n"
-            L"[proxy_Test]\r\nType=SOCKS5\r\nHost=127.0.0.1\r\nPort=1080\r\nHookChildProcess=1\r\nHookTCP=1\r\nHookUDP=0\r\nBlockUDP=1\r\nTargetFilterMode=1\r\n"
+            L"[proxy_Test]\r\nType=SOCKS5\r\nHost=127.0.0.1\r\nPort=7890\r\nHookChildProcess=1\r\nHookTCP=1\r\nHookUDP=0\r\nBlockUDP=1\r\nTargetFilterMode=1\r\n"
             L"[proxy_Direct]\r\nType=NOPROXY\r\nHookChildProcess=1\r\nHookTCP=1\r\nHookUDP=1\r\nRedirectPrivateDNS=0\r\nTargetFilterMode=1\r\n";
         HANDLE file = CreateFile(staged, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
         if (file == INVALID_HANDLE_VALUE) return false;

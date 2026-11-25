@@ -20,7 +20,7 @@ int wmain(int argc, wchar_t** argv)
         if (!ConfigStorage::Initialize()) return 1;
         CIniFile defaults; defaults.SetIniFileName(ConfigStorage::Path());
         return defaults.GetString(L"proxy_Test", L"Host") == L"127.0.0.1" &&
-            defaults.GetInt(L"proxy_Test", L"Port") == 1080 && defaults.GetString(L"proxy_Direct", L"Type") == L"NOPROXY" ? 0 : 2;
+            defaults.GetInt(L"proxy_Test", L"Port") == 7890 && defaults.GetString(L"proxy_Direct", L"Type") == L"NOPROXY" ? 0 : 2;
     }
     if (argc == 3 && wcscmp(argv[1], L"--portable") == 0)
         return ConfigStorage::SetPortable(_wtoi(argv[2]) != 0) ? 0 : 1;

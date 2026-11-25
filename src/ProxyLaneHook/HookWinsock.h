@@ -665,6 +665,10 @@ public:
 	// Reuse installed hooks; only switch the service endpoint after validation.
 	BOOL RebindPRC(LPCSTR lpszPipeName);
 	CString GetPRCPipeName();
+	HRESULT BuildShellLaunch(LPCWSTR file, LPCWSTR args, LPCWSTR directory, LPCWSTR verb,
+		int show, std::wstring& helper, std::wstring& command);
+	void LogShellLaunchFailure(LPCWSTR file, HRESULT error);
+	bool IsShellHelper(LPCWSTR application, LPCWSTR command, LPCWSTR directory);
 
 
 

@@ -1973,11 +1973,11 @@ static std::vector<BrowserLaunchWatch::Node> ReadBrowserNodes(
 	return nodes;
 }
 
-BrowserLaunchWatch::Observation CPage3::CaptureBrowserCandidates(LPCTSTR path)
+BrowserLaunchWatch::Observation CPage3::CaptureBrowserCandidates(LPCTSTR path, BOOL shellLaunch)
 {
 	BrowserLaunchWatch::Observation observation;
 	if (!BrowserLaunchWatch::Supported(path) || !m_processRegistry ||
-		theApp.GetAutomationOptions().enabled || !g_MainTab || !g_MainTab->IsProxyRunning()) return observation;
+		(theApp.GetAutomationOptions().enabled && !shellLaunch) || !g_MainTab || !g_MainTab->IsProxyRunning()) return observation;
 	TCHAR fullPath[MAX_PATH];
 	const DWORD length = GetFullPathName(path, _countof(fullPath), fullPath, NULL);
 	if (!length || length >= _countof(fullPath)) return observation;
@@ -2097,6 +2097,7 @@ void CPage3::DismissBrowserNotification()
 
 void CPage3::ClearBrowserNotifications()
 {
+	m_pendingBrowserSelection.clear();
 	const BOOL active = m_browserNotificationActive;
 	m_browserNotificationActive = FALSE;
 	m_browserNotifications.clear();
@@ -2172,10 +2173,8 @@ void CPage3::OpenBrowserNotification()
 		g_MainTab->HideTransientStatus();
 		CancelLaunchSelection();
 		g_MainTab->SelectPage(CMainTab::PAGE_APPLICATIONS);
-		UpdatePslist(FALSE);
 		ProxyProcessIdentity::Snapshot current;
 		ProxyProcessIdentity::QuerySnapshot(current);
-		std::vector<DWORD> selected;
 		const auto remaining = BrowserLaunchWatch::IncompleteInstances(
 			ReadBrowserNodes(current, observation.path, observation.sessionId), candidates, hooked);
 		for (const auto& instance : remaining)
@@ -2183,16 +2182,15 @@ void CPage3::OpenBrowserNotification()
 			std::vector<BrowserLaunchWatch::Identity> related = instance.networks;
 			related.push_back(instance.main.identity);
 			for (const auto& candidate : related)
-			{
-				const auto row = m_processSortData.find(candidate.pid);
-				if (row != m_processSortData.end() && row->second.startTimeValue == candidate.time)
-					selected.push_back(candidate.pid);
-			}
+				m_pendingBrowserSelection.push_back(candidate);
 		}
 		m_ListCtrl.SetItemState(-1, 0, LVIS_SELECTED | LVIS_FOCUSED);
-		SelectProcessesByPid(selected);
-		SetDlgItemText(IDC_STATIC_PAGE_SUBTITLE, Localization::Get(selected.empty() ?
-			_T("browser_reuse.gone") : _T("browser_reuse.selected")));
+		// A background host may not have populated the list yet. Select only
+		// after its asynchronous snapshot has been applied, rechecking identities.
+		if (!m_processesExpanded) SetProcessesExpanded(TRUE);
+		UpdatePslist(FALSE);
+		if (m_pendingBrowserSelection.empty())
+			SetDlgItemText(IDC_STATIC_PAGE_SUBTITLE, Localization::Get(_T("browser_reuse.gone")));
 	}
 	m_showingBrowserWarning = FALSE;
 }
@@ -2274,6 +2272,7 @@ void CPage3::ApplyBrowserProcessAction(const CString& name,
 
 void CPage3::CancelLaunchSelection()
 {
+	m_pendingBrowserSelection.clear();
 	KillTimer(TIMER_LAUNCHED_PROCESS);
 	m_launchedProcessId = 0;
 	m_launchedProcessTime = 0;
@@ -2623,6 +2622,7 @@ LRESULT CPage3::OnProcessListRequest(WPARAM, LPARAM)
 
 void CPage3::CancelProcessRefresh()
 {
+	m_pendingBrowserSelection.clear();
 	KillTimer(0x2410);
 	KillTimer(TIMER_PROCESS_RESULT);
 	m_pollingProcesses = FALSE;
@@ -2680,6 +2680,7 @@ void CPage3::PollProcessList()
 	}
 	if (!result->succeeded)
 	{
+		m_pendingBrowserSelection.clear();
 		KillTimer(TIMER_PROCESS_RESULT);
 		m_pollingProcesses = FALSE;
 		m_pendingFinderTarget = NULL;
@@ -2776,6 +2777,20 @@ void CPage3::ApplyProcessBatch()
 		m_processStatusShown = FALSE;
 	}
 	if (m_launchedProcessId) TrySelectLaunchedProcess();
+	if (!m_pendingBrowserSelection.empty())
+	{
+		std::vector<DWORD> selected;
+		for (const auto& identity : m_pendingBrowserSelection)
+		{
+			const auto row = m_processSortData.find(identity.pid);
+			if (row != m_processSortData.end() && row->second.startTimeValue == identity.time)
+				selected.push_back(identity.pid);
+		}
+		m_pendingBrowserSelection.clear();
+		SelectProcessesByPid(selected);
+		SetDlgItemText(IDC_STATIC_PAGE_SUBTITLE, Localization::Get(selected.empty() ?
+			_T("browser_reuse.gone") : _T("browser_reuse.selected")));
+	}
 	if (m_pendingFinderTarget)
 	{
 		const HWND target = m_pendingFinderTarget;
@@ -3527,7 +3542,7 @@ BOOL CPage3::ShouldProxyChildProcess(LPHookNewProcessInfo lphnpi)
 		}
 	}
 
-	if (!bShouldInject)
+	if (!bShouldInject && lphnpi->dwProcessId)
 	{
 		CPage2* page2 = g_MainTab ? g_MainTab->GetPage2() : NULL;
 		if (page2)
@@ -3634,8 +3649,9 @@ void CPage3::OnDropAppFile(TCHAR *pFileName)
 	LaunchAndProxyApp(pFileName, noExtraArguments, FALSE);
 }
 
-AppLaunchResult CPage3::LaunchAutomationApplication(const AutomationOptions& options)
+AppLaunchResult CPage3::LaunchAutomationApplication(const AutomationOptions& options, AutomationProcessIdentity* process)
 {
+	if (process) ZeroMemory(process, sizeof(*process));
 	if (options.packaged)
 	{
 		CString arguments = options.initialArguments;
@@ -3644,11 +3660,19 @@ AppLaunchResult CPage3::LaunchAutomationApplication(const AutomationOptions& opt
 			if (!arguments.IsEmpty()) arguments += L" ";
 			arguments += QuoteCommandLineArgument(options.targetArguments[i]);
 		}
-		return LaunchPackagedAppById(options.targetPath, arguments);
+		return LaunchPackagedAppById(options.targetPath, arguments, NULL, process);
 	}
-	return LaunchAndProxyApp(options.targetPath, options.targetArguments, TRUE,
+	AppLaunchResult result = LaunchAndProxyApp(options.targetPath, options.targetArguments, TRUE,
 		options.elevated ? APP_LAUNCH_ELEVATION_FORCE_ADMIN : APP_LAUNCH_ELEVATION_AUTO,
-		options.initialArguments, options.workingDirectory);
+		options.initialArguments, options.workingDirectory, process, options.literalArguments, options.showWindow,
+		options.waitExit && options.literalArguments && options.showWindow >= 0);
+	if (result != APP_LAUNCH_SUCCESS && options.waitExit && options.literalArguments) {
+		CString message;
+		message.Format(L"Shell launch failed: target=\"%s\", result=%d; no direct fallback.",
+			static_cast<LPCWSTR>(options.targetPath), static_cast<int>(result));
+		if (g_MainTab) g_MainTab->AddLogText(0, message);
+	}
+	return result;
 }
 
 AppLaunchResult CPage3::LaunchAndProxyApp(
@@ -3657,7 +3681,7 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 	BOOL strictInjection,
 	AppLaunchElevationMode elevationMode,
 	const CString& initialArguments,
-	const CString& initialWorkingDirectory)
+	const CString& initialWorkingDirectory, AutomationProcessIdentity* process, BOOL literalArguments, int showWindow, BOOL shellLaunch)
 {
 	m_launchInjectionError = ERROR_SUCCESS;
 	if (!fileName || !fileName[0])
@@ -3665,6 +3689,7 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 
 	STARTUPINFO si = {0};
 	si.cb = sizeof(si);
+	if (showWindow >= 0) { si.dwFlags |= STARTF_USESHOWWINDOW; si.wShowWindow = static_cast<WORD>(showWindow); }
 
 	PROCESS_INFORMATION pi = {0};
 	int ret;
@@ -3704,7 +3729,7 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 				launchArguments += QuoteCommandLineArgument(extraArguments[i]);
 			}
 			myWow64RevertWow64FsRedirection(WowRedirOldValue);
-			return LaunchPackagedAppById(shortcut.aumid, launchArguments);
+			return LaunchPackagedAppById(shortcut.aumid, launchArguments, NULL, process);
 		}
 		if (shortcut.path.GetLength() >= _countof(szTargetPath) ||
 			shortcut.workingDirectory.GetLength() >= _countof(szBaseDir))
@@ -3713,7 +3738,8 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 			return APP_LAUNCH_INVALID_TARGET;
 		}
 		_tcscpy(szTargetPath, shortcut.path);
-		_tcscpy(szBaseDir, shortcut.workingDirectory);
+		if (!shortcut.workingDirectory.IsEmpty()) _tcscpy(szBaseDir, shortcut.workingDirectory);
+		if (showWindow == SW_SHOWNORMAL) si.wShowWindow = static_cast<WORD>(shortcut.showWindow);
 	}else
 	{
 		_tcsncpy(szTargetPath, fileName, _countof(szTargetPath) - 1);
@@ -3738,7 +3764,7 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 	CString manifestDir;
 	if (PackagedAppSupport::IsPackagedAppPath(szTargetPath, manifestDir))
 	{
-		AppLaunchResult pkgResult = LaunchPackagedAppAndProxy(szTargetPath, manifestDir, extraArguments, launchArguments);
+		AppLaunchResult pkgResult = LaunchPackagedAppAndProxy(szTargetPath, manifestDir, extraArguments, launchArguments, process);
 		if (pkgResult == APP_LAUNCH_SUCCESS)
 		{
 			myWow64RevertWow64FsRedirection(WowRedirOldValue);
@@ -3761,7 +3787,8 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 		launchArguments += QuoteCommandLineArgument(extraArguments[i]);
 	}
 	CString expandedArguments;
-	if (!ExpandLaunchEnvironment(launchArguments, expandedArguments))
+	if (literalArguments) expandedArguments = launchArguments;
+	else if (!ExpandLaunchEnvironment(launchArguments, expandedArguments))
 	{
 		myWow64RevertWow64FsRedirection(WowRedirOldValue);
 		return APP_LAUNCH_CREATE_PROCESS_FAILED;
@@ -3769,7 +3796,7 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 	CString commandLine = QuoteCommandLineArgument(szTargetPath);
 	if (!expandedArguments.IsEmpty()) commandLine += L" " + expandedArguments;
 
-	const BrowserLaunchWatch::Observation browserObservation = CaptureBrowserCandidates(szTargetPath);
+	const BrowserLaunchWatch::Observation browserObservation = CaptureBrowserCandidates(szTargetPath, shellLaunch);
 	if (elevationMode == APP_LAUNCH_ELEVATION_FORCE_ADMIN)
 	{
 		myWow64RevertWow64FsRedirection(WowRedirOldValue);
@@ -3783,6 +3810,7 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 			szBaseDir[0] == 0 ? NULL : szBaseDir, launchedPid, launchedTime);
 		if (result == APP_LAUNCH_SUCCESS)
 		{
+			SetAutomationProcessIdentity(process, launchedPid, launchedTime);
 			WatchBrowserLaunch(browserObservation, launchedPid, launchedTime, started);
 			RefreshLaunchedProcess(launchedPid, NULL, launchedTime);
 		}
@@ -3820,6 +3848,7 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 				szBaseDir[0] == 0 ? NULL : szBaseDir, launchedPid, launchedTime);
 			if (result == APP_LAUNCH_SUCCESS)
 			{
+				SetAutomationProcessIdentity(process, launchedPid, launchedTime);
 				WatchBrowserLaunch(browserObservation, launchedPid, launchedTime, started);
 				RefreshLaunchedProcess(launchedPid, NULL, launchedTime);
 			}
@@ -3837,7 +3866,7 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 					szTargetPath,
 					fallbackManifestDir,
 					extraArguments,
-					launchArguments);
+					launchArguments, process);
 				if (pkgResult == APP_LAUNCH_SUCCESS)
 				{
 					return APP_LAUNCH_SUCCESS;
@@ -3870,6 +3899,7 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
 	}
 
     hnpi.processCreateTime = ProcessActions::CreationTime(pi.hProcess);
+    SetAutomationProcessIdentity(process, pi.dwProcessId, hnpi.processCreateTime);
     RecordProcessCreation(g_GlobalProxy ? g_GlobalProxy->GetTlsControl() : NULL,
         MakeProcessCreationNotice(hnpi), "launcher");
 	BOOL injectionSucceeded = InjectNewProcess(&hnpi);
@@ -3903,7 +3933,7 @@ AppLaunchResult CPage3::LaunchPackagedAppAndProxy(
 	LPCTSTR fileName,
 	const CString& manifestDir,
 	const std::vector<CString>& extraArguments,
-	const CString& initialArguments)
+	const CString& initialArguments, AutomationProcessIdentity* process)
 {
 	CString aumid, packageFullName;
 	if (!PackagedAppSupport::ResolvePackagedAppAumid(fileName, manifestDir, aumid, packageFullName))
@@ -3914,10 +3944,10 @@ AppLaunchResult CPage3::LaunchPackagedAppAndProxy(
 		if (!arguments.IsEmpty()) arguments += _T(" ");
 		arguments += QuoteCommandLineArgument(extraArguments[i]);
 	}
-	return LaunchPackagedAppById(aumid, arguments);
+	return LaunchPackagedAppById(aumid, arguments, NULL, process);
 }
 
-AppLaunchResult CPage3::LaunchPackagedAppById(LPCTSTR aumid, const CString& arguments, AppLauncherResult* outcome)
+AppLaunchResult CPage3::LaunchPackagedAppById(LPCTSTR aumid, const CString& arguments, AppLauncherResult* outcome, AutomationProcessIdentity* process)
 {
 	if (outcome) { ZeroMemory(outcome,sizeof(*outcome)); outcome->error=ERROR_GEN_FAILURE; }
 	if (!aumid || !aumid[0]) return APP_LAUNCH_INVALID_TARGET;
@@ -3978,6 +4008,7 @@ AppLaunchResult CPage3::LaunchPackagedAppById(LPCTSTR aumid, const CString& argu
 		return APP_LAUNCH_PACKAGED_INJECTION_FAILED;
 	}
 	const ULONGLONG creationTime = ProcessActions::CreationTime(hTargetProc);
+	SetAutomationProcessIdentity(process, processId, creationTime);
     if(outcome) {
         HookProcessIdentityInfo identity={};
         if(g_GlobalProxy->GetProcessRegistry()->Get(processId,creationTime,&identity) &&
@@ -4060,13 +4091,14 @@ AppLaunchResult CPage3::LaunchPackagedAppById(LPCTSTR aumid, const CString& argu
 
 BOOL CPage3::GetAppLauncherHostInfo(AppLauncherHostInfo* info)
 {
-    OSVERSIONINFO version={sizeof(version)};
-    if(!info || !GetVersionEx(&version) || version.dwMajorVersion<6 ||
-        (version.dwMajorVersion==6 && version.dwMinorVersion<2)) return FALSE;
+    if(!info || !g_MainTab) return FALSE;
     ZeroMemory(info,sizeof(*info));
     DWORD length=GetModuleFileNameW(NULL,info->executable,MAX_PATH);
     if(!length || length>=MAX_PATH) { ZeroMemory(info,sizeof(*info)); return FALSE; }
-    info->version=1; info->processId=GetCurrentProcessId();
+    info->version=2; info->processId=GetCurrentProcessId();
+    const CString profile = g_MainTab->GetRunningProfileName();
+    if (profile.IsEmpty() || profile.GetLength() >= _countof(info->profile)) return FALSE;
+    wcscpy_s(info->profile, profile);
     info->creationTime=AppLauncherProtocol::ProcessTime(GetCurrentProcess());
     return info->creationTime!=0;
 }

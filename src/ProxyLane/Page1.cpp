@@ -343,7 +343,7 @@ BOOL CPage1::OnInitDialog()
 	}
 
 	// A freshly created settings file holds only the Test placeholder
-	// (127.0.0.1:1080) and Direct. Point the user at the server fields until a
+	// (127.0.0.1:7890) and Direct. Point the user at the server fields until a
 	// profile is saved or enabled; MainTab opens this page while the guide is on.
 	if (ConfigStorage::CreatedDefaults() || m_cfgls.GetCount() == 0)
 	{
@@ -1193,7 +1193,7 @@ void CPage1::OnProtocolChanged()
     if (protocol == L"SSH") {
         m_advancedOpen = TRUE; UpdateAdvancedCaption();
         CString port; m_edit_Port.GetWindowText(port);
-        if (port.IsEmpty() || port == L"1080" || port == L"8080") m_edit_Port.SetWindowText(L"22");
+        if (port.IsEmpty() || port == L"7890" || port == L"1080" || port == L"8080") m_edit_Port.SetWindowText(L"22");
     }
     OnProfileFieldChanged(); LayoutSettingsPage();
 }
@@ -2435,7 +2435,7 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 	{
 		m_cbProxyType.SelectString(0, _T("SOCKS5"));
 		m_edit_HostName.SetWindowText(_T(""));
-		m_edit_Port.SetWindowText(_T("1080"));
+		m_edit_Port.SetWindowText(_T("7890"));
 		m_edit_User.SetWindowText(_T(""));
 		m_edit_Pass.SetWindowText(_T(""));
 		m_cbTransport.SetCurSel(PROXY_TRANSPORT_PLAIN);

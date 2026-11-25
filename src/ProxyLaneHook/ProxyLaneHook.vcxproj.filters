@@ -22,6 +22,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="DetourHooks.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="ShellLaunchHooks.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="InjectDllArm64.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="GlobalProxy.cpp">
       <Filter>Source Files</Filter>
@@ -145,6 +146,7 @@
     <ClInclude Include="AppContainerPipeAccess.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ShellLaunchHooks.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="HookWinsock.h">
       <Filter>Header Files</Filter>
     </ClInclude>

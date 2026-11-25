@@ -22,6 +22,7 @@
 
 #define WM_SHELLICON_NOTIFY				(WM_APP+100)
 #define WM_AUTOMATION_START				(WM_APP+101)
+#define WM_AUTOMATION_TARGET_EXITED       (WM_APP+111)
 #define WM_DEFERRED_FILE_DRAG_LEAVE		(WM_APP+310)
 UINT s_uTaskbarRestart = -1;
 
@@ -572,6 +573,7 @@ BEGIN_MESSAGE_MAP(CProxyLaneDlg, CModernDialog)
 	ON_MESSAGE(WM_SHELLICON_NOTIFY, OnShellIconNotify)
 	ON_REGISTERED_MESSAGE(s_uTaskbarRestart, OnTaskbarRestartNotify)
 	ON_MESSAGE(WM_AUTOMATION_START, OnAutomationStart)
+	ON_MESSAGE(WM_AUTOMATION_TARGET_EXITED, OnAutomationTargetExited)
 	ON_WM_WINDOWPOSCHANGING()
 	ON_MESSAGE(WM_PRELOAD_APPLICATIONS, OnPreloadApplications)
 	ON_MESSAGE(WM_PROXY_STATUS_CHANGED, OnProxyStatusChanged)
@@ -838,7 +840,8 @@ LRESULT CProxyLaneDlg::OnAutomationStart(WPARAM wParam, LPARAM lParam)
 		return 0;
 	}
 
-	AppLaunchResult launchResult = page3->LaunchAutomationApplication(options);
+	AutomationProcessIdentity process = {};
+	AppLaunchResult launchResult = page3->LaunchAutomationApplication(options, options.waitExit ? &process : NULL);
 	if (launchResult != APP_LAUNCH_SUCCESS)
 	{
 		int exitCode = AUTOMATION_EXIT_TARGET_INVALID;
@@ -856,6 +859,29 @@ LRESULT CProxyLaneDlg::OnAutomationStart(WPARAM wParam, LPARAM lParam)
 
 	if (options.shortcut) NotifyShortcutLaunch(options);
 	theApp.SignalAutomationReady();
+	if (options.waitExit)
+	{
+		// This instance owns the proxy: keep its message loop serving the target.
+		m_automationTarget = OpenAutomationProcess(process);
+		if (!m_automationTarget || !RegisterWaitForSingleObject(&m_automationWait,
+			m_automationTarget, AutomationTargetExited, this, INFINITE, WT_EXECUTEONLYONCE))
+			PostMessage(WM_AUTOMATION_TARGET_EXITED, 0);
+	}
+	return 0;
+}
+
+VOID CALLBACK CProxyLaneDlg::AutomationTargetExited(PVOID context, BOOLEAN)
+{
+	CProxyLaneDlg* dialog = static_cast<CProxyLaneDlg*>(context);
+	DWORD code = 0;
+	GetExitCodeProcess(dialog->m_automationTarget, &code);
+	::PostMessage(dialog->m_hWnd, WM_AUTOMATION_TARGET_EXITED, code, 0);
+}
+
+LRESULT CProxyLaneDlg::OnAutomationTargetExited(WPARAM exitCode, LPARAM)
+{
+	theApp.SetAutomationTargetExitCode(static_cast<DWORD>(exitCode));
+	EndDialog(IDOK);
 	return 0;
 }
 
@@ -938,7 +964,8 @@ LRESULT CProxyLaneDlg::OnProfileCommandRequest(WPARAM, LPARAM lParam)
 		CPage3* page3 = m_MainTab.GetPage3();
 		if (page3)
 		{
-			AppLaunchResult result = page3->LaunchAutomationApplication(request->options);
+			AppLaunchResult result = page3->LaunchAutomationApplication(request->options,
+				request->options.waitExit ? &request->process : NULL);
 			switch (result)
 			{
 			case APP_LAUNCH_SUCCESS:
@@ -1013,6 +1040,10 @@ HCURSOR CProxyLaneDlg::OnQueryDragIcon()
 
 void CProxyLaneDlg::OnDestroy()
 {
+	if (m_automationWait) UnregisterWaitEx(m_automationWait, INVALID_HANDLE_VALUE);
+	m_automationWait = NULL;
+	if (m_automationTarget) CloseHandle(m_automationTarget);
+	m_automationTarget = NULL;
 	SetTaskbarIdentity(m_hWnd, true);
 	EndFileDrag();
 	for (size_t index = 0; index < m_fileDropTargets.size(); ++index)

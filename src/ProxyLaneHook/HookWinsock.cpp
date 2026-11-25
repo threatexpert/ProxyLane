@@ -4,6 +4,7 @@
 /************************************************************************/
 
 #include "stdafx.h"
+#include "ShellLaunchHooks.h"
 #include "BrowserQuicPolicy.h"
 #include "HookWinsock.h"
 #include "LibraryLoaderHook.h"
@@ -358,6 +359,7 @@ CHookWinsock::CHookWinsock(void)
 
 CHookWinsock::~CHookWinsock(void)
 {
+	if (!m_bHookEnabled) ShellLaunchHooks::Shutdown();
 	m_RequestPipe.Disconnect();
 	DeleteCriticalSection(&m_RequestPipeLock);
 	DeleteCriticalSection(&m_PRCPipeNameLock);
@@ -590,8 +592,10 @@ CString CHookWinsock::GetPRCPipeName()
 BOOL CHookWinsock::DisableHook()
 {
 	// Caller owns quiescence. Never destroy callback state if detach fails.
+	if (!ShellLaunchHooks::RestoreInterfaces()) return FALSE;
 	if (m_bHookEnabled && !ApplyHooks(false))
 		return FALSE;
+	ShellLaunchHooks::Shutdown();
 	if (m_ChildGuardInstalled && m_ChildGuardName[0])
 		SetEnvironmentVariableW(m_ChildGuardName, NULL);
 	m_ChildGuardInstalled = FALSE;
@@ -603,14 +607,15 @@ BOOL CHookWinsock::DisableHook()
 
 BOOL CHookWinsock::ApplyHooks(bool attach)
 {
-	DetourHookBinding bindings[HOOKAPI_COUNT];
+	std::vector<DetourHookBinding> bindings;
 	int indices[HOOKAPI_COUNT];
 	size_t count = 0;
 	for (int i = 0; i < HOOKAPI_COUNT; ++i)
-		if (m_HookedInfo[i].original) { indices[count] = i; bindings[count++] = m_HookedInfo[i]; }
+		if (m_HookedInfo[i].original) { indices[count++] = i; bindings.push_back(m_HookedInfo[i]); }
+	ShellLaunchHooks::AppendBindings(bindings);
 	DetourHookFailure failure = {};
-	LONG error = attach ? InstallDetourHooks(bindings, count, &failure)
-	                    : RemoveDetourHooks(bindings, count, &failure);
+	LONG error = attach ? InstallDetourHooks(bindings.data(), bindings.size(), &failure)
+	                    : RemoveDetourHooks(bindings.data(), bindings.size(), &failure);
 	if (error != NO_ERROR)
 	{
 		const int index = failure.bindingIndex < count ? indices[failure.bindingIndex] : -1;
@@ -2296,6 +2301,97 @@ static BOOL IsSameUserLauncherToken(HANDLE token)
 	return same;
 }
 
+static bool BuildAppsFolderHelper(const AppLauncherHostInfo& host, const CString& pipe,
+	const std::wstring& aumid, std::wstring& command)
+{
+	GUID id; WCHAR idText[40] = {};
+	if (FAILED(CoCreateGuid(&id)) || !StringFromGUID2(id, idText, _countof(idText))) return false;
+	CString arguments;
+	arguments.Format(L"--internal-launch-app \"%s\" \"%s\" \"%s\" %lu %I64u %lu %I64u",
+		(LPCWSTR)pipe, idText, aumid.c_str(), host.processId, host.creationTime,
+		GetCurrentProcessId(), AppLauncherProtocol::ProcessTime(GetCurrentProcess()));
+	command = static_cast<LPCWSTR>(arguments);
+	return true;
+}
+
+HRESULT CHookWinsock::BuildShellLaunch(LPCWSTR file, LPCWSTR args, LPCWSTR directory, LPCWSTR verb,
+	int show, std::wstring& helper, std::wstring& command)
+{
+	if (!m_psi.bHookCreateProcess || (verb && *verb && _wcsicmp(verb, L"open") && _wcsicmp(verb, L"runas"))) return S_FALSE;
+	if (!file || !*file || show < 0 || show > 11) return E_INVALIDARG;
+	AppLauncherHostInfo host = {};
+	CString pipe;
+	{ CScopedCriticalSection lock(&m_PRCPipeNameLock); host = m_appLauncherHost; pipe = m_szPRCPipeName; }
+	if (host.version != 2 || !host.profile[0] || !host.executable[0]) return HRESULT_FROM_WIN32(ERROR_NOT_READY);
+	std::wstring target(file), resolved;
+	if (ShellLaunchHooks::ResolveFile(file, directory, resolved)) target.swap(resolved);
+	if (ShellLaunchHooks::IsHelper(target.c_str(), host.executable)) return S_FALSE;
+	const WCHAR appsFolder[] = L"shell:AppsFolder\\";
+	const bool packaged = !_wcsnicmp(target.c_str(), appsFolder, _countof(appsFolder)-1) &&
+		AppLauncherProtocol::ValidAumid(target.c_str()+_countof(appsFolder)-1);
+	if (packaged) target.erase(0, _countof(appsFolder)-1);
+	helper = host.executable;
+	std::wstring aumid;
+	const std::wstring originalCommand = ShellLaunchHooks::Quote(target) + L" " + (args ? args : L"");
+	// Explorer is only an activation request here. Preserve the existing helper's
+	// activation-only lifetime; waiting for the packaged app would hang installers
+	// which wait for Explorer before signalling the newly activated app.
+	if (AppLauncherProtocol::ParseExplorerLaunch(target.c_str(), originalCommand.c_str(), aumid))
+		return BuildAppsFolderHelper(host, pipe, aumid, command) ? S_OK : E_FAIL;
+	WCHAR cwd[32768] = {};
+	DWORD length = directory && *directory ? GetFullPathNameW(directory, _countof(cwd), cwd, NULL) : GetCurrentDirectoryW(_countof(cwd), cwd);
+	if (!length || length >= _countof(cwd)) return E_INVALIDARG;
+	HookNewProcessInfo child = {};
+	wcsncpy_s(child.szAppPath, target.c_str(), _TRUNCATE);
+	CPRCPipeClient client;
+	if (!client.Connect(GetPRCPipeName())) return HRESULT_FROM_WIN32(ERROR_PIPE_NOT_CONNECTED);
+	// Only an actual image can be excluded by its own path here. A link, document
+	// or unresolved name must reach PL; matching its wrapper name against an EXE
+	// inclusion rule would otherwise silently release it back to Explorer.
+	DWORD binaryType = 0;
+	if (GetBinaryTypeW(target.c_str(), &binaryType)) {
+		bool replied = false;
+		if (!client.PRCShouldInjectNewProcess(&child, false, true, &replied))
+			return replied ? S_FALSE : HRESULT_FROM_WIN32(ERROR_PIPE_NOT_CONNECTED);
+	}
+	// Let the same PL launch entry point handle every target, including links,
+	// scripts and unsupported names. Failure must never fall back to Explorer.
+	command = L"--auto --profile " + ShellLaunchHooks::Quote(host.profile) + L" --wait-exit --literal-arguments --run " +
+		ShellLaunchHooks::Quote(target) + L" --working-directory " + ShellLaunchHooks::Quote(cwd);
+	if (packaged) command += L" --packaged";
+	WCHAR display[40]; swprintf_s(display, L" --show-window %d", show); command += display;
+	// Ordinary helpers also report association/URL resolution failures to this host.
+	command += L" --shell-pipe " + ShellLaunchHooks::Quote(static_cast<LPCWSTR>(CStringW(pipe)));
+	if (verb && !_wcsicmp(verb, L"runas")) command += L" --elevated";
+	if (args && *args) command += L" -- " + std::wstring(args);
+	return command.size() + helper.size() + 4 < 32767 ? S_OK : HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE);
+}
+
+void CHookWinsock::LogShellLaunchFailure(LPCWSTR file, HRESULT error)
+{
+	CString message;
+	message.Format(L"Shell launch blocked: target=\"%s\", error=0x%08lX; no direct fallback.", file ? file : L"(no file)", error);
+	OutputDebugStringW(message);
+	CScopedCriticalSection lock(&m_RequestPipeLock);
+	if (EnsureRequestPipe() && !m_RequestPipe.PRCLogtext(message)) m_RequestPipe.Disconnect();
+}
+
+bool CHookWinsock::IsShellHelper(LPCWSTR application, LPCWSTR command, LPCWSTR directory)
+{
+	AppLauncherHostInfo host = {};
+	{ CScopedCriticalSection lock(&m_PRCPipeNameLock); host = m_appLauncherHost; }
+	if (!host.executable[0]) return false;
+	int count = 0;
+	LPWSTR* argv = !application && command ? CommandLineToArgvW(command, &count) : NULL;
+	LPCWSTR candidate = application ? application : (argv && count ? argv[0] : NULL);
+	std::wstring image;
+	const bool helper = ShellLaunchHooks::MightBeHelper(candidate, host.executable) &&
+		ShellLaunchHooks::ResolveExecutable(candidate, directory, image) &&
+		ShellLaunchHooks::IsHelper(image.c_str(), host.executable);
+	if (argv) LocalFree(argv);
+	return helper;
+}
+
 bool CHookWinsock::TryCreateAppLauncher(
 	HANDLE hToken, LPCWSTR lpApplicationName, LPCWSTR lpCommandLine,
 	LPSECURITY_ATTRIBUTES lpProcessAttributes, LPSECURITY_ATTRIBUTES lpThreadAttributes,
@@ -2342,7 +2438,7 @@ bool CHookWinsock::TryCreateAppLauncher(
 	// other flags are forwarded unchanged and validated by Windows.
 	else if (dwCreationFlags & (DEBUG_PROCESS | DEBUG_ONLY_THIS_PROCESS)) skipped = L"skipped: debugger launch";
 	else if (!IsWin8OrLater()) skipped = L"skipped: unsupported OS";
-	else if (host.version != 1 || !host.executable[0]) skipped = L"skipped: host capability unavailable";
+	else if ((host.version != 1 && host.version != 2) || !host.executable[0]) skipped = L"skipped: host capability unavailable";
 	else if (!IsSameUserLauncherToken(hToken)) skipped = L"skipped: different user or unreadable token";
 	if (skipped)
 	{
@@ -2350,17 +2446,13 @@ bool CHookWinsock::TryCreateAppLauncher(
 		return false;
 	}
 
-	GUID id;
-	WCHAR idText[40] = {};
-	if (FAILED(CoCreateGuid(&id)) || !StringFromGUID2(id, idText, _countof(idText)))
+	std::wstring helperArguments;
+	if (!BuildAppsFolderHelper(host, pipe, appAumid, helperArguments))
 	{
 		logLauncher(L"skipped: request ID creation failed", 0, ::GetLastError());
 		return false;
 	}
-	CString command;
-	command.Format(L"\"%s\" --internal-launch-app \"%s\" \"%s\" \"%s\" %lu %I64u %lu %I64u",
-		host.executable, (LPCWSTR)pipe, idText, appAumid.c_str(), host.processId,
-		host.creationTime, GetCurrentProcessId(), AppLauncherProtocol::ProcessTime(GetCurrentProcess()));
+	CString command((ShellLaunchHooks::Quote(host.executable) + L" " + helperArguments).c_str());
 
 	std::vector<BYTE> environment;
 	if (m_ChildGuardInstalled && !BuildChildEnvironment(
@@ -2402,6 +2494,14 @@ BOOL WINAPI CHookWinsock::inhook_CreateProcessInternalW(
 	};
 	if (!m_psi.bHookCreateProcess || TlsGetValue(m_ProcessCreationTls))
 		return create(dwCreationFlags, lpEnvironment);
+
+	// Shell's helper must run as an ordinary PL CLI, without our DLL or the
+	// child's injection guard marker. This also prevents recursive CLI forwarding.
+	if (IsShellHelper(lpApplicationName, lpCommandLine, lpCurrentDirectory)) {
+		std::vector<BYTE> environment;
+		if (m_ChildGuardInstalled && !BuildChildEnvironment(lpEnvironment, dwCreationFlags, FALSE, m_ChildGuardName, 0, environment)) return FALSE;
+		return create(dwCreationFlags, environment.empty() ? lpEnvironment : environment.data());
+	}
 
 	BOOL helperCreated = FALSE;
 	if (TryCreateAppLauncher(hToken, lpApplicationName, lpCommandLine,
@@ -2743,6 +2843,11 @@ BOOL CHookWinsock::HookWinsock()
 {
 	if (m_ProcessCreationTls == TLS_OUT_OF_INDEXES)
 		return SetHookFailure(m_tlsError, "allocate-tls", "kernel32.dll", "TlsAlloc");
+	if (m_psi.bHookCreateProcess && !ShellLaunchHooks::Initialize(
+		[](LPCWSTR file, LPCWSTR args, LPCWSTR directory, LPCWSTR verb, int show, std::wstring& helper, std::wstring& command) {
+			return g_pHookWinsock->BuildShellLaunch(file, args, directory, verb, show, helper, command);
+		}, [](LPCWSTR file, HRESULT error) { g_pHookWinsock->LogShellLaunchFailure(file, error); }))
+		return SetHookFailure(::GetLastError(), "initialize-shell-hooks", "shell32.dll", "ShellExecuteExW");
 	int i;
 	for (i = 0; i < HOOKMODULE_COUNT; i++)
 	{

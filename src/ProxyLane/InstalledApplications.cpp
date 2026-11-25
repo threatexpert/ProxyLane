@@ -316,6 +316,7 @@ BOOL InstalledApplications::ResolveShortcut(LPCTSTR path, Application& applicati
 	}
 	if (SUCCEEDED(link->GetArguments(buffer, _countof(buffer))))
 		result.arguments = buffer;
+	link->GetShowCmd(&result.showWindow);
 	if (SUCCEEDED(link->GetWorkingDirectory(buffer, _countof(buffer))))
 	{
 		WCHAR expanded[32768] = {0};

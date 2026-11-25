@@ -368,6 +368,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\..\scri
     <ClCompile Include="AppVersion.cpp" />
     <ClCompile Include="LaunchShortcut.cpp" />
     <ClCompile Include="AutomationOptions.cpp" />
+    <ClCompile Include="ShellUrlLaunch.cpp" />
     <ClCompile Include="Base64.cpp" />
     <ClCompile Include="IniFile.cpp" />
     <ClCompile Include="ConfigStorage.cpp" />
@@ -417,6 +418,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\..\scri
     <ClInclude Include="AppVersion.h" />
     <ClInclude Include="LaunchShortcut.h" />
     <ClInclude Include="AutomationOptions.h" />
+    <ClInclude Include="ShellUrlLaunch.h" />
+    <ClInclude Include="AutomationProcessWait.h" />
     <ClInclude Include="Base64.h" />
     <ClInclude Include="BoundedLogQueue.h" />
     <ClInclude Include="IniFile.h" />

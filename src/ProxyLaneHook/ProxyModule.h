@@ -397,6 +397,10 @@ BOOL GetProxyLaneChildGuardInfo(
 
 
 BOOL WINAPI gp_HookWinsock(LPCSTR lpszPRCPipeName);
+// Private Shell helper path. The caller owns a newly created suspended child;
+// on failure it must terminate it. Does not enable Hooks in the helper itself.
+BOOL WINAPI gp_InjectAndResumeShellChild(const PROCESS_INFORMATION* process,
+	LPCWSTR application, LPCWSTR command, LPCSTR pipeName);
 // Explicit removal only: caller must prevent new affected calls and ensure no
 // hook/trampoline/Bypass_* or cached extension callback is in flight. No draining
 // or thread suspension is performed. Failure retains installed state; success
