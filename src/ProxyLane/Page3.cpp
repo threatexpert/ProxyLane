@@ -794,7 +794,8 @@ BOOL CPage3::OnInitDialog()
 		m_windowFinderToolTip.AddTool(&m_processSearch, Localization::Get(L"process.filter"));
 	}
 	// 资源模板为兼容旧版本仍可能带有单选样式，初始化时统一启用多选。
-	m_ListCtrl.ModifyStyle(LVS_SINGLESEL, 0);
+	// Clip the list background against the overlaid empty-results label.
+	m_ListCtrl.ModifyStyle(LVS_SINGLESEL, WS_CLIPSIBLINGS);
 	m_ListCtrl.EnableSnapshotAccessibility();
 
 	m_ListCtrl.InsertColumn(0, _T("PID"), 0, 50);
@@ -2629,7 +2630,7 @@ LRESULT CPage3::OnProcessListRequest(WPARAM, LPARAM)
 void CPage3::CancelProcessRefresh()
 {
 	m_pendingBrowserSelection.clear();
-	KillTimer(0x2410);
+	KillTimer(TIMER_PROCESS_FILTER);
 	KillTimer(TIMER_PROCESS_RESULT);
 	m_pollingProcesses = FALSE;
 	m_processQuery.Cancel();
@@ -2697,30 +2698,64 @@ void CPage3::PollProcessList()
 	m_processSortData.clear();
 	for (const auto& row : result->value) m_processSortData[row.pid] = row;
 	BuildProcessTree();
-	BeginFilteredUpdate();
+	BeginFilteredUpdate(false);
 }
 
-void CPage3::ApplyProcessBatch()
+void CPage3::ApplyProcessBatch(bool filterChanged)
 {
-	// Limit notifications and redraw work per message-loop turn. Accessibility
-	// observers must not multiply an entire full-list rewrite every two seconds.
+	struct RedrawPause
+	{
+		CListCtrl& list;
+		bool paused = false;
+		void Pause()
+		{
+			if (paused || !list.IsWindowVisible()) return;
+			paused = true;
+			list.SetRedraw(FALSE);
+		}
+		void Resume()
+		{
+			if (!paused) return;
+			paused = false;
+			list.SetRedraw(TRUE);
+			list.RedrawWindow(NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+		}
+		~RedrawPause() { Resume(); }
+	} redraw = { m_ListCtrl };
+
+	const int oldTop = filterChanged ? m_ListCtrl.GetTopIndex() : 0;
+	const bool hasTop = oldTop > 0 && oldTop < static_cast<int>(m_displayedProcesses.size());
+	const DWORD topPid = hasTop ? m_displayedProcesses[oldTop].pid : 0;
+	const ULONGLONG topTime = hasTop ? m_displayedProcesses[oldTop].startTime : 0;
+
+	if (m_pendingProcessRows.empty() && m_processApplyIndex > 0 &&
+		m_processApplyIndex == static_cast<int>(m_displayedProcesses.size()))
+	{
+		redraw.Pause();
+		m_ListCtrl.DeleteAllItems();
+		m_displayedProcesses.clear();
+		m_processApplyIndex = 0;
+	}
+
+	// Publish user filters in one paint. Periodic snapshots still yield between
+	// batches because native row updates can be expensive under UI Automation.
 	const DWORD start = GetTickCount();
 	int processed = 0;
-	BOOL batchChanged = FALSE;
-	while (processed < 64 && GetTickCount() - start < 8)
+	while (filterChanged || (processed < 64 && GetTickCount() - start < 8))
 	{
-		if (m_processApplyIndex < static_cast<int>(m_displayedProcesses.size()))
+		if (m_processApplyIndex > 0)
 		{
-			const int row = m_processApplyIndex;
+			// Delete from the end so removed rows do not shift an entire suffix.
+			const int row = --m_processApplyIndex;
 			auto& displayed = m_displayedProcesses[row];
 			const DWORD pid = displayed.pid;
 			const auto next = m_pendingProcessRows.find(pid);
 			if (next == m_pendingProcessRows.end() ||
 				displayed.startTime != next->second.startTimeValue)
 			{
+				redraw.Pause();
 				m_ListCtrl.DeleteItem(row);
 				m_displayedProcesses.erase(m_displayedProcesses.begin() + row);
-				batchChanged = TRUE;
 				++processed;
 				continue;
 			}
@@ -2729,38 +2764,35 @@ void CPage3::ApplyProcessBatch()
 			for (int column = 1; column <= 3; ++column)
 				if (displayed.columns[column - 1] != values[column - 1])
 				{
+					redraw.Pause();
 					m_ListCtrl.SetItemText(row, column, values[column - 1]);
 					displayed.columns[column - 1] = values[column - 1];
-					batchChanged = TRUE;
 					++processed;
 				}
 			m_pendingProcessRows.erase(next);
-			++m_processApplyIndex;
 		}
 		else if (!m_pendingProcessRows.empty())
 		{
 			const auto next = m_pendingProcessRows.begin();
 			const auto& info = next->second;
 			CString pid; pid.Format(L"%lu", info.pid);
-			const int row = m_ListCtrl.InsertItem(static_cast<int>(m_displayedProcesses.size()), pid);
+			redraw.Pause();
+			const int row = m_ListCtrl.InsertItem(LVIF_TEXT | LVIF_PARAM,
+				static_cast<int>(m_displayedProcesses.size()), pid, 0, 0, 0, info.pid);
 			if (row >= 0)
 			{
 				DisplayedProcess displayed = { info.pid, info.startTimeValue,
 					{ ProcessDisplayName(info), CString(info.startTimeText), CString(info.propath) } };
-				m_ListCtrl.SetItemData(row, info.pid);
 				for (int column = 1; column <= 3; ++column)
 					m_ListCtrl.SetItemText(row, column, displayed.columns[column - 1]);
 				m_displayedProcesses.insert(m_displayedProcesses.begin() + row, displayed);
 			}
 			m_pendingProcessRows.erase(next);
-			m_processApplyIndex = static_cast<int>(m_displayedProcesses.size());
-			batchChanged = TRUE;
-			processed += 5; // Insert, item data and three columns.
+			processed += 4; // Insert and three columns.
 		}
 		else break;
 	}
-	if (batchChanged) m_ListCtrl.Invalidate(FALSE);
-	if (m_processApplyIndex < static_cast<int>(m_displayedProcesses.size()) || !m_pendingProcessRows.empty())
+	if (m_processApplyIndex > 0 || !m_pendingProcessRows.empty())
 	{
 		// Actions already check m_applyingProcesses. Disable their buttons only
 		// when installation actually spans another message-loop turn.
@@ -2770,10 +2802,29 @@ void CPage3::ApplyProcessBatch()
 		return;
 	}
 	SortDisplayedProcesses();
+	redraw.Resume();
+	if (hasTop)
+	{
+		const auto anchor = std::find_if(m_displayedProcesses.begin(), m_displayedProcesses.end(),
+			[topPid, topTime](const DisplayedProcess& row) { return row.pid == topPid && row.startTime == topTime; });
+		if (anchor != m_displayedProcesses.end())
+		{
+			const int offset = static_cast<int>(anchor - m_displayedProcesses.begin()) - m_ListCtrl.GetTopIndex();
+			CRect rowRect;
+			if (offset && m_ListCtrl.GetItemRect(0, &rowRect, LVIR_BOUNDS))
+				m_ListCtrl.Scroll(CSize(0, offset * rowRect.Height()));
+		}
+	}
 	m_ListCtrl.Invalidate(FALSE); // Refresh age shading once per completed snapshot.
 	m_applyingProcesses = FALSE;
-	KillTimer(TIMER_PROCESS_RESULT);
-	m_pollingProcesses = FALSE;
+	// An explicit filter can finish while an enumeration is running or ready.
+	if (m_processQuery.HasPendingResult())
+		m_pollingProcesses = SetTimer(TIMER_PROCESS_RESULT, 100, NULL) != 0;
+	else
+	{
+		KillTimer(TIMER_PROCESS_RESULT);
+		m_pollingProcesses = FALSE;
+	}
 	if (!m_btnInject.IsWindowEnabled()) m_btnInject.EnableWindow(TRUE);
 	if (!m_btnWindowFinder.IsWindowEnabled()) m_btnWindowFinder.EnableWindow(TRUE);
 	m_btnTerminate.EnableWindow(!m_terminating && m_ListCtrl.GetSelectedCount() > 0);
@@ -2803,9 +2854,9 @@ void CPage3::ApplyProcessBatch()
 		m_pendingFinderTarget = NULL;
 		FinishWindowFinder(target, m_pendingFinderPid, m_pendingFinderTime);
 	}
- m_filterEmpty.ShowWindow(m_displayedProcesses.empty() && (!m_filterText.IsEmpty() || m_filterHooked) ? SW_SHOWNA : SW_HIDE);
- // Filtering a snapshot must not lose a system query that was already in flight.
- if (m_processQuery.Busy()) m_pollingProcesses = SetTimer(TIMER_PROCESS_RESULT, 100, NULL) != 0;
+	const bool showEmpty = m_displayedProcesses.empty() && (!m_filterText.IsEmpty() || m_filterHooked);
+	if (showEmpty != (m_filterEmpty.IsWindowVisible() != FALSE))
+		m_filterEmpty.ShowWindow(showEmpty ? SW_SHOWNA : SW_HIDE);
 	PublishProcessAccessibility(true);
 	if (m_ListCtrl.AccessibilityBridge()) PostMessage(ProcessListAccessibility::RequestMessage);
 }
@@ -3467,14 +3518,24 @@ void CPage3::OnBnClickedInjectdll()
 
 void CPage3::OnTimer(UINT_PTR nIDEvent)
 {
-	if (nIDEvent == 0x2410) {
-  if (m_btnWindowFinder.IsTracking() || m_terminating) return;
-  KillTimer(0x2410);
-  m_processSearch.GetWindowText(m_filterText); m_filterText.Trim(); m_filterText.MakeLower();
-  m_filterHooked = m_onlyHooked.GetCheck() == BST_CHECKED;
-  BeginFilteredUpdate(); return;
- }
- if (nIDEvent == TIMER_PROCESS_RESULT) { PollProcessList(); return; }
+	if (nIDEvent == TIMER_PROCESS_FILTER)
+	{
+		if (m_btnWindowFinder.IsTracking() || m_terminating) return;
+		KillTimer(TIMER_PROCESS_FILTER);
+		CString text;
+		m_processSearch.GetWindowText(text);
+		text.Trim();
+		text.MakeLower();
+		const bool hooked = m_onlyHooked.GetCheck() == BST_CHECKED;
+		if (text != m_filterText || hooked != m_filterHooked)
+		{
+			m_filterText = text;
+			m_filterHooked = hooked;
+			BeginFilteredUpdate(true);
+		}
+		return;
+	}
+	if (nIDEvent == TIMER_PROCESS_RESULT) { PollProcessList(); return; }
 	if (nIDEvent == TIMER_BROWSER_LAUNCH) { CheckBrowserLaunches(); return; }
 	if (nIDEvent == TIMER_LAUNCH_PANEL)
 	{
@@ -4144,34 +4205,43 @@ BOOL CPage3::LaunchAppFromShell(const AppLauncherRequest& request, AppLauncherRe
 
 void CPage3::OnProcessFilterChanged()
 {
- if (!m_processesExpanded || !m_onlyHooked.GetSafeHwnd()) return;
- SetTimer(0x2410, 150, NULL);
+	if (!m_processesExpanded || !m_onlyHooked.GetSafeHwnd()) return;
+	SetTimer(TIMER_PROCESS_FILTER, 150, NULL);
 }
-void CPage3::BeginFilteredUpdate()
+
+void CPage3::BeginFilteredUpdate(bool filterChanged)
 {
- if (!m_processesExpanded || !IsWindowVisible()) return;
- m_filterEmpty.ShowWindow(SW_HIDE);
- std::set<std::pair<DWORD, ULONGLONG>> hooked;
- if (m_filterHooked && m_processRegistry) {
-  std::vector<HookProcessIdentityInfo> identities(64);
-  for (int attempt = 0; attempt < 8; ++attempt) {
-   DWORD count = m_processRegistry->SnapshotHooked(identities.data(), (DWORD)identities.size());
-   if (count > identities.size()) { identities.resize(count + 64); continue; }
-   for (DWORD i = 0; i < count; ++i) hooked.insert(std::make_pair(identities[i].dwProcessId, identities[i].processCreateTime));
-   break;
-  }
- }
- m_pendingProcessRows.clear();
- for (const auto& pair : m_processSortData) {
-  const auto& info = pair.second;
-  if (m_filterHooked && !hooked.count(std::make_pair(info.pid, info.startTimeValue))) continue;
-  if (!m_filterText.IsEmpty()) {
-   CString text; text.Format(L"%lu %s %s", info.pid, info.proname, info.propath); text.MakeLower();
-   if (text.Find(m_filterText) < 0) continue;
-  }
-  m_pendingProcessRows.insert(pair);
- }
- m_applyingProcesses = TRUE; m_processApplyIndex = 0;
- m_pollingProcesses = SetTimer(TIMER_PROCESS_RESULT, 16, NULL) != 0;
- ApplyProcessBatch();
+	if (!m_processesExpanded || !IsWindowVisible()) return;
+	std::set<std::pair<DWORD, ULONGLONG>> hooked;
+	if (m_filterHooked && m_processRegistry)
+	{
+		std::vector<HookProcessIdentityInfo> identities(64);
+		for (int attempt = 0; attempt < 8; ++attempt)
+		{
+			DWORD count = m_processRegistry->SnapshotHooked(identities.data(), (DWORD)identities.size());
+			if (count > identities.size()) { identities.resize(count + 64); continue; }
+			for (DWORD i = 0; i < count; ++i)
+				hooked.insert(std::make_pair(identities[i].dwProcessId, identities[i].processCreateTime));
+			break;
+		}
+	}
+	m_pendingProcessRows.clear();
+	for (const auto& pair : m_processSortData)
+	{
+		const auto& info = pair.second;
+		if (m_filterHooked && !hooked.count(std::make_pair(info.pid, info.startTimeValue))) continue;
+		if (!m_filterText.IsEmpty())
+		{
+			CString text;
+			text.Format(L"%lu %s %s", info.pid, info.proname, info.propath);
+			text.MakeLower();
+			if (text.Find(m_filterText) < 0) continue;
+		}
+		m_pendingProcessRows.insert(pair);
+	}
+	m_applyingProcesses = TRUE;
+	m_processApplyIndex = static_cast<int>(m_displayedProcesses.size());
+	ApplyProcessBatch(filterChanged);
+	if (m_applyingProcesses)
+		m_pollingProcesses = SetTimer(TIMER_PROCESS_RESULT, 16, NULL) != 0;
 }

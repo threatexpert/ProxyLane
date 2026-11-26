@@ -116,6 +116,7 @@ class CPage3 : public CModernDialog
 #define TIMER_BROWSER_LAUNCH 0x103
 #define TIMER_LAUNCH_PANEL 0x104
 #define TIMER_PROCESS_RESULT 0x105
+#define TIMER_PROCESS_FILTER 0x106
 
 public:
 	CPage3(CWnd* pParent = NULL);   // 标准构造函数
@@ -160,14 +161,14 @@ private:
 	DWORD m_pendingFinderPid = 0;
 	ULONGLONG m_pendingFinderTime = 0;
 	CSoftEdit m_processSearch;
- CToggleButton m_onlyHooked;
- CStatic m_filterEmpty;
- CString m_filterText;
- bool m_filterHooked = false;
- afx_msg void OnProcessFilterChanged();
- void BeginFilteredUpdate();
- void PollProcessList();
-	void ApplyProcessBatch();
+	CToggleButton m_onlyHooked;
+	CStatic m_filterEmpty;
+	CString m_filterText;
+	bool m_filterHooked = false;
+	afx_msg void OnProcessFilterChanged();
+	void BeginFilteredUpdate(bool filterChanged);
+	void PollProcessList();
+	void ApplyProcessBatch(bool filterChanged = false);
 	void CancelProcessRefresh();
 	void SortDisplayedProcesses();
 	void PublishProcessAccessibility(bool structureChanged);

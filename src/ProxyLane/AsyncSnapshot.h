@@ -66,6 +66,11 @@ public:
 		std::lock_guard<std::mutex> lock(m_state->mutex);
 		return m_state->busy;
 	}
+	bool HasPendingResult() const
+	{
+		std::lock_guard<std::mutex> lock(m_state->mutex);
+		return m_state->busy || m_state->ready;
+	}
 	void Cancel()
 	{
 		std::lock_guard<std::mutex> lock(m_state->mutex);
