@@ -95,7 +95,8 @@ enum AppLaunchResult
 	APP_LAUNCH_PACKAGED_INJECTION_FAILED,
 	APP_LAUNCH_CANCELLED,
 	APP_LAUNCH_SHORTCUT_INVALID,
-	APP_LAUNCH_FORWARDED
+	APP_LAUNCH_FORWARDED,
+	APP_LAUNCH_POLICY_BLOCKED
 };
 
 enum AppLaunchElevationMode
@@ -294,7 +295,7 @@ public:
 		const CString& manifestDir,
 		const std::vector<CString>& extraArguments,
 		const CString& initialArguments = CString(), AutomationProcessIdentity* process = NULL);
-	BOOL InjectNewProcess(LPHookNewProcessInfo lphnpi);
+	AppLaunchResult InjectNewProcess(LPHookNewProcessInfo lphnpi);
 	BOOL ShouldProxyChildProcess(LPHookNewProcessInfo lphnpi);
 
 	//////////////////////////////////////////////////////////////////////////

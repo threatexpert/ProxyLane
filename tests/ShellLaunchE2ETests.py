@@ -327,7 +327,7 @@ Transport=PLAIN
                         shortcut.Save()
                         output = run_probe([str(probes[64]), '--api', 'shell', '--wait-exit', '--target', str(link)],
                             'excluded-wrapper', True)
-                        assert output.returncode == 7 and not report.exists(), (output.returncode, output.stdout)
+                        assert output.returncode == 10 and not report.exists(), (output.returncode, output.stdout)
                         print('PASS: excluded shortcut target fails in PL without unproxied fallback', flush=True)
         finally:
             if owner is not None:

@@ -291,6 +291,11 @@ int LaunchShortcut::ChooseProfile(HWND owner, const CString& shortcutProfile, co
 void LaunchShortcut::ReportFailure(const AutomationOptions& options, int exitCode)
 {
     if (!options.shortcut || !exitCode) return;
+    if (exitCode == AUTOMATION_EXIT_POLICY_BLOCKED) {
+        ::MessageBox(NULL, Localization::Format(L"dialog.launch_policy_blocked", static_cast<LPCTSTR>(options.targetPath)),
+            Localization::Get(L"dialog.launch_policy_title"), MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+        return;
+    }
     LPCTSTR key = exitCode == AUTOMATION_EXIT_PROFILE_INVALID ? L"shortcut.profile_missing" :
         exitCode == AUTOMATION_EXIT_TARGET_INVALID ? L"shortcut.target_invalid" : L"shortcut.launch_failed";
     CString message = Localization::Format(key, static_cast<LPCTSTR>(options.profileName), static_cast<LPCTSTR>(options.targetPath));

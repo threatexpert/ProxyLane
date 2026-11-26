@@ -1831,6 +1831,12 @@ CString CPage3::InjectionFailureMessage() const
 
 void CPage3::ShowApplicationLaunchResult(const CString& name, AppLaunchResult result)
 {
+	if (result == APP_LAUNCH_POLICY_BLOCKED)
+	{
+		MessageBox(Localization::Format(L"dialog.launch_policy_blocked", static_cast<LPCTSTR>(name)),
+			Localization::Get(L"dialog.launch_policy_title"), MB_OK | MB_ICONWARNING);
+		return;
+	}
 	if (result == APP_LAUNCH_CANCELLED || result == APP_LAUNCH_FORWARDED) return;
 	if (result == APP_LAUNCH_SUCCESS)
 	{
@@ -3520,6 +3526,7 @@ BOOL CPage3::ShouldInjectNewProcess(LPHookNewProcessInfo lphnpi)
 BOOL CPage3::ShouldProxyChildProcess(LPHookNewProcessInfo lphnpi)
 {
 	BOOL bShouldInject = TRUE;
+	LPCTSTR skippedReason = NULL;
 	{
 		CSingleLock filterLock(&g_childFilterLock, TRUE);
 		if (g_ChildInjectFilter.bEnabled && !g_ChildInjectFilter.patterns.empty())
@@ -3539,6 +3546,9 @@ BOOL CPage3::ShouldProxyChildProcess(LPHookNewProcessInfo lphnpi)
 
 			bShouldInject = (g_ChildInjectFilter.nMode == CHILDFILTER_MODE_INCLUDE)
 				? bMatched : !bMatched;
+			if (!bShouldInject)
+				skippedReason = g_ChildInjectFilter.nMode == CHILDFILTER_MODE_INCLUDE
+					? _T("log.process_skipped_not_included") : _T("log.process_skipped_excluded");
 		}
 	}
 
@@ -3547,12 +3557,12 @@ BOOL CPage3::ShouldProxyChildProcess(LPHookNewProcessInfo lphnpi)
 		CPage2* page2 = g_MainTab ? g_MainTab->GetPage2() : NULL;
 		if (page2)
 			page2->LogProcessEvent(lphnpi->dwProcessId, lphnpi->szAppPath,
-				_T("log.process_skipped"));
+				skippedReason);
 	}
 	return bShouldInject;
 }
 
-BOOL CPage3::InjectNewProcess(LPHookNewProcessInfo lphnpi)
+AppLaunchResult CPage3::InjectNewProcess(LPHookNewProcessInfo lphnpi)
 {
 	HookNewProcessInfo hnpi = *lphnpi;
 	HANDLE hProcess;
@@ -3563,23 +3573,23 @@ BOOL CPage3::InjectNewProcess(LPHookNewProcessInfo lphnpi)
 	if(!g_GlobalProxy || !(pPRC = g_GlobalProxy->GetPRCInstance()))
 	{
 		SetLastError(ERROR_PIPE_NOT_CONNECTED);
-		return FALSE;
+		return APP_LAUNCH_INJECTION_FAILED;
 	}
 	if(!pPRC->GetPRCPipeName(szPipeName, MAX_PATH))
 	{
 		SetLastError(ERROR_PIPE_NOT_CONNECTED);
-		return FALSE;
+		return APP_LAUNCH_INJECTION_FAILED;
 	}
 
 	hProcess = OpenProcess(PROCESS_ALL_ACCESS, 0, hnpi.dwProcessId);
 	if (!hProcess)
-		return FALSE;
+		return APP_LAUNCH_INJECTION_FAILED;
 
 	if (!ShouldProxyChildProcess(&hnpi))
 	{
 		CloseHandle(hProcess);
-		SetLastError(ERROR_CANCELLED);
-		return FALSE;
+		SetLastError(ERROR_ACCESS_DISABLED_BY_POLICY);
+		return APP_LAUNCH_POLICY_BLOCKED;
 	}
 
 	CPage2 *pPage2 = g_MainTab->GetPage2();
@@ -3596,7 +3606,7 @@ BOOL CPage3::InjectNewProcess(LPHookNewProcessInfo lphnpi)
 	}
 	CloseHandle(hProcess);
 	SetLastError(injectionError);
-	return bRet > 0;
+	return bRet > 0 ? APP_LAUNCH_SUCCESS : APP_LAUNCH_INJECTION_FAILED;
 }
 
 void CPage3::LogNewProxyTask(const LPPRCClient lpC)
@@ -3902,14 +3912,16 @@ AppLaunchResult CPage3::LaunchAndProxyApp(
     SetAutomationProcessIdentity(process, pi.dwProcessId, hnpi.processCreateTime);
     RecordProcessCreation(g_GlobalProxy ? g_GlobalProxy->GetTlsControl() : NULL,
         MakeProcessCreationNotice(hnpi), "launcher");
-	BOOL injectionSucceeded = InjectNewProcess(&hnpi);
+	const AppLaunchResult injectionResult = InjectNewProcess(&hnpi);
+	const BOOL injectionSucceeded = injectionResult == APP_LAUNCH_SUCCESS;
 	if (!injectionSucceeded && strictInjection)
 	{
-		m_launchInjectionError = GetLastError();
-		TerminateProcess(pi.hProcess, AUTOMATION_EXIT_INJECTION_FAILED);
+		m_launchInjectionError = injectionResult == APP_LAUNCH_POLICY_BLOCKED ? ERROR_SUCCESS : GetLastError();
+		TerminateProcess(pi.hProcess, injectionResult == APP_LAUNCH_POLICY_BLOCKED ?
+			AUTOMATION_EXIT_POLICY_BLOCKED : AUTOMATION_EXIT_INJECTION_FAILED);
 		CloseHandle(pi.hProcess);
 		CloseHandle(pi.hThread);
-		return APP_LAUNCH_INJECTION_FAILED;
+		return injectionResult;
 	}
 
 	const DWORD resumedAt = GetTickCount();

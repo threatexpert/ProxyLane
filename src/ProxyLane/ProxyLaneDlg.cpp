@@ -845,7 +845,9 @@ LRESULT CProxyLaneDlg::OnAutomationStart(WPARAM wParam, LPARAM lParam)
 	if (launchResult != APP_LAUNCH_SUCCESS)
 	{
 		int exitCode = AUTOMATION_EXIT_TARGET_INVALID;
-		if (launchResult == APP_LAUNCH_CREATE_PROCESS_FAILED)
+		if (launchResult == APP_LAUNCH_POLICY_BLOCKED)
+			exitCode = AUTOMATION_EXIT_POLICY_BLOCKED;
+		else if (launchResult == APP_LAUNCH_CREATE_PROCESS_FAILED)
 			exitCode = AUTOMATION_EXIT_CREATE_PROCESS_FAILED;
 		else if (launchResult == APP_LAUNCH_UAC_CANCELLED ||
 			launchResult == APP_LAUNCH_ELEVATED_HELPER_FAILED)
@@ -974,6 +976,9 @@ LRESULT CProxyLaneDlg::OnProfileCommandRequest(WPARAM, LPARAM lParam)
 				break;
 			case APP_LAUNCH_INVALID_TARGET:
 				exitCode = AUTOMATION_EXIT_TARGET_INVALID;
+				break;
+			case APP_LAUNCH_POLICY_BLOCKED:
+				exitCode = AUTOMATION_EXIT_POLICY_BLOCKED;
 				break;
 			case APP_LAUNCH_INJECTION_FAILED:
 			case APP_LAUNCH_PACKAGED_INJECTION_FAILED:
@@ -1580,6 +1585,11 @@ void CProxyLaneDlg::LaunchDroppedApplication(const InstalledApplications::Applic
 		return;
 	}
 	const AppLaunchResult result = page3->LaunchInteractiveApplication(app, elevationMode);
+	if (result == APP_LAUNCH_POLICY_BLOCKED)
+	{
+		page3->ShowApplicationLaunchResult(app.name, result);
+		return;
+	}
 	if (result == APP_LAUNCH_CANCELLED || result == APP_LAUNCH_FORWARDED) return;
 	if (result == APP_LAUNCH_SUCCESS)
 	{
