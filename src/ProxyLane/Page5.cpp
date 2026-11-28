@@ -7,6 +7,7 @@
 #include "ConfigImport.h"
 #include "MainTab.h"
 #include "Page1.h"
+#include "MihomoCore.h"
 #include "UpdateRelease.h"
 #include <wininet.h>
 #pragma comment(lib, "wininet.lib")
@@ -71,19 +72,22 @@ BOOL CPage5::OnInitDialog()
  if (CWnd* name = GetDlgItem(IDC_ABOUT_NAME)) name->SetFont(&m_boldFont, FALSE);
  m_openSourceCard.SetWindowText(L"");
  const bool portable = ConfigStorage::Path().CompareNoCase(ConfigStorage::PortablePath()) == 0;
- const wchar_t* keys[] = { L"settings.open_folder", portable ? L"settings.use_user" : L"settings.use_portable", L"settings.import", L"settings.export", L"settings.check_update" };
- for (int i = 0; i < 5; ++i) {
+ const wchar_t* keys[] = { L"settings.open_folder", portable ? L"settings.use_user" : L"settings.use_portable", L"settings.import", L"settings.export", L"settings.check_update", L"extension.install", L"settings.extension_replace" };
+ for (int i = 0; i < 7; ++i) {
   m_settingsButtons[i].Create(Localization::Get(keys[i]), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, CRect(), this, 0x2500 + i);
   m_settingsButtons[i].SetFont(&m_uiFont);
  }
  // Row-based cards follow lijing6006/ProxyLane PR #3.
  const DWORD child = WS_CHILD | WS_VISIBLE;
  m_configCard.Create(Localization::Get(L"settings.config_title"), child | BS_GROUPBOX, CRect(), this, 0x2530);
+ m_extensionCard.Create(Localization::Get(L"settings.extension_title"), child | BS_GROUPBOX, CRect(), this, 0x2532);
  m_preferencesCard.Create(Localization::Get(L"settings.preferences"), child | BS_GROUPBOX, CRect(), this, 0x2531);
- m_configCard.SetFont(&m_uiFont); m_preferencesCard.SetFont(&m_uiFont);
+ m_configCard.SetFont(&m_uiFont); m_extensionCard.SetFont(&m_uiFont); m_preferencesCard.SetFont(&m_uiFont);
  CString mode = Localization::Get(ConfigStorage::Path().CompareNoCase(ConfigStorage::PortablePath()) == 0 ? L"settings.portable_short" : L"settings.user_short");
  m_storageMode.Create(Localization::Get(L"settings.location") + L" · " + mode, child | SS_NOPREFIX, CRect(), this, 0x2521);
  m_storagePath.Create(ConfigStorage::Path(), child | SS_NOPREFIX | SS_PATHELLIPSIS, CRect(), this, 0x2522);
+ m_extensionTitle.Create(L"", child | SS_NOPREFIX, CRect(), this, 0x252A);
+ m_extensionPath.Create(L"", child | SS_NOPREFIX | SS_PATHELLIPSIS, CRect(), this, 0x252B);
  m_updateInfo.Create(L"", child | LWS_RIGHT, CRect(), this, 0x2524);
  m_updateInfo.SetFont(&m_uiFont);
  m_transferTitle.Create(Localization::Get(L"settings.transfer"), child | SS_NOPREFIX, CRect(), this, 0x2526);
@@ -93,12 +97,16 @@ BOOL CPage5::OnInitDialog()
  m_downloadLink.Create(L"<a href=\"https://10000.download/\">10000.download</a>", child | WS_TABSTOP, CRect(), this, 0x2529);
  m_downloadLink.SetFont(&m_uiFont);
  if (m_projectTooltip.GetSafeHwnd()) m_projectTooltip.AddTool(&m_downloadLink, UpdateRelease::SiteUrl);
- for (UINT id : { 0x2521, 0x2522, 0x2526, 0x2527 }) GetDlgItem(id)->SetFont(id == 0x2522 || id == 0x2527 ? &m_smallFont : &m_uiFont);
+ for (UINT id : { 0x2521, 0x2522, 0x2526, 0x2527, 0x252A, 0x252B }) GetDlgItem(id)->SetFont(id == 0x2522 || id == 0x2527 || id == 0x252B ? &m_smallFont : &m_uiFont);
  if (m_projectTooltip.GetSafeHwnd()) m_projectTooltip.AddTool(&m_storagePath, ConfigStorage::Path());
+ if (m_projectTooltip.GetSafeHwnd()) m_projectTooltip.AddTool(&m_extensionPath, L"");
  m_storagePath.ModifyStyle(0, SS_NOTIFY);
+ m_extensionPath.ModifyStyle(0, SS_NOTIFY);
  // Frames paint below their sibling controls and never enter the tab order.
  m_configCard.SetWindowPos(&wndBottom, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+ m_extensionCard.SetWindowPos(&wndBottom, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
  m_preferencesCard.SetWindowPos(&wndBottom, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+ RefreshExtensionStatus();
  // CCardFrame paints only its border/title; the page owns its background.
  // WS_CLIPCHILDREN excludes the entire card rectangle from background erase,
  // leaving pixels from the previously visible page inside the cards.
@@ -119,8 +127,9 @@ BEGIN_MESSAGE_MAP(CPage5, CModernDialog)
  ON_WM_VSCROLL()
  ON_WM_MOUSEWHEEL()
  ON_WM_TIMER()
+ ON_WM_SHOWWINDOW()
  ON_WM_CTLCOLOR()
- ON_CONTROL_RANGE(BN_CLICKED, 0x2500, 0x2504, &CPage5::OnSettingsAction)
+ ON_CONTROL_RANGE(BN_CLICKED, 0x2500, 0x2506, &CPage5::OnSettingsAction)
 	ON_WM_SIZE()
 	ON_NOTIFY(NM_CLICK, IDC_LINK_PROJECT, &CPage5::OnProjectLink)
 	ON_NOTIFY(NM_RETURN, IDC_LINK_PROJECT, &CPage5::OnProjectLink)
@@ -206,7 +215,7 @@ void CPage5::SetUpdateStatus(const CString& text, bool found, bool failed)
 
 BOOL CPage5::UsesSecondaryText(UINT controlId) const
 {
-	if (controlId == 0x2522 || controlId == 0x2524 || controlId == 0x2527 || controlId == 0x2528) return TRUE;
+	if (controlId == 0x2522 || controlId == 0x2524 || controlId == 0x2527 || controlId == 0x2528 || controlId == 0x252B) return TRUE;
 	switch (controlId)
 	{
 	case IDC_STATIC_ABOUT_VERSION:
@@ -260,8 +269,9 @@ void CPage5::LayoutAboutPage()
  };
  // The same left-label/right-action rows as the PR; narrow windows wrap actions.
  auto row = [&](UINT title, UINT detail, int first, int second, bool path) {
-  const int firstW = buttonWidth(first), secondW = buttonWidth(second);
-  const int actions = firstW + gap + secondW;
+  const int firstW = buttonWidth(first);
+  const int secondW = second >= 0 ? buttonWidth(second) : 0;
+  const int actions = second >= 0 ? firstW + gap + secondW : firstW;
   const bool stacked = inner - actions - S(10) < S(210);
   const int labelW = stacked ? inner : inner - actions - S(10);
   const int descriptionH = path ? S(18) : detailHeight(detail, labelW);
@@ -269,7 +279,7 @@ void CPage5::LayoutAboutPage()
   place(title, x + pad, y + S(4), labelW, S(20));
   place(detail, x + pad, y + S(24), labelW, descriptionH);
   const int actionY = stacked ? y + rowH + S(4) : y + (rowH - buttonH) / 2;
-  place(0x2500 + second, right - secondW, actionY, secondW, buttonH);
+  if (second >= 0) place(0x2500 + second, right - secondW, actionY, secondW, buttonH);
   place(0x2500 + first, right - actions, actionY, firstW, buttonH);
   y += rowH + (stacked ? buttonH + S(8) : 0) + S(4);
  };
@@ -277,6 +287,10 @@ void CPage5::LayoutAboutPage()
  row(0x2526, 0x2527, 2, 3, false);
  y += S(8);
  place(0x2530, x, cardTop, width, y - cardTop);
+ y += S(10); cardTop = y; y += titleH;
+ row(0x252A, 0x252B, 5, m_extensionInstalled ? 6 : -1, m_extensionInstalled);
+ y += S(8);
+ place(0x2532, x, cardTop, width, y - cardTop);
  y += S(10); cardTop = y; y += titleH;
  place(IDC_STATIC_LANGUAGE_LABEL, x + pad, y + S(12), inner - S(190), S(20));
  place(IDC_COMBO_LANGUAGE, right - S(172), y + S(7), S(172), S(200));
@@ -393,15 +407,61 @@ void CPage5::OnSettingsAction(UINT id)
   if (m_updateQuery.Request([](CString& tag) { return FetchRelease(tag); })) {
    m_settingsButtons[4].EnableWindow(FALSE);
    SetUpdateStatus(Localization::Get(L"settings.checking"));
-   SetTimer(0x2506, 100, NULL);
+   SetTimer(0x2510, 100, NULL);
   } else SetUpdateStatus(Localization::Get(L"settings.update_failed"), false, true);
   break;
  }
+ case 5: {
+  if (m_extensionInstalled) {
+   const CString path = MihomoCore::InstalledPath();
+   if (path.IsEmpty() || !MihomoCore::Browse(m_hWnd, path)) RefreshExtensionStatus();
+  } else {
+   InstallExtensionCore();
+  }
+  break;
+ }
+ case 6:
+  InstallExtensionCore();
+  break;
+ }
+}
+void CPage5::OnShowWindow(BOOL show, UINT status)
+{
+ CModernDialog::OnShowWindow(show, status);
+ if (show) { RefreshExtensionStatus(); LayoutAboutPage(); }
+}
+void CPage5::RefreshExtensionStatus()
+{
+ if (!m_extensionTitle.GetSafeHwnd()) return;
+ const CString installed = MihomoCore::InstalledPath();
+ m_extensionInstalled = !installed.IsEmpty();
+ m_extensionTitle.SetWindowText(Localization::Get(m_extensionInstalled
+  ? L"settings.extension_installed" : L"settings.extension_missing"));
+ const CString detail = m_extensionInstalled ? installed
+  : Localization::Format(L"settings.extension_missing_detail", (LPCTSTR)MihomoCore::TargetPath());
+ m_extensionPath.SetWindowText(detail);
+ if (m_projectTooltip.GetSafeHwnd()) m_projectTooltip.UpdateTipText(detail, &m_extensionPath);
+ m_settingsButtons[5].SetWindowText(Localization::Get(m_extensionInstalled
+  ? L"settings.extension_browse" : L"extension.install"));
+ m_settingsButtons[6].ShowWindow(m_extensionInstalled ? SW_SHOWNA : SW_HIDE);
+}
+void CPage5::InstallExtensionCore()
+{
+ CFileDialog picker(TRUE, L"exe", NULL, OFN_FILEMUSTEXIST | OFN_HIDEREADONLY,
+  L"Mihomo (*.exe)|*.exe||", this);
+ if (picker.DoModal() != IDOK) return;
+ CString path, error;
+ if (MihomoCore::Install(picker.GetPathName(), path, error)) {
+  RefreshExtensionStatus();
+  LayoutAboutPage();
+  MessageBox(Localization::Format(L"extension.installed", (LPCTSTR)path), L"ProxyLane", MB_ICONINFORMATION);
+ } else {
+  MessageBox(error, Localization::Get(L"extension.install"), MB_ICONERROR);
  }
 }
 void CPage5::OnTimer(UINT_PTR id)
 {
- if (id != 0x2506) { CModernDialog::OnTimer(id); return; }
+ if (id != 0x2510) { CModernDialog::OnTimer(id); return; }
  auto result = m_updateQuery.Take(); if (!result && m_updateQuery.Busy()) return;
  KillTimer(id); m_settingsButtons[4].EnableWindow(TRUE);
  UpdateRelease::VersionParts latest, current;

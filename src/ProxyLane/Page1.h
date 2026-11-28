@@ -8,9 +8,11 @@
 #include "ProxyController.h"
 #include "ProxyProfileStore.h"
 #include "SshAuthControls.h"
+#include "MihomoCore.h"
 #include "RecentApplications.h"
 #include <afxmt.h>
 #include <vector>
+#include <map>
 
 
 // CPage1 对话框
@@ -32,6 +34,15 @@ public:
 	CProfileCombo m_cfgls;
 	CSoftCombo m_cbProxyType;
 	CSoftEdit     m_edit_HostName;
+    CSoftEdit m_editNodeUri;
+    CString NodeUri() const;
+    CString SelectedProtocol() const;
+    int ProtocolIndex(const CString& name) const;
+    bool ResolveExtension(ProxyInfo& info, ProxyChain& chain, std::shared_ptr<MihomoCore>& core,
+        bool test = false, const CString* overrideUri = nullptr);
+    std::shared_ptr<MihomoCore> m_businessCore, m_testCore;
+    // Keep the old route alive across Apply for sockets already using it.
+    std::map<CString, std::shared_ptr<MihomoCore>> m_sessionCores;
 	CSoftEdit     m_edit_Port;
 	CSoftEdit     m_edit_User;
 	CSoftEdit     m_edit_Pass;
@@ -75,7 +86,7 @@ public:
     int m_singleTestStage = PTS_WAITING;
 	CString m_chainConclusion;
 	// The current UI's route: the first hop in `first`; chain is empty for one server.
-	BOOL GetRoute(LPProxyInfo first, ProxyChain* chain);
+	BOOL GetRoute(LPProxyInfo first, ProxyChain* chain, CString* extensionUri = NULL);
  afx_msg void OnNewProfile();
 	afx_msg void OnNewChainProfile();
 	void NewProfile(BOOL chain);
@@ -113,6 +124,7 @@ private:
 	BOOL m_runtimeSettingsValid;
 	CString m_settingsValidationKey;
 	CString m_settingsValidationName;	// the chain hop a validation error is about
+	CString m_settingsValidationDetail;
 	CString SettingsValidationMessage() const;
 	BOOL m_runtimeDirty;
 

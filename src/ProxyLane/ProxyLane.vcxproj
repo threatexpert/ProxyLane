@@ -378,6 +378,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\..\scri
     <ClCompile Include="MainTab.cpp" />
     <ClCompile Include="ModernUI.cpp" />
     <ClCompile Include="Page1.cpp" />
+    <ClCompile Include="MihomoCore.cpp" />
     <ClCompile Include="ProfileSharing.cpp" />
     <ClCompile Include="ConfigImport.cpp" />
     <ClCompile Include="Page2.cpp" />
@@ -463,6 +464,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\..\scri
     <ClInclude Include="ProxyController.h" />
     <ClInclude Include="ProfileIniSection.h" />
     <ClInclude Include="ProxyProfileStore.h" />
+    <ClInclude Include="MihomoCore.h" />
+    <ClInclude Include="ExtensionUri.h" />
     <ClInclude Include="SshProfile.h" />
     <ClInclude Include="SshPrivateKey.h" />
     <ClInclude Include="SshKeyStore.h" />

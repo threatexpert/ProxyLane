@@ -64,6 +64,9 @@ private:
 	IProxyTesterCallback *m_pCallback;
 	BOOL m_completed;
 	WORD m_dnsTransactionId;
+    std::string m_probeRequest, m_probeReply;
+    size_t m_probeSent = 0;
+    void SendProbe();
     std::shared_ptr<CDohWakeup> m_dohWake;
     bool m_dohNoticeFailed = false;
     std::shared_ptr<CDohQuery> m_doh;

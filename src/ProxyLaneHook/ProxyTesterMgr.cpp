@@ -351,7 +351,20 @@ void CProxyTester::OnConnect(int nErrorCode)
 	{
 		if (m_client.sType == SOCK_STREAM)
 		{
-			Complete(0);
+            if (m_proxyinfo.extensionEndpoint) {
+                // Local SOCKS implementations may acknowledge CONNECT before the
+                // remote handshake. Require application bytes from the target.
+                if (m_client.IsDNValid()) {
+                    m_probeRequest = "HEAD / HTTP/1.0\r\nHost: ";
+                    m_probeRequest += m_client.szDomainName;
+                    m_probeRequest += "\r\nConnection: close\r\n\r\n";
+                } else {
+                    // The IPv6 reachability target is a TCP DNS resolver.
+                    static const unsigned char query[] = {0,17,0x50,0x4c,1,0,0,1,0,0,0,0,0,0,0,0,1,0,1};
+                    m_probeRequest.assign(reinterpret_cast<const char*>(query), sizeof(query));
+                }
+                SendProbe();
+            } else Complete(0);
 			return;
 		}
 
@@ -378,6 +391,22 @@ void CProxyTester::OnConnect(int nErrorCode)
 
 void CProxyTester::OnReceive(int nErrorCode)
 {
+	if (!m_completed && !m_probeRequest.empty()) {
+        if (nErrorCode) { Complete(nErrorCode); return; }
+        char buffer[64];
+        int received = Receive(buffer, sizeof(buffer));
+        if (received <= 0) {
+            if (received == 0 || WSAGetLastError() != WSAEWOULDBLOCK) Complete(WSAECONNABORTED);
+            return;
+        }
+        m_probeReply.append(buffer, received);
+        if (m_client.IsDNValid()) {
+            if (m_probeReply.size() >= 5) Complete(m_probeReply.compare(0,5,"HTTP/") == 0 ? 0 : WSAEINVAL);
+        } else if (m_probeReply.size() >= 14) {
+            Complete(m_probeReply[2] == 0x50 && m_probeReply[3] == 0x4c && (m_probeReply[4] & 0x80) ? 0 : WSAEINVAL);
+        }
+        return;
+    }
 	if (m_client.sType != SOCK_DGRAM || m_completed)
 		return;
 	if (nErrorCode)
@@ -401,9 +430,23 @@ void CProxyTester::OnReceive(int nErrorCode)
 		Complete(0);
 }
 
+void CProxyTester::SendProbe()
+{
+    while (m_probeSent < m_probeRequest.size()) {
+        const int sent = Send(m_probeRequest.data() + m_probeSent, static_cast<int>(m_probeRequest.size() - m_probeSent));
+        if (sent <= 0) {
+            if (!sent || WSAGetLastError() != WSAEWOULDBLOCK) Complete(WSAECONNABORTED);
+            return;
+        }
+        m_probeSent += sent;
+    }
+}
+
 void CProxyTester::OnSend(int nErrorCode)
 {
-
+    if (m_completed || m_probeRequest.empty()) return;
+    if (nErrorCode) Complete(nErrorCode);
+    else SendProbe();
 }
 
 int CProxyTester::OnLayerCallback(const CAsyncSocketExLayer *pLayer, int nType, int nCode, WPARAM wParam, LPARAM lParam)

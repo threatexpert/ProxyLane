@@ -258,10 +258,11 @@ void CPage1::OnCopyProfile()
         m_cfgls.GetWindowText(text);
         text.Trim();
         value["name"] = Utf8(text);
-        m_cbProxyType.GetWindowText(text);
+        text = SelectedProtocol();
         value["type"] = Utf8(text);
         m_edit_Port.GetWindowText(text);
         text.Trim();
+        if (value["type"] == "EXTENSION") text.Empty();
         if (text.GetLength() > 5 || (!text.IsEmpty() && text.FindOneOf(_T("0123456789")) < 0))
             throw ProfileShare::Error("profile.invalid_endpoint");
         for (int i = 0; i < text.GetLength(); ++i)
@@ -301,6 +302,11 @@ void CPage1::OnCopyProfile()
         value["child_mode"] = m_radioChildFilterInclude.GetCheck() == BST_CHECKED ? 1 : 0;
         value["target_mode"] = m_radioTargetFilterProxy.GetCheck() == BST_CHECKED ? 1 : 0;
         value["transport"] = m_cbTransport.GetCurSel() == PROXY_TRANSPORT_GONC_TLS_PSK ? "GONC_TLS_PSK" : "PLAIN";
+        if (value["type"] == "EXTENSION") {
+            value["node_uri"] = Utf8(NodeUri());
+            value["host"] = value["user"] = value["password"] = value["psk"] = "";
+            value["transport"] = "PLAIN";
+        }
         if (value["type"] == "SSH") {
             value["ssh_host_key"] = value["psk"]; value["psk"] = "";
             ProxyInfo auth;
@@ -387,8 +393,9 @@ void CPage1::OnPasteProfile()
         SecureZeroMemory(importedAuth.strSshKeyFile.szbuf, sizeof(importedAuth.strSshKeyFile.szbuf));
         m_cfgls.SetCurSel(-1);
         m_cfgls.SetWindowText(name);
-        m_cbProxyType.SelectString(-1, type);
+        m_cbProxyType.SetCurSel(ProtocolIndex(type));
         m_cbTransport.SetCurSel(secure ? PROXY_TRANSPORT_GONC_TLS_PSK : PROXY_TRANSPORT_PLAIN);
+        m_editNodeUri.SetWindowText(Wide(value.value("node_uri", std::string())));
         m_edit_Port.SetWindowText(port);
         for (const auto& field : texts) SetDlgItemText(field.first, field.second);
         for (const auto& field : checkFields)

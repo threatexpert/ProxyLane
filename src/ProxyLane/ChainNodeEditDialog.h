@@ -5,7 +5,10 @@
 #include "ConfigStorage.h"
 #include "SshProfile.h"
 #include "SshAuthControls.h"
+#include "MihomoCore.h"
+#include "ExtensionUri.h"
 #include "resource.h"
+#include <memory>
 #include "ProxyTestResultDialog.h"
 #include "ProxyTestError.h"
 #include "../ProxyLaneHook/ProxyTransportPolicy.h"
@@ -34,12 +37,15 @@ protected:
         const DWORD combo = child | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL;
         m_type.Create(combo, empty, this, 1301);
         for (LPCTSTR type : { L"SOCKS5", L"HTTP", L"SSH" }) m_type.AddString(type);
+        m_type.AddString(Localization::Get(L"extension.type"));
         m_transport.Create(combo, empty, this, 1302);
         m_transport.AddString(Localization::Get(L"transport.plain"));
         m_transport.AddString(Localization::Get(L"transport.gonc_tls_psk"));
         CSoftEdit* fields[] = { &m_host, &m_port, &m_user, &m_password, &m_key };
         for (int i = 0; i < 5; ++i)
             fields[i]->Create(child | WS_TABSTOP | ES_AUTOHSCROLL | (i == 3 ? ES_PASSWORD : 0), empty, this, 1303 + i);
+        m_nodeUri.Create(child | WS_TABSTOP | ES_AUTOHSCROLL, empty, this, 1321);
+        m_nodeUri.SetLimitText(ExtensionUri::MaxLength);
         m_error.Create(L"", child | SS_OWNERDRAW, empty, this, 1308);
         m_error.SetInlineStyle(TRUE);
         m_error.ShowWindow(SW_HIDE);
@@ -54,8 +60,10 @@ protected:
 
         const int type = m_item.pi.GetProxyType();
         m_ssh = type == PROXYTYPE_SSH;
-        m_type.SetCurSel(m_ssh ? 2 : type == PROXYTYPE_SOCKS5 ? 0 : 1);
+        m_extension = type == PROXYTYPE_EXTENSION;
+        m_type.SetCurSel(m_extension ? 3 : m_ssh ? 2 : type == PROXYTYPE_SOCKS5 ? 0 : 1);
         m_transport.SetCurSel(m_item.nTransportMode == PROXY_TRANSPORT_GONC_TLS_PSK ? 1 : 0);
+        m_nodeUri.SetWindowText(m_item.nodeUri);
         m_host.SetWindowText((CString)m_item.pi.strProxyHost);
         CString port; port.Format(L"%d", m_item.pi.nProxyPort); m_port.SetWindowText(port);
         m_user.SetWindowText(m_ssh ? SshProfile::Decode(m_item.pi.strProxyUser.szbuf) : (CString)m_item.pi.strProxyUser);
@@ -64,7 +72,7 @@ protected:
         m_password.SetPasswordChar(L'\x25cf');
         m_ready = true;
         UpdateFields();
-        SetDefID(IDOK); m_host.SetFocus();
+        SetDefID(IDOK); (m_extension ? m_nodeUri : m_host).SetFocus();
         return FALSE;
     }
     BOOL UsesSecondaryText(UINT id) const override
@@ -85,12 +93,14 @@ protected:
         if (m_ready && HIWORD(wParam) == CBN_SELCHANGE && (LOWORD(wParam) == 1301 || LOWORD(wParam) == 1302))
         {
             const bool ssh = m_type.GetCurSel() == 2;
+            const bool extension = m_type.GetCurSel() == 3;
             if (ssh != m_ssh) {
                 m_key.SetWindowText(L"");
                 if (m_sshAuth.IsKey()) m_password.SetWindowText(L"");
                 m_sshAuth.Load(NULL);
             } // A PSK is never an SSH host-key pin.
             m_ssh = ssh;
+            m_extension = extension;
             UpdateFields();
             m_error.SetStatus(L"", CStatusLabel::TONE_NEUTRAL);
             m_error.ShowWindow(SW_HIDE);
@@ -106,6 +116,30 @@ protected:
     bool ReadFields(CfgProxyItem& edited)
     {
         edited = m_item;
+        if (m_extension)
+        {
+            CString uri;
+            m_nodeUri.GetWindowText(uri);
+            uri.Trim();
+            if (!ExtensionUri::Valid(uri.GetString(), uri.GetLength()))
+            {
+                Invalid(L"extension.invalid", m_nodeUri);
+                return false;
+            }
+            edited.pi.strProxyType = L"EXTENSION";
+            edited.nodeUri = uri;
+            edited.pi.strProxyHost = L"";
+            edited.pi.nProxyPort = 0;
+            edited.pi.strProxyUser = L"";
+            edited.pi.strProxyPass = L"";
+            edited.pi.sshAuth = 0;
+            SecureZeroMemory(edited.pi.strSshKeyFile.szbuf, sizeof(edited.pi.strSshKeyFile.szbuf));
+            SecureZeroMemory(edited.pi.strTransportPsk.szbuf, sizeof(edited.pi.strTransportPsk.szbuf));
+            edited.strTransportPsk.Empty();
+            edited.nTransportMode = PROXY_TRANSPORT_PLAIN;
+            edited.pi.reserved = PROXY_TRANSPORT_PLAIN;
+            return true;
+        }
         CString host, port, user, password, key, type;
         m_host.GetWindowText(host); host.Trim();
         m_port.GetWindowText(port); port.Trim();
@@ -187,11 +221,20 @@ private:
     }
     void UpdateFields()
     {
-        if (m_ssh) m_transport.SetCurSel(0);
+        if (m_ssh || m_extension) m_transport.SetCurSel(0);
         m_sshAuth.Show(m_ssh);
+        m_labels[1].ShowWindow(m_extension ? SW_HIDE : SW_SHOW);
+        m_transport.ShowWindow(m_extension ? SW_HIDE : SW_SHOW);
+        m_labels[2].SetWindowText(Localization::Get(m_extension ? L"extension.uri" : L"common.host"));
+        m_nodeUri.ShowWindow(m_extension ? SW_SHOW : SW_HIDE);
+        m_host.ShowWindow(m_extension ? SW_HIDE : SW_SHOW);
+        for (int i = 3; i <= 5; ++i) m_labels[i].ShowWindow(m_extension ? SW_HIDE : SW_SHOW);
+        m_port.ShowWindow(m_extension ? SW_HIDE : SW_SHOW);
+        m_user.ShowWindow(m_extension ? SW_HIDE : SW_SHOW);
+        m_password.ShowWindow(m_extension ? SW_HIDE : SW_SHOW);
         m_labels[5].SetWindowText(Localization::Get(m_ssh && m_sshAuth.IsKey() ? L"ssh.passphrase" : L"common.password"));
-        m_transport.EnableWindow(!m_ssh && ProxySupportsOptionalModules());
-        m_showKey = m_ssh || m_transport.GetCurSel() == 1;
+        m_transport.EnableWindow(!m_ssh && !m_extension && ProxySupportsOptionalModules());
+        m_showKey = !m_extension && (m_ssh || m_transport.GetCurSel() == 1);
         m_key.ShowWindow(m_showKey ? SW_SHOW : SW_HIDE);
         m_labels[6].ShowWindow(m_showKey ? SW_SHOW : SW_HIDE);
         m_labels[6].SetWindowText(Localization::Get(m_ssh ? L"ssh.host_key" : L"common.psk"));
@@ -204,7 +247,7 @@ private:
             SystemParametersInfo(SPI_GETWORKAREA, 0, &monitor.rcWork, 0);
         const CRect work(monitor.rcWork);
         const int width = min(S(460) + frame.Width(), work.Width() - S(24));
-        const int height = S((m_showKey ? 346 : 290) + (m_ssh ? 56 : 0)) + frame.Height();
+        const int height = S(m_extension ? 236 : (m_showKey ? 346 : 290) + (m_ssh ? 56 : 0)) + frame.Height();
         SetWindowPos(NULL, max(work.left, min(owner.CenterPoint().x-width/2, work.right-width)),
             max(work.top, min(owner.CenterPoint().y-height/2, work.bottom-height)), width, height, SWP_NOZORDER);
         Layout();
@@ -219,14 +262,21 @@ private:
             control.MoveWindow(x, y+S(20), w, S(combo ? 160 : 28));
         };
         field(0, m_type, left, S(54), half, true);
-        field(1, m_transport, left+half+gap, S(54), half, true);
-        field(2, m_host, left, S(110), width-S(96)-gap);
-        field(3, m_port, area.right-left-S(96), S(110), S(96));
-        if (m_ssh) m_sshAuth.Layout(left, S(166), width, gap, S(18), S(28));
-        const int shift = m_ssh ? 56 : 0;
-        field(4, m_user, left, S(166+shift), half);
-        field(5, m_password, left+half+gap, S(166+shift), half);
-        if (m_showKey) field(6, m_key, left, S(222+shift), width);
+        if (m_extension)
+        {
+            field(2, m_nodeUri, left, S(110), width);
+        }
+        else
+        {
+            field(1, m_transport, left+half+gap, S(54), half, true);
+            field(2, m_host, left, S(110), width-S(96)-gap);
+            field(3, m_port, area.right-left-S(96), S(110), S(96));
+            if (m_ssh) m_sshAuth.Layout(left, S(166), width, gap, S(18), S(28));
+            const int shift = m_ssh ? 56 : 0;
+            field(4, m_user, left, S(166+shift), half);
+            field(5, m_password, left+half+gap, S(166+shift), half);
+            if (m_showKey) field(6, m_key, left, S(222+shift), width);
+        }
         const int bottom = area.bottom-S(12)-S(30);
         m_error.MoveWindow(left, bottom-S(28), width, S(24));
         m_test.MoveWindow(area.right-left-S(80)-2*gap-S(100)-S(112), bottom, S(112), S(30));
@@ -237,7 +287,8 @@ private:
     {
         m_sshAuth.Enable(!running);
         for (UINT id = 1301; id <= 1307; ++id) GetDlgItem(id)->EnableWindow(!running);
-        if (!running) m_transport.EnableWindow(!m_ssh && ProxySupportsOptionalModules());
+        m_nodeUri.EnableWindow(!running);
+        if (!running) m_transport.EnableWindow(!m_ssh && !m_extension && ProxySupportsOptionalModules());
         m_save.EnableWindow(!running);
         m_test.SetWindowText(Localization::Get(running ? L"action.cancel_test" : L"chain.edit.test_node"));
     }
@@ -245,6 +296,7 @@ private:
     {
         ++m_testGeneration; // Invalidate completions already queued by the previous run.
         if (m_tester) { m_tester->Release(); m_tester = NULL; }
+        m_core.reset();
         m_testing = false;
         if (m_save.GetSafeHwnd()) TestControls(false);
     }
@@ -259,7 +311,22 @@ private:
         }
         CfgProxyItem draft;
         if (!ReadFields(draft)) return;
+        m_core.reset();
         m_testInfo = draft.pi;
+        if (m_testInfo.GetProxyType() == PROXYTYPE_EXTENSION)
+        {
+            m_core = std::make_shared<MihomoCore>();
+            CString errorKey, errorDetail;
+            if (!m_core->Start(draft.nodeUri, m_testInfo, errorKey, &errorDetail))
+            {
+                m_core.reset();
+                CString message = Localization::Get(errorKey);
+                if (!errorDetail.IsEmpty()) message += L" (" + errorDetail + L")";
+                m_error.SetStatus(message, CStatusLabel::TONE_DANGER);
+                m_error.ShowWindow(SW_SHOW);
+                return;
+            }
+        }
         m_udpRequested = ProxyTransportPolicy::SupportsUdpProxy(m_testInfo.GetProxyType());
         m_fingerprint.Empty();
         m_rows.clear();
@@ -354,7 +421,15 @@ private:
         auto& row = m_rows[m_phase];
         row.state = m_phaseError ? CProxyTestResultRow::Failed : CProxyTestResultRow::Passed;
         row.status = Localization::Get(m_phaseError ? L"test.result.failed" : L"test.result.passed");
-        if (m_phaseError) row.detail = m_phaseErrorDetail.IsEmpty() ? ProxyTestErrorDescription(m_phaseError, FALSE) : m_phaseErrorDetail;
+        if (m_phaseError)
+        {
+            row.detail = m_phaseErrorDetail.IsEmpty() ? ProxyTestErrorDescription(m_phaseError, FALSE) : m_phaseErrorDetail;
+            if (m_core)
+            {
+                const CString mihomoError = m_core->LastError();
+                if (!mihomoError.IsEmpty()) row.detail += L"\r\n" + mihomoError;
+            }
+        }
         if (m_phase == 1 && m_phaseError == PROXYERROR_UDP_UNSUPPORTED)
         {
             row.state = CProxyTestResultRow::Skipped;
@@ -401,10 +476,11 @@ private:
     CProxyProfileStore& m_store;
     CIniFile& m_ini;
     CfgProxyItem m_item;
-    bool m_ready = false, m_ssh = false, m_showKey = false;
+    bool m_ready = false, m_ssh = false, m_extension = false, m_showKey = false;
     CSshAuthControls m_sshAuth;
+    std::shared_ptr<MihomoCore> m_core;
     CSoftCombo m_type, m_transport;
-    CSoftEdit m_host, m_port, m_user, m_password, m_key;
+    CSoftEdit m_host, m_port, m_user, m_password, m_key, m_nodeUri;
     CStatic m_labels[7], m_notice;
     CStatusLabel m_error;
     CModernButton m_test, m_save, m_cancel;

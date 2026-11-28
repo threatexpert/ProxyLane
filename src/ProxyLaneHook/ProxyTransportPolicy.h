@@ -32,6 +32,6 @@ namespace ProxyTransportPolicy
 	inline bool SupportsUdpProxy(int proxyType)
 	{
 		// Direct routes still pass through the local UDP relay and monitor.
-		return proxyType == PROXYTYPE_NOPROXY || proxyType == PROXYTYPE_SOCKS5;
+		return proxyType == PROXYTYPE_NOPROXY || proxyType == PROXYTYPE_SOCKS5 || proxyType == PROXYTYPE_EXTENSION;
 	}
 }

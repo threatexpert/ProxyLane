@@ -64,6 +64,7 @@
     </ClCompile>
     <ClCompile Include="ConfigImport.cpp"><Filter>Source Files</Filter></ClCompile>
     <ClCompile Include="ConfigStorage.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="MihomoCore.cpp" />
     <ClCompile Include="ProfileSharing.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -167,6 +168,8 @@
     <ClInclude Include="ChainRouteView.h">
         <Filter>Header Files</Filter>
       </ClInclude>
+    <ClInclude Include="MihomoCore.h" />
+    <ClInclude Include="ExtensionUri.h" />
     <ClInclude Include="Page1.h">
       <Filter>头文件</Filter>
     </ClInclude>

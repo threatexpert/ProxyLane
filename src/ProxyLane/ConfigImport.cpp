@@ -126,7 +126,7 @@ UINT Validate(const CString& text, const CString& path)
         const bool validPort = !port.IsEmpty() && port.GetLength() <= 5 &&
             port.SpanIncluding(L"0123456789") == port && _wtoi(port) > 0 && _wtoi(port) <= 65535;
         const bool valid = !item.strName.IsEmpty() && store.Load(item) &&
-            (item.pi.GetProxyType() == PROXYTYPE_NOPROXY || validPort) &&
+            (item.pi.GetProxyType() == PROXYTYPE_NOPROXY || item.pi.GetProxyType() == PROXYTYPE_EXTENSION || validPort) &&
             (transport.IsEmpty() || transport.CompareNoCase(L"PLAIN") == 0 || transport.CompareNoCase(L"GONC_TLS_PSK") == 0);
         if (!valid) invalid += L"\r\n" + (item.strName.IsEmpty() ? section : item.strName);
         else ++count;

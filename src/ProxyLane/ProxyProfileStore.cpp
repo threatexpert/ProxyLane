@@ -5,6 +5,7 @@
 #include "RecentApplications.h"
 #include "ConfigStorage.h"
 #include "SshProfile.h"
+#include "ExtensionUri.h"
 #include "SshKeyStore.h"
 #include <set>
 
@@ -140,7 +141,11 @@ BOOL CProxyProfileStore::Load(CfgProxyItem& item) const
 		return TRUE;
 	}
 
-	const CString proxyType = (CString)item.pi.strProxyType;
+	if (storedType == PROXYTYPE_EXTENSION) {
+        item.nodeUri = m_ini.GetString(section, L"NodeURI");
+        return ExtensionUri::Valid(item.nodeUri.GetString(), item.nodeUri.GetLength());
+    }
+    const CString proxyType = (CString)item.pi.strProxyType;
 	if (proxyType.CompareNoCase(_T("NOPROXY")) == 0)
 		return TRUE; // Direct profiles have no upstream proxy endpoint.
 	const BOOL supportedType = item.pi.GetProxyType() != PROXYTYPE_NOPROXY;
@@ -196,7 +201,11 @@ namespace
 		const CString type = (proxyType == PROXYTYPE_HTTP10 || proxyType == PROXYTYPE_HTTP11)
 			? CString(L"HTTP") : (CString)item.pi.strProxyType;
 		if (!ini.SetString(section, _T("Type"), type)) return false;
-		if (!ini.SetString(section, _T("Host"), (CString)item.pi.strProxyHost)) return false;
+		if (proxyType == PROXYTYPE_EXTENSION) {
+            if (!ExtensionUri::Valid(item.nodeUri.GetString(), item.nodeUri.GetLength()) ||
+                !ini.SetString(section, L"NodeURI", item.nodeUri)) return false;
+        } else if (!ini.DeleteKeyName(section, L"NodeURI")) return false;
+        if (!ini.SetString(section, _T("Host"), (CString)item.pi.strProxyHost)) return false;
 		if (!ini.SetInt(section, _T("Port"), item.pi.nProxyPort)) return false;
 		if (!ini.SetString(section, _T("User"), (proxyType == PROXYTYPE_SSH ? SshProfile::Decode(item.pi.strProxyUser.szbuf) : (CString)item.pi.strProxyUser))) return false;
 		const bool keyAuth = proxyType == PROXYTYPE_SSH && item.pi.sshAuth == 1;
@@ -250,7 +259,7 @@ BOOL CProxyProfileStore::Save(CfgProxyItem& item)
 	{
 		// A chain stores its hops in place of a server.
 		if (!ini.SetString(section, _T("Type"), _T("CHAIN"))) return false;
-		const LPCTSTR serverKeys[] = { _T("Host"), _T("Port"), _T("User"), _T("Pass"), _T("Transport"), _T("PSK"), L"SshHostKey", L"SshAuth", L"SshPrivateKey", L"SshKeyFile", L"SshKeyPassphrase" };
+		const LPCTSTR serverKeys[] = { L"NodeURI", _T("Host"), _T("Port"), _T("User"), _T("Pass"), _T("Transport"), _T("PSK"), L"SshHostKey", L"SshAuth", L"SshPrivateKey", L"SshKeyFile", L"SshKeyPassphrase" };
 		for (LPCTSTR key : serverKeys)
 			if (!ini.DeleteKeyName(section, key)) return false;
 	}
@@ -308,7 +317,8 @@ BOOL CProxyProfileStore::IsChainHop(const CfgProxyItem& item)
 	ProxyInfo pi = item.pi;
 	const int type = pi.GetProxyType();
 	return !item.bChain && (type == PROXYTYPE_SOCKS5 ||
-		type == PROXYTYPE_HTTP10 || type == PROXYTYPE_HTTP11 || type == PROXYTYPE_SSH);
+		type == PROXYTYPE_HTTP10 || type == PROXYTYPE_HTTP11 ||
+		type == PROXYTYPE_SSH || type == PROXYTYPE_EXTENSION);
 }
 
 BOOL CProxyProfileStore::ListChainUsers(LPCTSTR name, std::vector<CString>& users) const
@@ -336,10 +346,11 @@ BOOL CProxyProfileStore::ListChainUsers(LPCTSTR name, std::vector<CString>& user
 }
 
 BOOL CProxyProfileStore::ResolveChain(const std::vector<CString>& hops, ProxyChain& chain,
-	CString& errorKey, CString& errorName) const
+	CString& errorKey, CString& errorName, CString* firstHopUri) const
 {
 	chain.clear();
 	errorName.Empty();
+	if (firstHopUri) firstHopUri->Empty();
 	if (hops.size() < 2)
 	{
 		errorKey = _T("profile.chain_too_short");
@@ -369,6 +380,13 @@ BOOL CProxyProfileStore::ResolveChain(const std::vector<CString>& hops, ProxyCha
 			errorKey = _T("profile.chain_invalid_hop");
 			return FALSE;
 		}
+		if (i > 0 && item.pi.GetProxyType() == PROXYTYPE_EXTENSION)
+		{
+			errorKey = _T("profile.chain_extension_position");
+			return FALSE;
+		}
+		if (i == 0 && item.pi.GetProxyType() == PROXYTYPE_EXTENSION && firstHopUri)
+			*firstHopUri = item.nodeUri;
 
 		ProxyInfo& hop = resolved[i];
 		hop = item.pi;

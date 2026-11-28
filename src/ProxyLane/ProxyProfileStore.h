@@ -13,6 +13,7 @@
 struct CfgProxyItem
 {
 	CString strName;
+	CString nodeUri;
 	ProxyInfo pi;
 	BOOL bHookTCP;
 	BOOL bHookUDP;
@@ -51,14 +52,14 @@ public:
 	BOOL Delete(LPCTSTR name);
 	void SetLastSelected(LPCTSTR name);
 
-	// A saved Server-mode SOCKS5, HTTP or SSH profile, the only kind a chain can use.
+	// A saved single-hop Server-mode profile (SOCKS5, HTTP, SSH, or Extension as hop 1).
 	static BOOL IsChainHop(const CfgProxyItem& item);
 	// Chain profiles that list `name` as a hop.
 	BOOL ListChainUsers(LPCTSTR name, std::vector<CString>& users) const;
 	// Builds the route of a chain from its saved hop profiles. On failure,
 	// errorKey is a localization key and errorName the offending hop, if any.
 	BOOL ResolveChain(const std::vector<CString>& hops, ProxyChain& chain,
-		CString& errorKey, CString& errorName) const;
+		CString& errorKey, CString& errorName, CString* firstHopUri = NULL) const;
 
 private:
 	static CString EncodeFilter(const CString& multiLine);

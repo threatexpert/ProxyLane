@@ -228,6 +228,7 @@ typedef struct _tagProxyInfo
     string<1024> dohUrl;
     string<512> dohBootstrap;
     BOOL dohBlockIPv6 = FALSE;
+    BOOL extensionEndpoint = FALSE; // Host-only resolved local SOCKS5 endpoint.
 /////////////////////
 
 #define PROXY_TRANSPORT_PLAIN             0
@@ -240,6 +241,7 @@ typedef struct _tagProxyInfo
 #define PROXYTYPE_HTTP10	4
 #define PROXYTYPE_HTTP11	5
 #define PROXYTYPE_SSH     6
+#define PROXYTYPE_EXTENSION 7  // Saved profile only. Resolve in the host before publishing a route.
 	INT GetProxyType()
 	{
 		if(!_stricmp(strProxyType, "SOCKS4"))
@@ -252,6 +254,8 @@ typedef struct _tagProxyInfo
 			return PROXYTYPE_HTTP10;
 		else if(!_stricmp(strProxyType, "HTTP") || !_stricmp(strProxyType, "HTTP11"))
 			return PROXYTYPE_HTTP11;
+		else if(!_stricmp(strProxyType, "EXTENSION"))
+			return PROXYTYPE_EXTENSION;
 		else if(!_stricmp(strProxyType, "SSH"))
 			return PROXYTYPE_SSH;
 		else

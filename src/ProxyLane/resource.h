@@ -88,6 +88,8 @@
 #define IDC_EDIT_DOH_URL                0x2421
 #define IDC_EDIT_DOH_BOOTSTRAP          0x2422
 #define IDC_STATIC_DOH_URL              0x2423
+#define IDC_EDIT_NODE_URI               0x2430
+#define IDC_INSTALL_NODE_CORE           0x2431
 #define IDC_STATIC_DOH_BOOTSTRAP        0x2424
 #define IDC_STATIC_TRANSPORT_LABEL      1067
 #define IDC_COMBO_TRANSPORT             1068

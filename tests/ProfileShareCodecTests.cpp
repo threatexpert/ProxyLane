@@ -230,6 +230,25 @@ int ProfileShareCodecTestsMain()
     value["required_features"] = Json::array({"dns.doh.v1"});
     RejectWith(V3(value), "share.feature_mismatch");
 
+    Json extension = original;
+    extension["type"] = "EXTENSION"; extension["node_uri"] = "anytls://pass@node.example:443#test";
+    extension["host"] = extension["user"] = extension["password"] = extension["psk"] = "";
+    extension["port"] = 0; extension["transport"] = "PLAIN"; extension["hook_udp"] = true;
+    assert(ProfileShare::Decode(ProfileShare::Encode(extension)) == extension);
+    for (const char* validUri : {"trojan://pass@node.example:443#n", "hysteria2://pass@node.example:443", "tuic://id:pass@node.example:443"}) {
+        extension["node_uri"] = validUri;
+        assert(ProfileShare::Decode(ProfileShare::Encode(extension)) == extension);
+    }
+    const wchar_t vlessSample[] = L"vless://secret@node.example:443?security=reality#tag";
+    const wchar_t vmessSample[] = L"vmess://eyJhZGQiOiIxLjIuMy40In0=";
+    assert(ExtensionUri::Summary(vlessSample, wcslen(vlessSample)) == L"vless://node.example:443");
+    assert(ExtensionUri::Summary(vmessSample, wcslen(vmessSample)) == L"vmess://...");
+    assert(!ExtensionUri::Valid("proxies:\n- name: bad", 19));
+    for (const char* invalidUri : {"https://example.org/subscription", "http://example.org/sub", "file:///C:/node.txt", "vless://", "vless://bad uri", "not-a-url"}) {
+        extension["node_uri"] = invalidUri;
+        RejectWith(V3({{"required_features", {"upstream.extension.v1"}}, {"profile", extension}}), "extension.invalid");
+    }
+
     // Inactive custom preferences still require v3 and survive a round trip.
     value = original;
     ProfileShare::StoreDohPreferences(value, "https://resolver.example/query", "192.0.2.53");

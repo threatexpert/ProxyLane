@@ -7,6 +7,7 @@
 #include <vector>
 #include <utility>
 #include "SshPrivateKey.h"
+#include "ExtensionUri.h"
 
 // Portable wire format, independent of MFC, the INI file and running proxies.
 namespace ProfileShare
@@ -46,7 +47,7 @@ inline const std::set<std::string>& KnownFields()
     static const std::set<std::string> fields = [] {
         auto result = LegacyFields();
         result.insert("doh_url"); result.insert("doh_bootstrap");
-        result.insert("block_ping");
+        result.insert("block_ping"); result.insert("node_uri");
         return result;
     }();
     return fields;
@@ -81,7 +82,7 @@ inline void CheckFields(const Json& value, const std::set<std::string>& allowed)
 
 inline const std::set<std::string>& SupportedFeatures()
 {
-    static const std::set<std::string> features = {"dns.doh.v1", "dns.doh.v2", "ssh.private-key.v1", "icmp.block-ping.v1"};
+    static const std::set<std::string> features = {"dns.doh.v1", "dns.doh.v2", "ssh.private-key.v1", "icmp.block-ping.v1", "upstream.extension.v1"};
     return features;
 }
 
@@ -93,6 +94,7 @@ inline std::set<std::string> RequiredFeatures(const Json& value)
     if (value["dns_mode"] == 2 || value.contains("doh_url") || value.contains("doh_bootstrap"))
         result.insert("dns.doh.v2");
     if (UsesPrivateKey(value)) result.insert("ssh.private-key.v1");
+    if (value.contains("node_uri")) result.insert("upstream.extension.v1");
     if (value.contains("block_ping")) result.insert("icmp.block-ping.v1");
     return result;
 }
@@ -139,8 +141,12 @@ inline void Validate(const Json& value)
         name.front() == ' ' || name.back() == ' ' || name.find('\t') != std::string::npos)
         throw Error("share.invalid_name");
     const std::string type = String(value, "type", 16);
-    if (type != "NOPROXY" && type != "SOCKS5" && type != "HTTP" && type != "HTTP10" && type != "HTTP11" && type != "SSH")
+    if (type != "NOPROXY" && type != "SOCKS5" && type != "HTTP" && type != "HTTP10" && type != "HTTP11" && type != "SSH" && type != "EXTENSION")
         throw Error("share.invalid_type");
+    if (type == "EXTENSION") {
+        const std::string uri = String(value, "node_uri", ExtensionUri::MaxLength * 4);
+        if (!ExtensionUri::Valid(uri.data(), uri.size())) throw Error("extension.invalid");
+    } else if (value.contains("node_uri")) throw Error("share.invalid_fields");
     const std::string auth = value.contains("ssh_auth") ? String(value, "ssh_auth", 16) : "password";
     if (auth != "password" && auth != "private_key") throw Error("share.invalid_fields");
     if (auth == "private_key") {
@@ -162,7 +168,7 @@ inline void Validate(const Json& value)
     }
     if (!value.contains("port") || !value.at("port").is_number_integer() ||
         value.at("port") < 0 || value.at("port") > 65535 ||
-        (type != "NOPROXY" && (host.empty() || value.at("port") == 0 ||
+        (type != "NOPROXY" && type != "EXTENSION" && (host.empty() || value.at("port") == 0 ||
             host.find_first_of(" \t") != std::string::npos)))
         throw Error("profile.invalid_endpoint");
     const char* booleans[] = {"hook_tcp", "hook_udp", "block_udp", "block_ipv6",
@@ -200,7 +206,7 @@ inline void Validate(const Json& value)
             throw Error("profile.secure_transport_unsupported");
         if (psk.empty()) throw Error("profile.psk_required");
     }
-    if (type != "SOCKS5" && type != "NOPROXY" && value.at("hook_udp") == true)
+    if (type != "SOCKS5" && type != "NOPROXY" && type != "EXTENSION" && value.at("hook_udp") == true)
         throw Error("share.invalid_udp");
 }
 

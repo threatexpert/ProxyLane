@@ -4,6 +4,7 @@
 #include "stdafx.h"
 #include "ConfigStorage.h"
 #include "SshProfile.h"
+#include "ExtensionUri.h"
 #include "ProxyLane.h"
 #include "Page1.h"
 #include "../ProxyLaneHook/DohPolicy.h"
@@ -126,6 +127,7 @@ void CPage1::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDCANCEL, m_Cancel);
 
 	DDX_Control(pDX, IDC_CB_PROXYTYPE, m_cbProxyType);
+	DDX_Control(pDX, IDC_EDIT_NODE_URI, m_editNodeUri);
 	DDX_Control(pDX, IDC_EDIT_ADDR, m_edit_HostName);
 	DDX_Control(pDX, IDC_EDIT_PORT, m_edit_Port);
 	DDX_Control(pDX, IDC_EDIT_USER, m_edit_User);
@@ -185,6 +187,7 @@ BEGIN_MESSAGE_MAP(CPage1, CModernDialog)
 	ON_COMMAND(IDC_BUTTON_IMPORT_CONFIG, &CPage1::OnImportAllConfig)
 	ON_COMMAND(IDC_BUTTON_COPY_PROFILE, &CPage1::OnCopyProfile)
 	ON_COMMAND(IDC_BUTTON_PASTE_PROFILE, &CPage1::OnPasteProfile)
+    ON_EN_CHANGE(IDC_EDIT_NODE_URI, &CPage1::OnProfileFieldChanged)
 	ON_EN_CHANGE(IDC_EDIT_ADDR, &CPage1::OnEnChangeEditAddr)
 	ON_EN_CHANGE(IDC_EDIT_PORT, &CPage1::OnProfileFieldChanged)
 	ON_EN_CHANGE(IDC_EDIT_USER, &CPage1::OnProfileFieldChanged)
@@ -292,6 +295,8 @@ BOOL CPage1::OnInitDialog()
 	m_cbProxyType.AddString(_T("SOCKS5"));
 	m_cbProxyType.AddString(L"SSH");
 	m_cbProxyType.AddString(_T("HTTP"));
+    m_cbProxyType.AddString(Localization::Get(L"extension.type"));
+    m_editNodeUri.SetLimitText(ExtensionUri::MaxLength);
 	m_cbTransport.AddString(Localization::Get(_T("transport.plain")));
 	m_cbTransport.AddString(Localization::Get(_T("transport.gonc_tls_psk")));
 	m_cbTransport.SetCurSel(PROXY_TRANSPORT_PLAIN);
@@ -509,14 +514,22 @@ void CPage1::LayoutSettingsPage()
 		}
 		const UINT serverIds[] = { IDC_STATIC_TYPE_LABEL, IDC_CB_PROXYTYPE, IDC_STATIC_HOST_LABEL,
 			IDC_EDIT_ADDR, IDC_STATIC_PORT_LABEL, IDC_EDIT_PORT, 0x2402 };
-		const UINT chainIds[] = { 0x2405, 0x2406 };
+		const CString protocolName = SelectedProtocol();
+        const bool extension = !m_chainMode && protocolName == L"EXTENSION";
+        m_editNodeUri.ShowWindow(extension ? SW_SHOW : SW_HIDE);
+        SetDlgItemText(IDC_STATIC_HOST_LABEL, Localization::Get(extension ? L"extension.uri" : L"common.host"));
+        const UINT chainIds[] = { 0x2405, 0x2406 };
 		for (int i = 0; i < _countof(serverIds); ++i)
 			if (CWnd* control = GetDlgItem(serverIds[i]))
 				control->ShowWindow(m_chainMode ? SW_HIDE : SW_SHOW);
 		for (int i = 0; i < _countof(chainIds); ++i)
 			if (CWnd* control = GetDlgItem(chainIds[i]))
 				control->ShowWindow(m_chainMode ? SW_SHOW : SW_HIDE);
-		if (m_chainMode)
+		if (extension) {
+            const UINT hidden[] = {IDC_EDIT_ADDR, IDC_STATIC_PORT_LABEL, IDC_EDIT_PORT, 0x2402};
+            for (UINT id : hidden) GetDlgItem(id)->ShowWindow(SW_HIDE);
+        }
+        if (m_chainMode)
 		{
 			const UINT optionalIds[] = { IDC_STATIC_USER_LABEL, IDC_EDIT_USER, IDC_STATIC_PASSWORD_LABEL, IDC_EDIT_PASS,
 				IDC_STATIC_TRANSPORT_LABEL, IDC_COMBO_TRANSPORT, IDC_STATIC_PSK_LABEL, IDC_EDIT_TRANSPORT_PSK };
@@ -537,7 +550,7 @@ void CPage1::LayoutSettingsPage()
 		const bool inlineAdvanced = innerW >= typeW + minHostW + portW + advancedW + endpointGap * 3;
 		// Reserve room for the optional toggle before growing the address field.
 		// Cap its width in both layouts so wrapping never creates an oversized edit.
-		const int hostW = min(S(220), inlineAdvanced
+		const int hostW = extension ? innerW - typeW - endpointGap : min(S(220), inlineAdvanced
 			? innerW - typeW - portW - advancedW - endpointGap * 3
 			: innerW - typeW - endpointGap);
 		if (!m_chainMode)
@@ -545,10 +558,10 @@ void CPage1::LayoutSettingsPage()
 		place(IDC_STATIC_TYPE_LABEL, innerX, row, typeW, labelH);
 		place(IDC_CB_PROXYTYPE, innerX, row + labelH + S(2), typeW, S(260));
 		place(IDC_STATIC_HOST_LABEL, innerX + typeW + endpointGap, row, hostW, labelH);
-		place(IDC_EDIT_ADDR, innerX + typeW + endpointGap, row + labelH + S(2), hostW, fieldH);
+		place(extension ? IDC_EDIT_NODE_URI : IDC_EDIT_ADDR, innerX + typeW + endpointGap, row + labelH + S(2), hostW, fieldH);
 		// Keep the optional-section toggle beside the port, including at narrow
 		// widths where the pair moves together to the next row.
-		if (!inlineAdvanced) row += rowStep;
+		if (!extension && !inlineAdvanced) row += rowStep;
 		const int portX = inlineAdvanced ? innerX + typeW + hostW + endpointGap * 2 : innerX;
 		place(IDC_STATIC_PORT_LABEL, portX, row, portW, labelH);
 		place(IDC_EDIT_PORT, portX, row + labelH + S(2), portW, fieldH);
@@ -560,8 +573,8 @@ void CPage1::LayoutSettingsPage()
 			IDC_STATIC_TRANSPORT_LABEL, IDC_COMBO_TRANSPORT, IDC_STATIC_PSK_LABEL, IDC_EDIT_TRANSPORT_PSK };
 		for (int i = 0; i < _countof(advancedIds); ++i)
 			if (CWnd* control = GetDlgItem(advancedIds[i]))
-				control->ShowWindow(m_advancedOpen && !m_chainMode ? SW_SHOW : SW_HIDE);
-		if (m_advancedOpen && !m_chainMode)
+				control->ShowWindow(m_advancedOpen && !extension && !m_chainMode ? SW_SHOW : SW_HIDE);
+		if (m_advancedOpen && !extension && !m_chainMode)
 		{
 			CString authProtocol; m_cbProxyType.GetWindowText(authProtocol);
             if (authProtocol == L"SSH") {
@@ -867,7 +880,8 @@ BOOL CPage1::GetProxyInfo(const LPPRCClient pPRCC, LPProxyInfo lpPI)
 		}
 	}
 
-	return TRUE;
+	return !lpPI->extensionEndpoint || lpPI->GetProxyType() == PROXYTYPE_NOPROXY ||
+        (m_businessCore && m_businessCore->Alive());
 }
 
 INT CPage1::GetProxyChain(const LPPRCClient pPRCC, LPProxyInfo lpHops, INT nCapacity)
@@ -879,6 +893,8 @@ INT CPage1::GetProxyChain(const LPPRCClient pPRCC, LPProxyInfo lpHops, INT nCapa
 	CSingleLock runtimeLock(&m_runtimeLock, TRUE);
 	if (pPRCC->sType != SOCK_STREAM && !DohPolicy::Intercept(*pPRCC, m_ProxyInfo)) return 0;
 	if (!m_runtimeSettingsValid || m_runtimeChain.size() < 2)
+		return 0;
+	if (m_runtimeChain[0].extensionEndpoint && (!m_businessCore || !m_businessCore->Alive()))
 		return 0;
 	const INT hops = (INT)m_runtimeChain.size();
 	if (lpHops && nCapacity >= hops)
@@ -947,8 +963,8 @@ BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 		m_settingsValidationKey = L"profile.unsupported_type";
 		return FALSE;
 	}
-	m_cbProxyType.GetLBText(typeIndex, szType);
-	if (szType != L"NOPROXY" && szType != L"SOCKS5" && szType != L"HTTP" && szType != L"SSH")
+	szType = SelectedProtocol();
+	if (szType != L"NOPROXY" && szType != L"SOCKS5" && szType != L"HTTP" && szType != L"SSH" && szType != L"EXTENSION")
 	{
 		m_settingsValidationKey = L"profile.unsupported_type";
 		return FALSE;
@@ -970,7 +986,12 @@ BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 	pi.strProxyPass = szPass;
 	pi.reserved = transportMode;
 
-	if (szType.CompareNoCase(_T("NOPROXY")) == 0)
+	if (szType == L"EXTENSION") {
+        const CString uri = NodeUri();
+        m_settingsValidationKey = L"extension.invalid";
+        if (!ExtensionUri::Valid(uri.GetString(), uri.GetLength())) return FALSE;
+    }
+    if (szType == L"EXTENSION" || szType.CompareNoCase(_T("NOPROXY")) == 0)
 	{
 		// Keep the explicit profile type, but discard irrelevant proxy settings.
 		pi.strProxyHost = _T("");
@@ -1035,15 +1056,75 @@ BOOL CPage1::GetSettings(OUT LPProxyInfo lpPI)
 	return TRUE;
 }
 
-BOOL CPage1::GetRoute(LPProxyInfo first, ProxyChain* chain)
+int CPage1::ProtocolIndex(const CString& name) const
+{
+    return m_cbProxyType.FindStringExact(-1, name == L"EXTENSION" ? Localization::Get(L"extension.type") : name);
+}
+
+CString CPage1::SelectedProtocol() const
+{
+    CString text;
+    m_cbProxyType.GetWindowText(text);
+    return text == Localization::Get(L"extension.type") ? CString(L"EXTENSION") : text;
+}
+
+CString CPage1::NodeUri() const
+{
+    CString uri;
+    m_editNodeUri.GetWindowText(uri);
+    uri.Trim();
+    return uri;
+}
+
+bool CPage1::ResolveExtension(ProxyInfo& info, ProxyChain& chain, std::shared_ptr<MihomoCore>& core,
+    bool test, const CString* overrideUri)
+{
+    m_settingsValidationDetail.Empty();
+    ProxyInfo& target = chain.empty() ? info : chain.front();
+    if (target.GetProxyType() != PROXYTYPE_EXTENSION) return true;
+    const CString uri = overrideUri ? *overrideUri : NodeUri();
+    if (!test) {
+        auto cached = m_sessionCores.find(uri);
+        if (cached != m_sessionCores.end() && cached->second->Alive()) {
+            core = cached->second;
+            core->SetEndpoint(target);
+            if (!chain.empty()) info = target;
+            return true;
+        }
+    }
+    core = std::make_shared<MihomoCore>();
+    if (core->Start(uri, target, m_settingsValidationKey, &m_settingsValidationDetail)) {
+        if (!test) m_sessionCores[uri] = core;
+        if (!chain.empty()) info = target;
+        if (g_MainTab) {
+            CString line;
+            line.Format(L"Mihomo %s SOCKS5 ready: socks5://%hs:%hs@%hs:%d\r\n",
+                test ? L"test" : L"profile", target.strProxyUser.szbuf, target.strProxyPass.szbuf,
+                target.strProxyHost.szbuf, target.nProxyPort);
+            g_MainTab->AddLogText(0, line);
+        }
+        return true;
+    }
+    if (!m_settingsValidationDetail.IsEmpty() && g_MainTab)
+        g_MainTab->AddLogText(0, L"Mihomo error: " + m_settingsValidationDetail + L"\r\n");
+    core.reset();
+    return false;
+}
+
+BOOL CPage1::GetRoute(LPProxyInfo first, ProxyChain* chain, CString* extensionUri)
 {
 	chain->clear();
+	m_settingsValidationDetail.Empty();
+	if (extensionUri) extensionUri->Empty();
 	if (!m_chainMode)
-        return GetSettings(first) && ApplyDohSettings(*first);
+	{
+		if (extensionUri) *extensionUri = NodeUri();
+		return GetSettings(first) && ApplyDohSettings(*first);
+	}
 
 	m_settingsValidationName.Empty();
 	if (!m_profileStore.ResolveChain(m_chainHops, *chain, m_settingsValidationKey,
-		m_settingsValidationName))
+		m_settingsValidationName, extensionUri))
 		return FALSE;
 	for (size_t i = 0; i < chain->size(); ++i)
 	{
@@ -1087,9 +1168,12 @@ BOOL CPage1::ApplyDohSettings(ProxyInfo& proxy)
 CString CPage1::SettingsValidationMessage() const
 {
 	// Chain errors name the hop; the others take no argument.
-	return m_settingsValidationName.IsEmpty()
+	CString message = m_settingsValidationName.IsEmpty()
 		? Localization::Get(m_settingsValidationKey)
 		: Localization::Format(m_settingsValidationKey, (LPCTSTR)m_settingsValidationName);
+	if (!m_settingsValidationDetail.IsEmpty())
+		message += L"\r\n\r\n" + m_settingsValidationDetail;
+	return message;
 }
 
 void CPage1::OnBnClickedOk()
@@ -1177,7 +1261,7 @@ void CPage1::OnProtocolChanged()
 {
     // A TLS PSK and an SSH host-key pin have different meanings.
     const bool wasSsh = m_editTransportPsk.GetPasswordChar() == 0;
-    CString protocol; m_cbProxyType.GetWindowText(protocol);
+    const CString protocol = SelectedProtocol();
     ProxyInfo selectedProxy;
     selectedProxy.strProxyType = protocol;
     // Apply the default on a protocol selection, not on every UI refresh,
@@ -1217,7 +1301,7 @@ void CPage1::UpdateTransportEnable()
 	CString proxyType;
 	const int typeIndex = m_cbProxyType.GetCurSel();
 	if (typeIndex != CB_ERR)
-		m_cbProxyType.GetLBText(typeIndex, proxyType);
+		proxyType = SelectedProtocol();
 	ProxyInfo selectedProxy;
 	selectedProxy.strProxyType = proxyType;
 	const int selectedProxyType = selectedProxy.GetProxyType();
@@ -1229,6 +1313,7 @@ void CPage1::UpdateTransportEnable()
 	const CString hint = m_chainMode ? Localization::Get(L"page1.chain_hint") :
 		typeIndex == CB_ERR ? Localization::Get(L"profile.unsupported_type") :
 		direct ? Localization::Get(L"page1.direct_hint") :
+        selectedProxyType == PROXYTYPE_EXTENSION ? Localization::Get(L"extension.hint") :
         ssh ? Localization::Get(L"page1.ssh_hint") :
 		m_firstRunGuide ? Localization::Get(L"page1.first_run_hint") : CString();
 	CString previousHint, previousGroup;
@@ -1516,7 +1601,8 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 	ProxyInfo proxyInfo;
 	ProxyChain chain;
 	ProxySettingsInfo runtimeSettings;
-	if (!GetRoute(&proxyInfo, &chain))
+	CString extensionUri;
+	if (!GetRoute(&proxyInfo, &chain, &extensionUri))
 	{
 		if (showErrors)
 			MessageBox(SettingsValidationMessage(),
@@ -1537,9 +1623,15 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()) || !chain.empty())
 		runtimeSettings.bHookUDP = FALSE;
 
+    std::shared_ptr<MihomoCore> core;
+    if (!ResolveExtension(proxyInfo, chain, core, false, &extensionUri)) {
+        if (showErrors) MessageBox(SettingsValidationMessage(), Localization::Get(L"proxy.start_failed_title"), MB_ICONERROR);
+        return FALSE;
+    }
 	PublishProfileSnapshots();
 	{
 		CSingleLock runtimeLock(&m_runtimeLock, TRUE);
+		m_businessCore.swap(core);
 		m_ProxyInfo = proxyInfo;
 		m_runtimeChain = chain;
 		m_runtimeSettings = runtimeSettings;
@@ -1560,7 +1652,9 @@ BOOL CPage1::StartProxy(BOOL showErrors)
 	{
 		CSingleLock runtimeLock(&m_runtimeLock, TRUE);
 		m_runtimeSettingsValid = FALSE;
+        m_businessCore.swap(core);
 	}
+    m_sessionCores.clear();
 	if (showErrors)
 	{
 		CString detail = m_proxyController.GetLastErrorText();
@@ -1601,7 +1695,8 @@ CString CPage1::GetSelectedProfileSummary()
 			route.IsEmpty() ? L"\x2014" : (LPCTSTR)route);
 	}
 	CString type, host, port;
-	m_cbProxyType.GetWindowText(type);
+	type = SelectedProtocol();
+	if (type == L"EXTENSION") return name + L" \x00b7 " + Localization::Get(L"extension.type");
 	if (type.CompareNoCase(L"NOPROXY") == 0)
 		return name + L" \x00b7 " + Localization::Get(L"launch.profile_direct");
 	m_edit_HostName.GetWindowText(host);
@@ -1628,7 +1723,8 @@ BOOL CPage1::ApplyRuntimeSettings()
 	ProxyInfo proxyInfo;
 	ProxyChain chain;
 	ProxySettingsInfo runtimeSettings;
-	if (!GetRoute(&proxyInfo, &chain))
+	CString extensionUri;
+	if (!GetRoute(&proxyInfo, &chain, &extensionUri))
 	{
 		MessageBox(SettingsValidationMessage(),
 			Localization::Get(_T("apply.failed_title")), MB_ICONERROR);
@@ -1638,13 +1734,19 @@ BOOL CPage1::ApplyRuntimeSettings()
 		return FALSE;
 
 	if (!GetProxySettingsFromUi(&runtimeSettings))
-		return FALSE;
+        return FALSE;
+    std::shared_ptr<MihomoCore> core;
+    if (!ResolveExtension(proxyInfo, chain, core, false, &extensionUri)) {
+        MessageBox(SettingsValidationMessage(), Localization::Get(L"apply.failed_title"), MB_ICONERROR);
+        return FALSE;
+    }
 	if (!ProxyTransportPolicy::SupportsUdpProxy(proxyInfo.GetProxyType()) || !chain.empty())
 		runtimeSettings.bHookUDP = FALSE;
 
 	PublishProfileSnapshots();
 	{
 		CSingleLock runtimeLock(&m_runtimeLock, TRUE);
+		m_businessCore.swap(core);
 		m_ProxyInfo = proxyInfo;
 		m_runtimeChain = chain;
 		m_runtimeSettings = runtimeSettings;
@@ -1683,6 +1785,8 @@ BOOL CPage1::StopProxy()
 			CSingleLock runtimeLock(&m_runtimeLock, TRUE);
 			m_runtimeSettingsValid = FALSE;
 		}
+        m_businessCore.reset();
+        m_sessionCores.clear();
 		m_runtimeDirty = FALSE;
 		pParent->SetRunningProfile(NULL, FALSE);
 		pPage4->UpdateMonitorStatus();
@@ -1707,13 +1811,13 @@ CString CPage1::QuicUdpWarning()
 		if (!m_runtimeSettingsValid) return CString();
 		blocked = m_runtimeSettings.bBlockUDP;
 		hooked = m_runtimeSettings.bHookUDP;
-		type = m_ProxyInfo.GetProxyType();
+		type = m_ProxyInfo.extensionEndpoint ? PROXYTYPE_EXTENSION : m_ProxyInfo.GetProxyType();
 	} else {
 		blocked = m_btnBlockUDP.GetCheck() == BST_CHECKED;
 		hooked = m_btnHookUDP.GetCheck() == BST_CHECKED;
 		const int selected = m_cbProxyType.GetCurSel();
 		if (selected == CB_ERR) return CString();
-		CString name; m_cbProxyType.GetLBText(selected, name);
+		const CString name = SelectedProtocol();
 		ProxyInfo info; info.strProxyType = name; type = info.GetProxyType();
 	}
 	if (blocked) return Localization::Get(L"mitm.quic_udp_blocked");
@@ -1726,6 +1830,7 @@ void CPage1::OnDestroy()
 {
 	++m_testGeneration;
 	m_testCompletionPending = false;
+    m_testCore.reset();
 	if (m_pProxyTester) { m_pProxyTester->Release(); m_pProxyTester = NULL; }
 	CModernDialog::OnDestroy();
 
@@ -1748,6 +1853,7 @@ CString CPage1::GetProxyTestStatus(CStatusLabel::Tone& tone) const
 
 void CPage1::OnBnClickedTestproxy()
 {
+	m_testCore.reset();
 	++m_testGeneration; // Cancel/retry invalidates completion messages already queued.
 	m_testCompletionPending = false;
 	m_testCompletionDetail.Empty();
@@ -1797,7 +1903,9 @@ void CPage1::OnBnClickedTestproxy()
 
 	ClearChainProgress();
 	ProxyInfo testProxyInfo;
-	if (!GetRoute(&testProxyInfo, &m_testChain))
+	CString extensionUri;
+	if (!GetRoute(&testProxyInfo, &m_testChain, &extensionUri) ||
+		!ResolveExtension(testProxyInfo, m_testChain, m_testCore, true, &extensionUri))
 	{
 		MessageBox(SettingsValidationMessage(),
 			Localization::Get(_T("test.invalid_title")), MB_ICONERROR);
@@ -1849,6 +1957,7 @@ void CPage1::OnBnClickedTestproxy()
 	{
 		m_staticTestProxy.SetStatus(Localization::Get(_T("status.test_failed")), CStatusLabel::TONE_DANGER);
 		ShowProxyTestResult(Localization::Get(_T("test.start_failed")));
+		m_testCore.reset();
 		ATLTRACE("OnBnClickedTestproxy -> Start failed.\r\n");
 		m_proxyTestPhase = PROXY_TEST_NONE;
 		return;
@@ -2052,6 +2161,7 @@ void CPage1::OnProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WPARAM
 		m_testCompletionPending = false;
 		m_pProxyTester = NULL;
 		pTester->Release();
+        m_testCore.reset();
 		m_bIsTesting = FALSE;
 		m_proxyTestPhase = PROXY_TEST_NONE;
 		m_chainProgressRunning = false; KillTimer(0x312);
@@ -2203,6 +2313,8 @@ void CPage1::HandleProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WP
 			nCode = 0;
 		}
 
+		const CString mihomoError = (nCode != 0 && m_testCore) ? m_testCore->LastError() : CString();
+		m_testCore.reset();
 		if(nCode == 0)
 		{
 			const BOOL ipv6NeedsAttention =
@@ -2297,6 +2409,7 @@ void CPage1::HandleProxyTesterCallback(IProxyTester *pTester, int nErrorCode, WP
 					(LPCTSTR)m_testChainNames[failedHop], (LPCTSTR)szText);
 			LPCTSTR statusKey = _T("status.test_failed");
             if (!dohDetail.IsEmpty()) szText += L"\r\n\r\n" + dohDetail;
+            if (!mihomoError.IsEmpty()) szText += L"\r\n\r\n" + mihomoError;
 			if (m_profileDirty && m_runtimeDirty)
 				statusKey = _T("status.test_failed_unsaved_unapplied");
 			else if (m_runtimeDirty)
@@ -2430,6 +2543,7 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 {
 	m_loadingProfile = TRUE;
 	m_chainMode = item ? item->bChain : FALSE;
+    m_editNodeUri.SetWindowText(item ? item->nodeUri : CString());
     m_sshAuth.Load(item ? &item->pi : NULL);
 	if (item == NULL)
 	{
@@ -2477,7 +2591,7 @@ void CPage1::UILoadCfg( CfgProxyItem *item )
 		// Retain unsupported legacy profiles for editing, but do not leave the
 		// previous selection active (which would silently change their protocol).
 		if (szType.CompareNoCase(L"HTTP10") == 0 || szType.CompareNoCase(L"HTTP11") == 0) szType = L"HTTP";
-		m_cbProxyType.SetCurSel(m_cbProxyType.FindStringExact(-1, szType));
+		m_cbProxyType.SetCurSel(ProtocolIndex(szType));
 		m_edit_HostName.SetWindowText(szHost);
 		m_edit_Port.SetWindowText(szPort);
 		m_edit_User.SetWindowText(szUser);
@@ -2538,13 +2652,14 @@ void CPage1::UIGetCfg( CfgProxyItem *item )
 		item->pi.strProxyType = _T("NOPROXY");
 	}
 	item->bChain = m_chainMode;
+    if (item->pi.GetProxyType() == PROXYTYPE_EXTENSION) item->nodeUri = NodeUri();
 	item->chainHops = m_chainHops;
 	item->nTransportMode = m_cbTransport.GetCurSel() ==
 		PROXY_TRANSPORT_GONC_TLS_PSK ? PROXY_TRANSPORT_GONC_TLS_PSK :
 		PROXY_TRANSPORT_PLAIN;
 	m_editTransportPsk.GetWindowText(item->strTransportPsk);
     if (item->pi.GetProxyType() == PROXYTYPE_SSH) item->strTransportPsk.Trim();
-	if (item->pi.GetProxyType() == PROXYTYPE_NOPROXY)
+	if (item->pi.GetProxyType() == PROXYTYPE_NOPROXY || item->pi.GetProxyType() == PROXYTYPE_EXTENSION)
 	{
 		item->nTransportMode = PROXY_TRANSPORT_PLAIN;
 		item->strTransportPsk.Empty();
@@ -2838,6 +2953,13 @@ namespace
 	{
 		ProxyInfo pi = item.pi;
 		const int type = pi.GetProxyType();
+		if (type == PROXYTYPE_EXTENSION)
+		{
+			const std::wstring summary = ExtensionUri::Summary(item.nodeUri.GetString(), item.nodeUri.GetLength());
+			return summary.empty()
+				? Localization::Get(L"extension.type")
+				: Localization::Get(L"extension.type") + L" " + CString(summary.c_str());
+		}
 		CString host = (CString)pi.strProxyHost;
 		if (host.Find(L':') >= 0) host = L"[" + host + L"]";
 		CString text;
@@ -2871,6 +2993,7 @@ void CPage1::RefreshProfileEntries()
 			for (const CString& hop : item.chainHops)
 				entry.detail += (entry.detail.IsEmpty() ? L"" : L" \x2192 ") + hop;
 		}
+		else if (pi.GetProxyType() == PROXYTYPE_EXTENSION) entry.tag = Localization::Get(L"extension.type");
 		else if (!valid)
 			entry.tag = (CString)pi.strProxyType; // e.g. a retired SOCKS4 profile
 		else if (pi.GetProxyType() == PROXYTYPE_NOPROXY)
@@ -3063,6 +3186,15 @@ CChainRouteView::Node CPage1::ChainNode(int index) const
     CfgProxyItem item; item.strName = node.name;
     if (!m_profileStore.Load(item)) node.host = Localization::Get(L"page1.chain_hop_missing");
     else if (!CProxyProfileStore::IsChainHop(item)) node.host = Localization::Get(L"page1.chain_hop_invalid");
+    else if (item.pi.GetProxyType() == PROXYTYPE_EXTENSION) {
+        node.protocol = Localization::Get(L"extension.type");
+        if (index > 0)
+            node.host = Localization::Get(L"page1.chain_hop_extension_first");
+        else {
+            const std::wstring summary = ExtensionUri::Summary(item.nodeUri.GetString(), item.nodeUri.GetLength());
+            node.host = summary.empty() ? Localization::Get(L"extension.type") : CString(summary.c_str());
+        }
+    }
     else {
         node.protocol = (CString)item.pi.strProxyType;
         CString host = (CString)item.pi.strProxyHost;
